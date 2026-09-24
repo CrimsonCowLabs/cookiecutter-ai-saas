@@ -7,24 +7,15 @@
   "domain_name": "myapp.example.com",
   "primary_color": "#c2410c",
   "daisyui_theme": "dark",
-  "database": [
-    "postgresql"
-  ],
   "database_extensions": [
     "none",
-    "postgis",
-    "pgvector",
-    "postgis_pgvector"
+    "pgvector"
   ],
   "include_stripe": [
     "yes",
     "no"
   ],
-  "include_blog": [
-    "yes",
-    "no"
-  ],
-  "include_contact_form": [
+  "include_marketing_extras": [
     "yes",
     "no"
   ],

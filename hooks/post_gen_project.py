@@ -4,7 +4,6 @@
 Runs after the project is generated to:
 - Replace __PLACEHOLDER__ strings in .ts/.tsx files (which skip Jinja2 rendering)
 - Remove optional features based on cookiecutter choices
-- Adjust database configuration based on selected database
 """
 
 import os
@@ -20,8 +19,7 @@ PRIMARY_COLOR = "{{ cookiecutter.primary_color }}"
 AUTHOR_NAME = "{{ cookiecutter.author_name }}"
 AUTHOR_EMAIL = "{{ cookiecutter.author_email }}"
 INCLUDE_STRIPE = "{{ cookiecutter.include_stripe }}"
-INCLUDE_BLOG = "{{ cookiecutter.include_blog }}"
-INCLUDE_CONTACT = "{{ cookiecutter.include_contact_form }}"
+INCLUDE_MARKETING_EXTRAS = "{{ cookiecutter.include_marketing_extras }}"
 AUTH_PROVIDERS = "{{ cookiecutter.auth_providers }}"
 DAISYUI_THEME = "{{ cookiecutter.daisyui_theme }}"
 PYTHON_VERSION = "{{ cookiecutter.python_version }}"
@@ -137,18 +135,12 @@ def handle_stripe():
         remove_file("app/actions/billing.ts")
 
 
-def handle_blog():
-    """Remove blog files if not included."""
-    if INCLUDE_BLOG == "no":
-        print("Removing blog files...")
+def handle_marketing_extras():
+    """Remove the blog and the contact form if marketing extras are not included."""
+    if INCLUDE_MARKETING_EXTRAS == "no":
+        print("Removing blog and contact form files...")
         remove_directory("app/(main)/blog")
         remove_directory("components/blog")
-
-
-def handle_contact():
-    """Remove contact form files if not included."""
-    if INCLUDE_CONTACT == "no":
-        print("Removing contact form files...")
         remove_directory("app/(main)/contact")
         remove_directory("app/api/contact")
         remove_file("app/actions/contact.ts")
@@ -178,17 +170,16 @@ def marker_decisions():
     oauth = AUTH_PROVIDER_MARKERS.get(AUTH_PROVIDERS, {"google", "microsoft"})
     google = "google" in oauth
     microsoft = "microsoft" in oauth
-    blog = INCLUDE_BLOG == "yes"
-    contact = INCLUDE_CONTACT == "yes"
+    extras = INCLUDE_MARKETING_EXTRAS == "yes"
     stripe = INCLUDE_STRIPE == "yes"
     return {
         "google": google,
         "google-import": google,
         "microsoft": microsoft,
         "microsoft-import": microsoft,
-        "blog": blog,
-        "contact": contact,
-        "no-contact": not contact,
+        "blog": extras,
+        "contact": extras,
+        "no-contact": not extras,
         "stripe": stripe,
     }
 
@@ -258,8 +249,7 @@ def main():
     process_all_files()
     apply_python_version()
     handle_stripe()
-    handle_blog()
-    handle_contact()
+    handle_marketing_extras()
     apply_markers()
     make_scripts_executable()
 
