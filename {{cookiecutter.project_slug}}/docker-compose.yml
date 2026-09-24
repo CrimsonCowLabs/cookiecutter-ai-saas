@@ -10,10 +10,8 @@ services:
       - "3000:3000"
     env_file: .env.docker.local
     depends_on:
-{% if cookiecutter.database == 'postgresql' %}
       postgres:
         condition: service_healthy
-{% endif %}
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -24,10 +22,8 @@ services:
       dockerfile: Dockerfile.worker
     env_file: .env.docker.local
     depends_on:
-{% if cookiecutter.database == 'postgresql' %}
       postgres:
         condition: service_healthy
-{% endif %}
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -40,19 +36,14 @@ services:
       dockerfile: workers/db-writer/Dockerfile.writer
     env_file: .env.docker.local
     depends_on:
-{% if cookiecutter.database == 'postgresql' %}
       postgres:
         condition: service_healthy
-{% endif %}
       redis:
         condition: service_healthy
     restart: unless-stopped
 
-{% if cookiecutter.database == 'postgresql' %}
   postgres:
-{% if cookiecutter.database_extensions == 'postgis' or cookiecutter.database_extensions == 'postgis_pgvector' %}
-    image: postgis/postgis:18-3.5-alpine
-{% elif cookiecutter.database_extensions == 'pgvector' %}
+{% if cookiecutter.database_extensions == 'pgvector' %}
     image: pgvector/pgvector:pg18
 {% else %}
     image: postgres:18-alpine
@@ -73,7 +64,6 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-{% endif %}
 
   redis:
     image: redis:7-alpine
@@ -89,7 +79,5 @@ services:
     restart: unless-stopped
 
 volumes:
-{% if cookiecutter.database == 'postgresql' %}
   pgdata:
-{% endif %}
   redisdata:

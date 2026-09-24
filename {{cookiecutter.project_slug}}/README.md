@@ -21,7 +21,7 @@
 - Node.js {{ cookiecutter.node_version }}+
 - Python {{ cookiecutter.python_version }}+
 - Docker & Docker Compose
-{% if cookiecutter.database == 'postgresql' %}- PostgreSQL 18{% endif %}
+- PostgreSQL 18
 - Redis 7
 
 ### Setup
