@@ -74,3 +74,19 @@ jobs:
           cookiecutter . --no-input -o .generated-alt project_name="Alt App" python_version=3.13
           test ! -e ".generated-alt/alt-app/workers/app/poetry.lock"
           grep -q 'python = ">=3.13,<4"' .generated-alt/alt-app/workers/app/pyproject.toml
+
+      # Each merged/optional choice must generate a buildable project when flipped.
+      - name: Generate with marketing extras off and pgvector on
+        run: |
+          cookiecutter . --no-input -o .generated-lean project_name="Lean App" include_marketing_extras=no database_extensions=pgvector
+          G=.generated-lean/lean-app
+          test ! -e "$G/app/(main)/blog" && test ! -e "$G/app/(main)/contact" && test ! -e "$G/app/api/contact"
+          grep -q 'pgvector/pgvector:pg18' "$G/docker-compose.yml" "$G/docker-compose.prod.yml"
+
+      - name: Build with marketing extras off
+        working-directory: .generated-lean/lean-app
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run lint
+          npm run build

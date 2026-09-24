@@ -23,7 +23,6 @@ cookiecutter gh:eodgooch/cookiecutter-ai-saas
 cookiecutter gh:eodgooch/cookiecutter-ai-saas \
   --no-input \
   project_name="Invoice AI" \
-  database=postgresql \
   database_extensions=pgvector \
   llm_provider=anthropic
 ```
@@ -72,7 +71,7 @@ Every generated project is a complete distributed system with **95 files**:
                     ┌─────────────────▼─────────────────┐
                     │          Database                  │
                     │           PostgreSQL               │
-                    │  (optional: PostGIS, pgvector)     │
+                    │  (optional: pgvector)              │
                     └───────────────────────────────────┘
 ```
 
@@ -108,11 +107,9 @@ Every generated project is a complete distributed system with **95 files**:
 | `domain_name` | myapp.example.com | any string | Production domain |
 | `primary_color` | #c2410c | any hex color | Brand color (DaisyUI primary) |
 | `daisyui_theme` | dark | any DaisyUI theme | Base UI theme |
-| `database` | postgresql | postgresql | Primary database |
-| `database_extensions` | none | none, postgis, pgvector, postgis_pgvector | PostgreSQL extensions |
+| `database_extensions` | none | none, pgvector | PostgreSQL extensions |
 | `include_stripe` | yes | yes, no | Stripe billing integration |
-| `include_blog` | yes | yes, no | Static JSON blog |
-| `include_contact_form` | yes | yes, no | Contact form + API route |
+| `include_marketing_extras` | yes | yes, no | Static JSON blog and contact form (with its API route) |
 | `auth_providers` | google_microsoft | google_microsoft, google_only, microsoft_only, all | OAuth providers |
 | `llm_provider` | ollama | ollama, openai, anthropic | AI model provider |
 | `python_version` | 3.14 | any version | Python for worker Dockerfile. `poetry.lock` is resolved for 3.14; any other value drops it and you must run `poetry lock` in `workers/app` once |
@@ -228,11 +225,9 @@ Every generated project is a complete distributed system with **95 files**:
 
 ### Database Extensions
 
-When using PostgreSQL, you can optionally enable:
+PostgreSQL is the only database. You can optionally enable:
 
-- **PostGIS** — Adds geospatial types and functions. Docker image: `postgis/postgis:18-3.5-alpine`
 - **pgvector** — Adds vector similarity search for embeddings. Docker image: `pgvector/pgvector:pg18`
-- **Both** — PostGIS + pgvector together. Docker image: `postgis/postgis:18-3.5-alpine` with pgvector
 
 ---
 
@@ -344,7 +339,7 @@ After generation, configure these in `.env.local`:
 | `app` | Built from `Dockerfile` | 3000 |
 | `worker` | Built from `workers/Dockerfile.worker` | — |
 | `db-writer` | Built from `workers/db-writer/Dockerfile.writer` | — |
-| `postgres` | `postgres:18-alpine` (or postgis/pgvector variant) | 5432 |
+| `postgres` | `postgres:18-alpine` (`pgvector/pgvector:pg18` with pgvector) | 5432 |
 | `redis` | `redis:7-alpine` | 6379 |
 
 Scale workers: `docker compose up -d --scale worker=3`
