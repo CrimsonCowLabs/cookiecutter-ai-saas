@@ -111,3 +111,22 @@ jobs:
           cd workers/app
           poetry install --no-root
           poetry run pytest -q
+
+      # Magic link is independent of the OAuth choice: turning it off must drop
+      # its files, provider, UI and env vars, and the result must still build.
+      - name: Generate with magic link off
+        run: |
+          cookiecutter . --no-input -o .generated-nolink project_name="No Link App" auth_providers=google_only include_magic_link=no include_marketing_extras=no
+          G=.generated-nolink/no-link-app
+          test ! -e "$G/app/(main)/(auth)/magic-link" && test ! -e "$G/components/auth/magic-link-form.tsx"
+          ! grep -rE 'MagicLink|/magic-link|Resend|RESEND' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts" "$G/.env.example"
+          grep -q '^GOOGLE_ID=' "$G/.env.example"
+          ! grep -q 'MICROSOFT' "$G/.env.example"
+
+      - name: Build with magic link off
+        working-directory: .generated-nolink/no-link-app
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run lint
+          npm run build

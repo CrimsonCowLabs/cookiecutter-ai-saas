@@ -5,7 +5,7 @@ import { OAuthButtons } from "./oauth-buttons";
 interface AuthFormProps {
   title: string;
   description?: string;
-  children: React.ReactNode;
+  children?: React.ReactNode;
   showOAuth?: boolean;
   callbackUrl?: string;
   planId?: string;
@@ -35,7 +35,9 @@ export function AuthForm({
         {showOAuth && (
           <div>
             <OAuthButtons callbackUrl={callbackUrl} planId={planId} />
+            {/* cc:begin magic-link */}
             <div className="divider text-xs uppercase tracking-[0.2em] text-base-content/50">or</div>
+            {/* cc:end magic-link */}
           </div>
         )}
 
