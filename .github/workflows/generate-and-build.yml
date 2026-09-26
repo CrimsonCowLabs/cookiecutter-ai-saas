@@ -8,9 +8,88 @@ permissions:
   contents: read
 
 jobs:
-  generate-and-build:
+  # Fails if cookiecutter.json gains a choice value the matrix below never exercises.
+  matrix-coverage:
+    name: Matrix covers every choice value
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install pyyaml
+      - run: python scripts/check_ci_matrix.py
+
+  # Roughly pairwise selection: every value of every choice appears in at least
+  # one combination (enforced by matrix-coverage). Each entry is named so a
+  # failing check identifies the combination. Keep keys equal to cookiecutter.json.
+  flag-matrix:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "default: none / stripe / extras / google+microsoft / link / ollama"
+            database_extensions: none
+            include_stripe: "yes"
+            include_marketing_extras: "yes"
+            auth_providers: google_microsoft
+            include_magic_link: "yes"
+            llm_provider: ollama
+          - name: "pgvector / no-stripe / no-extras / google-only / no-link / openai"
+            database_extensions: pgvector
+            include_stripe: "no"
+            include_marketing_extras: "no"
+            auth_providers: google_only
+            include_magic_link: "no"
+            llm_provider: openai
+          - name: "none / no-stripe / extras / microsoft-only / link / anthropic"
+            database_extensions: none
+            include_stripe: "no"
+            include_marketing_extras: "yes"
+            auth_providers: microsoft_only
+            include_magic_link: "yes"
+            llm_provider: anthropic
+          - name: "pgvector / stripe / no-extras / microsoft-only / no-link / openrouter"
+            database_extensions: pgvector
+            include_stripe: "yes"
+            include_marketing_extras: "no"
+            auth_providers: microsoft_only
+            include_magic_link: "no"
+            llm_provider: openrouter
+          - name: "none / stripe / no-extras / google+microsoft / no-link / anthropic"
+            database_extensions: none
+            include_stripe: "yes"
+            include_marketing_extras: "no"
+            auth_providers: google_microsoft
+            include_magic_link: "no"
+            llm_provider: anthropic
+          - name: "pgvector / no-stripe / extras / google+microsoft / link / openai"
+            database_extensions: pgvector
+            include_stripe: "no"
+            include_marketing_extras: "yes"
+            auth_providers: google_microsoft
+            include_magic_link: "yes"
+            llm_provider: openai
+          - name: "none / no-stripe / no-extras / google-only / link / openrouter"
+            database_extensions: none
+            include_stripe: "no"
+            include_marketing_extras: "no"
+            auth_providers: google_only
+            include_magic_link: "yes"
+            llm_provider: openrouter
+          - name: "pgvector / stripe / extras / microsoft-only / no-link / ollama"
+            database_extensions: pgvector
+            include_stripe: "yes"
+            include_marketing_extras: "yes"
+            auth_providers: microsoft_only
+            include_magic_link: "no"
+            llm_provider: ollama
+    env:
+      G: .generated/matrix-app
     steps:
       - uses: actions/checkout@v4
 
@@ -27,8 +106,15 @@ jobs:
       - name: Install cookiecutter
         run: python -m pip install cookiecutter
 
-      - name: Generate project from default answers
-        run: cookiecutter . --no-input -o .generated
+      - name: Generate project
+        run: |
+          cookiecutter . --no-input -o .generated project_name="Matrix App" \
+            database_extensions=${{ matrix.database_extensions }} \
+            include_stripe=${{ matrix.include_stripe }} \
+            include_marketing_extras=${{ matrix.include_marketing_extras }} \
+            auth_providers=${{ matrix.auth_providers }} \
+            include_magic_link=${{ matrix.include_magic_link }} \
+            llm_provider=${{ matrix.llm_provider }}
 
       # Lockfiles ship with the template and are copied verbatim, so every generation
       # gets the same dependency tree. Only the project name inside the npm locks is
@@ -36,97 +122,87 @@ jobs:
       - name: Verify lockfiles match the template
         run: |
           T='{{cookiecutter.project_slug}}'
-          G=.generated/my-ai-app
           cmp "$T/workers/app/poetry.lock" "$G/workers/app/poetry.lock"
-          sed 's/__PROJECT_SLUG__/my-ai-app/g' "$T/package-lock.json" | cmp - "$G/package-lock.json"
-          sed 's/__PROJECT_SLUG__/my-ai-app/g' "$T/workers/db-writer/package-lock.json" | cmp - "$G/workers/db-writer/package-lock.json"
+          sed 's/__PROJECT_SLUG__/matrix-app/g' "$T/package-lock.json" | cmp - "$G/package-lock.json"
+          sed 's/__PROJECT_SLUG__/matrix-app/g' "$T/workers/db-writer/package-lock.json" | cmp - "$G/workers/db-writer/package-lock.json"
+
+      # Each flag value must leave (or remove) exactly what it promises.
+      - name: Assert flag effects
+        run: |
+          if [ "${{ matrix.include_marketing_extras }}" = no ]; then
+            test ! -e "$G/app/(main)/blog" && test ! -e "$G/app/(main)/contact" && test ! -e "$G/app/api/contact"
+          else
+            test -e "$G/app/(main)/blog" && test -e "$G/app/api/contact"
+          fi
+          if [ "${{ matrix.database_extensions }}" = pgvector ]; then
+            grep -q 'pgvector/pgvector:pg18' "$G/docker-compose.yml" "$G/docker-compose.prod.yml"
+          else
+            ! grep -q 'pgvector/pgvector' "$G/docker-compose.yml" "$G/docker-compose.prod.yml"
+          fi
+          grep -q '^LLM_PROVIDER=${{ matrix.llm_provider }}' "$G/.env.example"
+          if [ "${{ matrix.llm_provider }}" = openrouter ]; then
+            grep -q '^OPENROUTER_API_KEY=' "$G/.env.example"
+          else
+            ! grep -q '^OPENROUTER_API_KEY=' "$G/.env.example"
+          fi
+          # Magic link is independent of the OAuth choice: off drops its files, provider, UI and env vars.
+          if [ "${{ matrix.include_magic_link }}" = no ]; then
+            test ! -e "$G/app/(main)/(auth)/magic-link" && test ! -e "$G/components/auth/magic-link-form.tsx"
+            ! grep -rE 'MagicLink|/magic-link|Resend|RESEND' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts" "$G/.env.example"
+          else
+            test -e "$G/components/auth/magic-link-form.tsx"
+          fi
+          case "${{ matrix.auth_providers }}" in
+            google_only) grep -q '^GOOGLE_ID=' "$G/.env.example"; ! grep -q 'MICROSOFT' "$G/.env.example" ;;
+            microsoft_only) grep -q 'MICROSOFT' "$G/.env.example"; ! grep -q '^GOOGLE_ID=' "$G/.env.example" ;;
+            *) grep -q '^GOOGLE_ID=' "$G/.env.example"; grep -q 'MICROSOFT' "$G/.env.example" ;;
+          esac
 
       - name: Install dependencies (frozen)
-        working-directory: .generated/my-ai-app
+        working-directory: .generated/matrix-app
         run: npm ci --no-audit --no-fund
 
       - name: Install db-writer dependencies (frozen)
-        working-directory: .generated/my-ai-app/workers/db-writer
+        working-directory: .generated/matrix-app/workers/db-writer
         run: npm ci --omit=dev --no-audit --no-fund
 
-      - name: Check poetry.lock is in sync with pyproject.toml
-        working-directory: .generated/my-ai-app/workers/app
+      - name: Typecheck
+        working-directory: .generated/matrix-app
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: .generated/matrix-app
+        run: npm run lint
+
+      - name: Build
+        working-directory: .generated/matrix-app
+        run: npm run build
+
+      - name: Check poetry.lock and run worker tests
+        working-directory: .generated/matrix-app/workers/app
         run: |
           python -m pip install "poetry>=2.5,<3"
           poetry check --lock
-
-      - name: Typecheck
-        working-directory: .generated/my-ai-app
-        run: npm run typecheck
-
-      - name: Build
-        working-directory: .generated/my-ai-app
-        run: npm run build
-
-      - name: Compile-check Python workers
-        working-directory: .generated/my-ai-app
-        run: python -m compileall -q workers/app
-
-      # Changing python_version invalidates poetry.lock; the hook must drop it
-      # instead of shipping a stale one.
-      - name: Generate with non-default python_version
-        run: |
-          cookiecutter . --no-input -o .generated-alt project_name="Alt App" python_version=3.13
-          test ! -e ".generated-alt/alt-app/workers/app/poetry.lock"
-          grep -q 'python = ">=3.13,<4"' .generated-alt/alt-app/workers/app/pyproject.toml
-
-      # Each merged/optional choice must generate a buildable project when flipped.
-      - name: Generate with marketing extras off and pgvector on
-        run: |
-          cookiecutter . --no-input -o .generated-lean project_name="Lean App" include_marketing_extras=no database_extensions=pgvector
-          G=.generated-lean/lean-app
-          test ! -e "$G/app/(main)/blog" && test ! -e "$G/app/(main)/contact" && test ! -e "$G/app/api/contact"
-          grep -q 'pgvector/pgvector:pg18' "$G/docker-compose.yml" "$G/docker-compose.prod.yml"
-
-      - name: Build with marketing extras off
-        working-directory: .generated-lean/lean-app
-        run: |
-          npm ci --no-audit --no-fund
-          npm run typecheck
-          npm run lint
-          npm run build
-
-      # llm_provider=openrouter must generate a buildable project whose worker
-      # tests (fake OpenAI-compatible server, no real key) pass.
-      - name: Generate with OpenRouter provider
-        run: |
-          cookiecutter . --no-input -o .generated-openrouter project_name="Router App" llm_provider=openrouter
-          G=.generated-openrouter/router-app
-          grep -q '^LLM_PROVIDER=openrouter' "$G/.env.example"
-          grep -q '^OPENROUTER_API_KEY=' "$G/.env.example"
-
-      - name: Build and test worker with OpenRouter provider
-        working-directory: .generated-openrouter/router-app
-        run: |
-          npm ci --no-audit --no-fund
-          npm run typecheck
-          npm run lint
-          npm run build
-          python -m pip install "poetry>=2.5,<3"
-          cd workers/app
           poetry install --no-root
           poetry run pytest -q
 
-      # Magic link is independent of the OAuth choice: turning it off must drop
-      # its files, provider, UI and env vars, and the result must still build.
-      - name: Generate with magic link off
-        run: |
-          cookiecutter . --no-input -o .generated-nolink project_name="No Link App" auth_providers=google_only include_magic_link=no include_marketing_extras=no
-          G=.generated-nolink/no-link-app
-          test ! -e "$G/app/(main)/(auth)/magic-link" && test ! -e "$G/components/auth/magic-link-form.tsx"
-          ! grep -rE 'MagicLink|/magic-link|Resend|RESEND' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts" "$G/.env.example"
-          grep -q '^GOOGLE_ID=' "$G/.env.example"
-          ! grep -q 'MICROSOFT' "$G/.env.example"
+      - name: Compile-check Python workers
+        working-directory: .generated/matrix-app
+        run: python -m compileall -q workers/app
 
-      - name: Build with magic link off
-        working-directory: .generated-nolink/no-link-app
-        run: |
-          npm ci --no-audit --no-fund
-          npm run typecheck
-          npm run lint
-          npm run build
+  # Changing python_version invalidates poetry.lock; the hook must drop it
+  # instead of shipping a stale one.
+  python-version:
+    name: Non-default python_version drops poetry.lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install cookiecutter
+      - run: |
+          cookiecutter . --no-input -o .generated-alt project_name="Alt App" python_version=3.13
+          test ! -e ".generated-alt/alt-app/workers/app/poetry.lock"
+          grep -q 'python = ">=3.13,<4"' .generated-alt/alt-app/workers/app/pyproject.toml

@@ -442,6 +442,12 @@ Edit `app/globals.css` (Tailwind 4 and DaisyUI 5 configure themes in CSS):
 
 ---
 
+## CI flag matrix
+
+CI generates, typechecks, lints and builds eight named flag combinations (the `flag-matrix` job in `.github/workflows/generate-and-build.yml`). `python scripts/check_ci_matrix.py` fails if any value of any choice in `cookiecutter.json` is missing from the matrix, so a new choice value needs a matrix entry.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
