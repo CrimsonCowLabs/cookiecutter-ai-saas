@@ -21,6 +21,7 @@ AUTHOR_EMAIL = "{{ cookiecutter.author_email }}"
 INCLUDE_STRIPE = "{{ cookiecutter.include_stripe }}"
 INCLUDE_MARKETING_EXTRAS = "{{ cookiecutter.include_marketing_extras }}"
 AUTH_PROVIDERS = "{{ cookiecutter.auth_providers }}"
+INCLUDE_MAGIC_LINK = "{{ cookiecutter.include_magic_link }}"
 DAISYUI_THEME = "{{ cookiecutter.daisyui_theme }}"
 PYTHON_VERSION = "{{ cookiecutter.python_version }}"
 # Python floor that workers/app/pyproject.toml and poetry.lock ship with (the
@@ -135,6 +136,14 @@ def handle_stripe():
         remove_file("app/actions/billing.ts")
 
 
+def handle_magic_link():
+    """Remove the email sign-in page and form if magic link is not included."""
+    if INCLUDE_MAGIC_LINK == "no":
+        print("Removing magic link files...")
+        remove_directory("app/(main)/(auth)/magic-link")
+        remove_file("components/auth/magic-link-form.tsx")
+
+
 def handle_marketing_extras():
     """Remove the blog and the contact form if marketing extras are not included."""
     if INCLUDE_MARKETING_EXTRAS == "no":
@@ -152,7 +161,6 @@ AUTH_PROVIDER_MARKERS = {
     "google_only": {"google"},
     "microsoft_only": {"microsoft"},
     "google_microsoft": {"google", "microsoft"},
-    "all": {"google", "microsoft"},
 }
 
 # Files that may carry cc: markers.
@@ -172,6 +180,7 @@ def marker_decisions():
     microsoft = "microsoft" in oauth
     extras = INCLUDE_MARKETING_EXTRAS == "yes"
     stripe = INCLUDE_STRIPE == "yes"
+    magic_link = INCLUDE_MAGIC_LINK == "yes"
     return {
         "google": google,
         "google-import": google,
@@ -181,6 +190,9 @@ def marker_decisions():
         "contact": extras,
         "no-contact": not extras,
         "stripe": stripe,
+        "magic-link": magic_link,
+        # RESEND_API_KEY serves both magic link and the contact form.
+        "resend": magic_link or extras,
     }
 
 
@@ -250,6 +262,7 @@ def main():
     apply_python_version()
     handle_stripe()
     handle_marketing_extras()
+    handle_magic_link()
     apply_markers()
     make_scripts_executable()
 

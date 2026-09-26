@@ -3,7 +3,9 @@
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { AuthForm } from "@/components/auth/auth-form";
+// cc:begin magic-link
 import { MagicLinkForm } from "@/components/auth/magic-link-form";
+// cc:end magic-link
 
 export function SignInForm() {
   const searchParams = useSearchParams();
@@ -30,7 +32,9 @@ export function SignInForm() {
         </>
       }
     >
+      {/* cc:begin magic-link */}
       <MagicLinkForm planId={planId} callbackUrl={callbackUrl} />
+      {/* cc:end magic-link */}
     </AuthForm>
   );
 }

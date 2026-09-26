@@ -5,8 +5,10 @@ import Google from "next-auth/providers/google";
 // cc:begin microsoft-import
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 // cc:end microsoft-import
+// cc:begin magic-link
 import Resend from "next-auth/providers/resend";
 import config from "@/config";
+// cc:end magic-link
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -37,6 +39,7 @@ const oauthProviders = [
   // cc:end microsoft
 ];
 
+// cc:begin magic-link
 /**
  * Email provider (requires adapter, cannot be used in Edge).
  */
@@ -54,6 +57,7 @@ export const emailProvider = Resend({
       }
     : undefined,
 });
+// cc:end magic-link
 
 /**
  * Base auth configuration for Edge Runtime (middleware).
@@ -94,7 +98,9 @@ export const authConfig: NextAuthConfig = {
   },
   pages: {
     signIn: "/sign-in",
+    // cc:begin magic-link
     verifyRequest: "/magic-link",
+    // cc:end magic-link
     error: "/sign-in",
   },
 };

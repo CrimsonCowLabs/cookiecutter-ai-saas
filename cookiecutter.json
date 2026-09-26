@@ -22,8 +22,11 @@
   "auth_providers": [
     "google_microsoft",
     "google_only",
-    "microsoft_only",
-    "all"
+    "microsoft_only"
+  ],
+  "include_magic_link": [
+    "yes",
+    "no"
   ],
   "python_version": "3.14",
   "node_version": "20",

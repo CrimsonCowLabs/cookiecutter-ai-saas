@@ -9,7 +9,10 @@ import {
   verificationTokens,
   auditLogs,
 } from "@/lib/db/schema";
-import { authConfig, emailProvider } from "./auth.config";
+import { authConfig } from "./auth.config";
+// cc:begin magic-link
+import { emailProvider } from "./auth.config";
+// cc:end magic-link
 
 /**
  * Full auth configuration with database adapter.
@@ -18,8 +21,13 @@ import { authConfig, emailProvider } from "./auth.config";
  */
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
-  // Add email provider (requires adapter, only works in Node.js runtime)
-  providers: [...authConfig.providers, emailProvider],
+  providers: [
+    ...authConfig.providers,
+    // cc:begin magic-link
+    // Email provider (requires adapter, only works in Node.js runtime)
+    emailProvider,
+    // cc:end magic-link
+  ],
   adapter: DrizzleAdapter(db, {
     usersTable: users,
     accountsTable: accounts as any,

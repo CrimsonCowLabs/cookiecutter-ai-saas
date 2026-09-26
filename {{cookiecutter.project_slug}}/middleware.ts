@@ -23,7 +23,9 @@ export default auth((req) => {
   const publicPathPrefixes = [
     "/sign-in",
     "/sign-up",
+    // cc:begin magic-link
     "/magic-link",
+    // cc:end magic-link
     "/blog",
     "/contact",
     "/privacy-policy",
