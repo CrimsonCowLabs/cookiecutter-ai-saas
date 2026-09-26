@@ -32,7 +32,8 @@
   "llm_provider": [
     "ollama",
     "openai",
-    "anthropic"
+    "anthropic",
+    "openrouter"
   ],
   "_copy_without_render": [
     "*.ts",

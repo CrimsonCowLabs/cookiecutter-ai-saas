@@ -90,3 +90,24 @@ jobs:
           npm run typecheck
           npm run lint
           npm run build
+
+      # llm_provider=openrouter must generate a buildable project whose worker
+      # tests (fake OpenAI-compatible server, no real key) pass.
+      - name: Generate with OpenRouter provider
+        run: |
+          cookiecutter . --no-input -o .generated-openrouter project_name="Router App" llm_provider=openrouter
+          G=.generated-openrouter/router-app
+          grep -q '^LLM_PROVIDER=openrouter' "$G/.env.example"
+          grep -q '^OPENROUTER_API_KEY=' "$G/.env.example"
+
+      - name: Build and test worker with OpenRouter provider
+        working-directory: .generated-openrouter/router-app
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run lint
+          npm run build
+          python -m pip install "poetry>=2.5,<3"
+          cd workers/app
+          poetry install --no-root
+          poetry run pytest -q

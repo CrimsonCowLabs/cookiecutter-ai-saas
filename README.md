@@ -90,7 +90,7 @@ Every generated project is a complete distributed system with **95 files**:
 | **DB Writer** | Node.js (Redis subscriber → database) |
 | **Payments** | Stripe (subscriptions + one-time) |
 | **Email** | Resend (magic link, transactional) |
-| **LLM** | Ollama, OpenAI, or Anthropic |
+| **LLM** | Ollama, OpenAI, Anthropic, or OpenRouter |
 | **Deployment** | Docker (multi-stage), Caddy |
 
 ---
@@ -111,7 +111,7 @@ Every generated project is a complete distributed system with **95 files**:
 | `include_stripe` | yes | yes, no | Stripe billing integration |
 | `include_marketing_extras` | yes | yes, no | Static JSON blog and contact form (with its API route) |
 | `auth_providers` | google_microsoft | google_microsoft, google_only, microsoft_only, all | OAuth providers |
-| `llm_provider` | ollama | ollama, openai, anthropic | AI model provider |
+| `llm_provider` | ollama | ollama, openai, anthropic, openrouter | AI model provider |
 | `python_version` | 3.14 | any version | Python for worker Dockerfile. `poetry.lock` is resolved for 3.14; any other value drops it and you must run `poetry lock` in `workers/app` once |
 | `node_version` | 20 | any version | Node.js for Dockerfiles |
 | `redis_port` | 6379 | any port | Local Redis port mapping |
@@ -308,6 +308,7 @@ After generation, configure these in `.env.local`:
 | Ollama | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_BASE_URL` (optional) |
 
 ---
 
