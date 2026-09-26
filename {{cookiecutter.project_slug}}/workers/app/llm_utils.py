@@ -16,6 +16,7 @@ def get_llm() -> Any | None:
     - "ollama": Local/cloud Ollama via OpenAI-compatible API
     - "openai": OpenAI API (GPT-4, etc.)
     - "anthropic": Anthropic API (Claude)
+    - "openrouter": OpenRouter via OpenAI-compatible API
 
     Returns None if the required API key is not set.
     """
@@ -44,6 +45,19 @@ def get_llm() -> Any | None:
             model=settings.anthropic_model or "claude-sonnet-4-20250514",
             max_retries=5,
             timeout=120,
+        )
+
+    elif provider == "openrouter":
+        if not settings.openrouter_api_key:
+            return None
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            api_key=settings.openrouter_api_key,
+            model=settings.openrouter_model or "openai/gpt-4o-mini",
+            base_url=settings.openrouter_base_url or "https://openrouter.ai/api/v1",
+            max_retries=5,
+            request_timeout=120,
         )
 
     else:  # ollama (default) — uses OpenAI-compatible API
@@ -97,6 +111,9 @@ def get_rate_limiter() -> LLMRateLimiter:
         elif provider == "anthropic":
             rpm = settings.anthropic_rpm
             concurrency = settings.anthropic_max_concurrency
+        elif provider == "openrouter":
+            rpm = settings.openrouter_rpm
+            concurrency = settings.openrouter_max_concurrency
         else:
             rpm = settings.ollama_rpm
             concurrency = settings.ollama_max_concurrency

@@ -21,7 +21,7 @@ def _env(key: str, default: str | None = None) -> str | None:
 class Settings:
     """Centralized, dotenv-backed settings."""
 
-    # LLM provider selection: "ollama", "openai", or "anthropic"
+    # LLM provider selection: "ollama", "openai", "anthropic", or "openrouter"
     llm_provider: str = _env("LLM_PROVIDER", "ollama") or "ollama"
 
     # OpenAI settings
@@ -43,6 +43,13 @@ class Settings:
     anthropic_model: str | None = _env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
     anthropic_rpm: int = int(_env("ANTHROPIC_RPM", "10") or "10")
     anthropic_max_concurrency: int = int(_env("ANTHROPIC_MAX_CONCURRENCY", "2") or "2")
+
+    # OpenRouter settings (uses OpenAI-compatible API)
+    openrouter_api_key: str | None = _env("OPENROUTER_API_KEY")
+    openrouter_model: str | None = _env("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+    openrouter_base_url: str | None = _env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    openrouter_rpm: int = int(_env("OPENROUTER_RPM", "20") or "20")
+    openrouter_max_concurrency: int = int(_env("OPENROUTER_MAX_CONCURRENCY", "4") or "4")
 
     # Redis
     redis_url: str = _env("REDIS_URL", "redis://localhost:6379") or "redis://localhost:6379"
