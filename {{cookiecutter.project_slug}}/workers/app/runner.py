@@ -5,10 +5,29 @@ import logging
 import time
 from typing import Callable, Awaitable, Any
 
-from tools.example_tool import example_processing_step
+from langchain_core.tools import StructuredTool
+
 import llm_utils
+from agents.research_agent import (
+    DEFAULT_SYSTEM_PROMPT,
+    RecursionBackstopReached,
+    ReportSchemaError,
+    ResearchAgentError,
+    ToolCallLimitReached,
+    run_research_agent,
+)
+from settings import settings
+from tools.example_tool import example_processing_step
 
 logger = logging.getLogger("runner")
+
+
+# Stable `reason` codes for each way the research agent can end a step.
+_AGENT_ERROR_REASONS: dict[type[ResearchAgentError], str] = {
+    ToolCallLimitReached: "tool_call_limit",
+    RecursionBackstopReached: "recursion_limit",
+    ReportSchemaError: "invalid_report",
+}
 
 
 class JobCancelled(Exception):
@@ -140,13 +159,23 @@ async def _step_collect_data(input_data: dict, context: dict) -> dict:
 
 
 async def _step_process_with_ai(input_data: dict, context: dict) -> dict:
-    """Step 2: Process collected data with an LLM.
+    """Step 2: Analyze the collected data with a tool-calling research agent.
 
-    Uses the configured LLM provider to analyze/transform data.
+    Runs `agents.research_agent.run_research_agent` with the configured LLM and
+    the example tool. The agent may call tools in a loop, bounded by
+    `settings.research_max_tool_calls` (with a graph recursion backstop).
+
+    Exit behaviour, so the job always finishes cleanly:
+    - no LLM configured -> `{"status": "skipped", "reason": "no_llm_configured"}`
+    - report produced   -> `{"status": "processed", "analysis": {...}, "research": {...}}`
+    - bound exceeded or malformed report -> `{"status": "error", "reason": ..., "error": ...}`
+      where reason is `tool_call_limit`, `recursion_limit` or `invalid_report`
+    - any other failure (provider, tool) -> `{"status": "error", "error": ...}`
+
+    The later steps treat every non-"processed" status as "no AI enhancement".
+    The pipeline's progress does not depend on this step's outcome or on how
+    many tool calls the agent made.
     """
-    import asyncio
-    from langchain_core.messages import SystemMessage, HumanMessage
-
     llm = llm_utils.get_llm()
     if llm is None:
         logger.warning("No LLM configured, returning raw data")
@@ -156,54 +185,56 @@ async def _step_process_with_ai(input_data: dict, context: dict) -> dict:
         }
 
     collected_data = context["step_results"].get("Data Collection", {})
+    topic = str(input_data.get("query") or "").strip() or "the collected data"
 
-    system_prompt = """You are a helpful AI assistant for __PROJECT_NAME__.
-Analyze the provided data and return a structured JSON response with your analysis.
+    async def collect(query: str) -> dict:
+        """Collect example items related to a query."""
+        return await example_processing_step({**input_data, "query": query})
 
-Respond with a JSON object containing:
-- "summary": A brief summary of the analysis
-- "insights": An array of key insights found
-- "recommendations": An array of recommended actions
-"""
-
-    user_prompt = f"Please analyze the following data:\n\n{json.dumps(collected_data, indent=2)}"
+    tools = [StructuredTool.from_function(coroutine=collect, name="collect")]
+    system_prompt = (
+        f"{DEFAULT_SYSTEM_PROMPT}\n\n"
+        "Data already collected for this job:\n"
+        f"{json.dumps(collected_data, indent=2, default=str)}"
+    )
 
     try:
+        # The agent module does not rate limit; hold one limiter slot for the
+        # whole run (this covers the run, not each model call inside it).
         limiter = llm_utils.get_rate_limiter()
         await limiter.acquire()
         try:
-            response = await asyncio.to_thread(
-                llm.invoke,
-                [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)],
+            report = await run_research_agent(
+                topic,
+                model=llm,
+                tools=tools,
+                max_tool_calls=settings.research_max_tool_calls,
+                system_prompt=system_prompt,
             )
         finally:
             limiter.release()
-
-        content = getattr(response, "content", "") or ""
-
-        # Strip markdown code fences if present
-        stripped = content.strip()
-        if stripped.startswith("```"):
-            stripped = stripped.split("\n", 1)[-1]
-            if stripped.endswith("```"):
-                stripped = stripped[:-3]
-            stripped = stripped.strip()
-
-        try:
-            analysis = json.loads(stripped)
-        except json.JSONDecodeError:
-            analysis = {"summary": content, "insights": [], "recommendations": []}
-
-        return {
-            "status": "processed",
-            "analysis": analysis,
-        }
+    except ResearchAgentError as exc:
+        reason = _AGENT_ERROR_REASONS.get(type(exc), "agent_error")
+        logger.warning("Research agent ended the AI step (%s): %s", reason, exc)
+        return {"status": "error", "reason": reason, "error": str(exc)}
     except Exception as exc:
         logger.warning("LLM processing failed: %s", exc)
         return {
             "status": "error",
             "error": str(exc),
         }
+
+    return {
+        "status": "processed",
+        "analysis": {
+            "summary": report.summary,
+            "insights": report.key_findings,
+            # The research report has no recommendations; keep the key so
+            # downstream consumers see the shape they always did.
+            "recommendations": [],
+        },
+        "research": report.model_dump(),
+    }
 
 
 async def _step_generate_results(input_data: dict, context: dict) -> dict:

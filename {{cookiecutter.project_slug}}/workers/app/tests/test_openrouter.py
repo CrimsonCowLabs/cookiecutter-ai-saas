@@ -29,6 +29,9 @@ def fake_openrouter():
             requests.append(
                 {"path": self.path, "auth": self.headers.get("Authorization"), "body": body}
             )
+            # The AI step is an agent: the fake model answers by submitting the
+            # structured report through the ResearchReport tool call.
+            report = {"topic": "test query", "summary": "fake", "key_findings": ["i1"], "sources": []}
             reply = json.dumps(
                 {
                     "id": "gen-1",
@@ -38,10 +41,17 @@ def fake_openrouter():
                     "choices": [
                         {
                             "index": 0,
-                            "finish_reason": "stop",
+                            "finish_reason": "tool_calls",
                             "message": {
                                 "role": "assistant",
-                                "content": '{"summary": "fake", "insights": ["i1"], "recommendations": ["r1"]}',
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "type": "function",
+                                        "function": {"name": "ResearchReport", "arguments": json.dumps(report)},
+                                    }
+                                ],
                             },
                         }
                     ],
@@ -103,6 +113,7 @@ async def test_job_runs_end_to_end_with_openrouter(monkeypatch, fake_openrouter)
     ai = result["results"]["AI Processing"]
     assert ai["status"] == "processed"
     assert ai["analysis"]["summary"] == "fake"
+    assert ai["analysis"]["insights"] == ["i1"]
     assert result["results"]["Results Generation"]["ai_enhanced"] is True
 
 
