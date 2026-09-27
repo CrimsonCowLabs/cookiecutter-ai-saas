@@ -10,12 +10,15 @@ from langchain_core.tools import StructuredTool
 import llm_utils
 from agents.research_agent import (
     DEFAULT_SYSTEM_PROMPT,
+    AgentEvent,
     RecursionBackstopReached,
     ReportSchemaError,
     ResearchAgentError,
     ToolCallLimitReached,
+    report_tool_progress,
     run_research_agent,
 )
+from progress import JobCancelled, JobProgress, StepProgress
 from settings import settings
 from tools.example_tool import example_processing_step
 
@@ -28,10 +31,6 @@ _AGENT_ERROR_REASONS: dict[type[ResearchAgentError], str] = {
     RecursionBackstopReached: "recursion_limit",
     ReportSchemaError: "invalid_report",
 }
-
-
-class JobCancelled(Exception):
-    pass
 
 
 # Pipeline steps: (name, function, progress_weight)
@@ -58,7 +57,11 @@ async def run_job(
         job_type: Type of job (determines pipeline behavior)
         user_id: User who initiated the job
         input_data: Job input parameters
-        progress_callback: Async callback for progress updates (pct, step_name, status, message)
+        progress_callback: Async callback for progress updates
+            (pct, step_name, status, message). Events from inside a step (for
+            example each agent step and tool call) also pass `detail=` (a dict
+            with at least `kind`); a callback must accept it. The percentage
+            never decreases, except that a failure reports 0.
         cancel_check: Async function that returns True if job should be cancelled
 
     Returns:
@@ -75,6 +78,8 @@ async def run_job(
         "step_results": {},
     }
 
+    progress = JobProgress(progress_callback, cancel_check)
+
     # Calculate progress ranges for each step
     total_weight = sum(w for _, _, w in PIPELINE_STEPS)
     progress_base = 0
@@ -82,14 +87,14 @@ async def run_job(
     try:
         for step_name, step_func_name, weight in PIPELINE_STEPS:
             # Check for cancellation before each step
-            if cancel_check and await cancel_check():
-                raise JobCancelled()
+            await progress.check_cancelled()
 
             step_pct_start = int(progress_base / total_weight * 100)
             step_pct_end = int((progress_base + weight) / total_weight * 100)
 
-            if progress_callback:
-                await progress_callback(step_pct_start, step_name, "running", f"Starting {step_name}")
+            await progress.emit(step_pct_start, step_name, "running", f"Starting {step_name}")
+            # Steps may spread finer events across their own slice of the bar.
+            context["progress"] = progress.step(step_name, step_pct_start, step_pct_end)
 
             logger.info("Job %s: running step '%s'", job_id, step_name)
             step_start = time.monotonic()
@@ -101,15 +106,13 @@ async def run_job(
             elapsed = time.monotonic() - step_start
             logger.info("Job %s: step '%s' completed in %.1fs", job_id, step_name, elapsed)
 
-            if progress_callback:
-                await progress_callback(step_pct_end, step_name, "running", f"Completed {step_name}")
+            await progress.emit(step_pct_end, step_name, "running", f"Completed {step_name}")
 
             progress_base += weight
 
         total_elapsed = time.monotonic() - start_time
 
-        if progress_callback:
-            await progress_callback(100, "Complete", "completed", "Job completed")
+        await progress.emit(100, "Complete", "completed", "Job completed")
 
         return {
             "job_id": job_id,
@@ -122,8 +125,7 @@ async def run_job(
     except JobCancelled:
         raise
     except Exception as exc:
-        if progress_callback:
-            await progress_callback(0, "", "failed", f"Job failed: {type(exc).__name__}")
+        await progress.emit(0, "", "failed", f"Job failed: {type(exc).__name__}")
         raise
 
 
@@ -158,6 +160,40 @@ async def _step_collect_data(input_data: dict, context: dict) -> dict:
     }
 
 
+def _agent_progress_listener(progress: StepProgress | None, max_tool_calls: int):
+    """Listener that turns agent events into progress inside the step's slice.
+
+    The step's slice is divided into `max_tool_calls + 1` equal parts: one per
+    tool call the agent may make, plus one for the final model call that writes
+    the report. A tool call fills its own part (its intermediate progress moves
+    within it), so the bar advances with the agent's work, cannot run past the
+    slice however the run goes, and the step-complete event finishes the slice.
+    Returns None when there is nowhere to report (the step ran standalone).
+    """
+    if progress is None:
+        return None
+    parts = max_tool_calls + 1
+
+    async def on_event(event: AgentEvent) -> None:
+        done = event.tool_calls_done
+        fraction = done / parts
+        if event.kind == "model_start":
+            message = f"Agent step {event.step}: thinking"
+        elif event.kind == "tool_start":
+            message = f"Agent step {event.step}: calling {event.tool}"
+        elif event.kind == "tool_progress":
+            fraction = (done + (event.fraction or 0.0)) / parts
+            message = event.message or f"Agent step {event.step}: {event.tool} running"
+        else:
+            message = f"Agent step {event.step}: {event.tool} finished"
+        detail = {"kind": event.kind, "step": event.step, "tool_calls": done}
+        if event.tool:
+            detail["tool"] = event.tool
+        await progress.update(fraction, message, detail)
+
+    return on_event
+
+
 async def _step_process_with_ai(input_data: dict, context: dict) -> dict:
     """Step 2: Analyze the collected data with a tool-calling research agent.
 
@@ -173,8 +209,11 @@ async def _step_process_with_ai(input_data: dict, context: dict) -> dict:
     - any other failure (provider, tool) -> `{"status": "error", "error": ...}`
 
     The later steps treat every non-"processed" status as "no AI enhancement".
-    The pipeline's progress does not depend on this step's outcome or on how
-    many tool calls the agent made.
+    Progress: each model step and tool call is reported inside this step's
+    slice of the bar (see `_agent_progress_listener`), and a cancelled job
+    raises `JobCancelled` out of the agent at the next event. The step's start
+    and end percentages do not depend on the outcome or on how many tool calls
+    the agent made.
     """
     llm = llm_utils.get_llm()
     if llm is None:
@@ -189,6 +228,9 @@ async def _step_process_with_ai(input_data: dict, context: dict) -> dict:
 
     async def collect(query: str) -> dict:
         """Collect example items related to a query."""
+        # A tool can report its own progress; this one only has a single hop,
+        # but a slow tool would call this repeatedly as it works.
+        await report_tool_progress(0.5, f"Collecting items for '{query}'")
         return await example_processing_step({**input_data, "query": query})
 
     tools = [StructuredTool.from_function(coroutine=collect, name="collect")]
@@ -197,6 +239,8 @@ async def _step_process_with_ai(input_data: dict, context: dict) -> dict:
         "Data already collected for this job:\n"
         f"{json.dumps(collected_data, indent=2, default=str)}"
     )
+
+    on_event = _agent_progress_listener(context.get("progress"), settings.research_max_tool_calls)
 
     try:
         # The agent module does not rate limit; hold one limiter slot for the
@@ -210,9 +254,13 @@ async def _step_process_with_ai(input_data: dict, context: dict) -> dict:
                 tools=tools,
                 max_tool_calls=settings.research_max_tool_calls,
                 system_prompt=system_prompt,
+                on_event=on_event,
             )
         finally:
             limiter.release()
+    except JobCancelled:
+        # Raised from `on_event` when the job is cancelled; not an agent failure.
+        raise
     except ResearchAgentError as exc:
         reason = _AGENT_ERROR_REASONS.get(type(exc), "agent_error")
         logger.warning("Research agent ended the AI step (%s): %s", reason, exc)

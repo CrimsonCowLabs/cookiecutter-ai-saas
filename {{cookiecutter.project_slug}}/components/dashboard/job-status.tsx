@@ -6,6 +6,8 @@ interface JobProgress {
   status: string;
   progress: number;
   message?: string;
+  /** Set on events from inside a step, e.g. an agent step or tool call. */
+  detail?: { kind: string; step?: number; tool?: string; tool_calls?: number };
 }
 
 type ConnectionState = "idle" | "connecting" | "connected" | "error" | "closed";

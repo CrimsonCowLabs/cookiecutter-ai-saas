@@ -177,6 +177,7 @@ Every generated project is a complete distributed system with **105 files**:
 │   ├── app/                       # Python worker
 │   │   ├── worker.py              #   BullMQ consumer (async)
 │   │   ├── runner.py              #   3-step pipeline; step 2 runs the research agent
+│   │   ├── progress.py            #   Monotonic progress + per-step sub-ranges, cancellation
 │   │   ├── settings.py            #   Config from env vars
 │   │   ├── llm_utils.py           #   LLM provider abstraction
 │   │   ├── agents/                #   Standalone agents (research_agent.py)
@@ -431,8 +432,8 @@ Bounds and exit behaviour. A runaway loop cannot run up an unbounded bill:
 
 - `RESEARCH_MAX_TOOL_CALLS` (default 8) is the tool-call limit, the real
   bound; the LangGraph `recursion_limit` is derived from it as a backstop.
-- Whatever ends the agent, the job still completes, with the same progress
-  (0, 30, 30, 70, 70, 100, 100) however many tool calls ran. The AI step
+- Whatever ends the agent, the job still completes, with the same step
+  boundaries (0, 30, 30, 70, 70, 100, 100) however many tool calls ran. The AI step
   returns `{"status": "error", "reason": ..., "error": ...}` and the results
   step reports `ai_enhanced: false`. `reason` is `tool_call_limit`,
   `recursion_limit` or `invalid_report` (a report that does not satisfy the
@@ -446,6 +447,34 @@ Bounds and exit behaviour. A runaway loop cannot run up an unbounded bill:
   key or network. To try a ready-made search tool, add its package (for example
   `langchain-tavily` or `langchain-community`) with `poetry add` and add it to
   the `tools` list in `runner.py`.
+
+### Agent Progress and Cancellation
+
+The agent's work shows up in the job's live progress, on the same
+`job:{id}:progress` Redis channel and SSE stream as the step boundaries.
+
+- Every model step and every tool call emits an event whose percentage falls
+  inside the AI step's slice (30 to 70). The slice is split into
+  `RESEARCH_MAX_TOOL_CALLS + 1` equal parts, so the bar advances as the agent
+  works and cannot pass 70 before the step completes.
+- Events carry a `message` (for example `Agent step 2: calling collect`) and a
+  `detail` object: `{kind, step, tool_calls, tool?}` with `kind` one of
+  `model_start`, `tool_start`, `tool_progress`, `tool_end`. Step-boundary events
+  have no `detail`. `job_events.payload` stores the whole event.
+- A long-running tool reports its own progress with
+  `from agents.research_agent import report_tool_progress` and
+  `await report_tool_progress(0.4, "fetched 2 of 5 pages")`. The fraction moves
+  the bar within that tool call's part of the slice. It is a no-op outside an
+  agent run.
+- Overall percentage never decreases (`workers/app/progress.py` clamps it
+  server-side); only a `failed` event reports 0.
+- Cancellation is checked at every agent event, so a cancelled job stops at the
+  next model step, tool start or tool progress report. A tool that never calls
+  `report_tool_progress` cannot be interrupted while it runs.
+- `run_research_agent(..., on_event=...)` is the generic hook; the module still
+  knows nothing about Redis. A listener that raises stops the run.
+- `progress_callback` receives `detail=` as a keyword for in-step events, so a
+  custom callback needs to accept it.
 
 ### Adding a New Database Table
 

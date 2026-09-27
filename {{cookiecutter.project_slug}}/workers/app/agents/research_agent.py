@@ -16,6 +16,13 @@ Bounds (both explicit, both surfacing as `ResearchAgentError` subclasses):
   cannot see (for example a model that never stops). It raises
   `RecursionBackstopReached`.
 
+Events (optional): pass `on_event` to be told about every model step and tool
+call as it happens (`AgentEvent`). A tool can report its own intermediate
+progress with `report_tool_progress`. The listener may raise: the exception
+stops the run at that point and propagates unchanged, which is how a caller
+cancels an agent that is mid-run. The module still knows nothing about the
+channel the events end up on.
+
 Output is bound to `ResearchReport`. A generation that does not satisfy the
 schema (or is free text) raises `ReportSchemaError`; a partial report is never
 returned and the model is not re-prompted to repair it.
@@ -23,10 +30,13 @@ returned and the model is not re-prompted to repair it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import contextvars
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from typing import Literal
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import after_model
+from langchain.agents.middleware import AgentMiddleware, after_model
 from langchain.agents.structured_output import StructuredOutputError, ToolStrategy
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -74,6 +84,78 @@ class RecursionBackstopReached(ResearchAgentError):
 
 class ReportSchemaError(ResearchAgentError):
     """The model's output did not satisfy `ResearchReport`."""
+
+
+EventKind = Literal["model_start", "tool_start", "tool_progress", "tool_end"]
+
+
+@dataclass(frozen=True)
+class AgentEvent:
+    """One thing the agent did, as reported to `on_event`.
+
+    `step` is the 1-based model step. `tool_calls_done` counts tool calls that
+    have finished (it moves on `tool_end`). `tool`, `fraction` (0..1, clamped)
+    and `message` are set only where they apply.
+    """
+
+    kind: EventKind
+    step: int
+    tool_calls_done: int
+    tool: str | None = None
+    fraction: float | None = None
+    message: str | None = None
+
+
+EventListener = Callable[[AgentEvent], Awaitable[None]]
+
+# The progress reporter of the tool call currently running, if any. A
+# ContextVar so concurrent tool calls each report as themselves.
+_tool_reporter: contextvars.ContextVar[Callable[[float | None, str | None], Awaitable[None]] | None] = (
+    contextvars.ContextVar("research_agent_tool_reporter", default=None)
+)
+
+
+async def report_tool_progress(fraction: float | None = None, message: str | None = None) -> None:
+    """Report intermediate progress from inside a running (async) tool.
+
+    `fraction` is how far through the tool is (0..1; clamped). Does nothing
+    when no listener is attached or when called outside an agent tool call.
+    """
+    reporter = _tool_reporter.get()
+    if reporter is not None:
+        await reporter(fraction, message)
+
+
+def _event_middleware(on_event: EventListener) -> AgentMiddleware:
+    """Middleware that turns graph activity into `AgentEvent`s for `on_event`."""
+    state = {"step": 0, "done": 0}
+
+    class Events(AgentMiddleware):
+        async def abefore_model(self, agent_state, runtime):
+            state["step"] += 1
+            await on_event(AgentEvent("model_start", state["step"], state["done"]))
+            return None
+
+        async def awrap_tool_call(self, request, handler):
+            name = request.tool_call["name"]
+            step = state["step"]
+
+            async def report(fraction: float | None, message: str | None) -> None:
+                if fraction is not None:
+                    fraction = min(1.0, max(0.0, float(fraction)))
+                await on_event(AgentEvent("tool_progress", step, state["done"], name, fraction, message))
+
+            await on_event(AgentEvent("tool_start", step, state["done"], name))
+            token = _tool_reporter.set(report)
+            try:
+                result = await handler(request)
+            finally:
+                _tool_reporter.reset(token)
+            state["done"] += 1
+            await on_event(AgentEvent("tool_end", step, state["done"], name))
+            return result
+
+    return Events()
 
 
 def default_recursion_limit(max_tool_calls: int) -> int:
@@ -131,6 +213,7 @@ async def run_research_agent(
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
     recursion_limit: int | None = None,
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    on_event: EventListener | None = None,
 ) -> ResearchReport:
     """Research `topic` with `model` and `tools` and return a validated report.
 
@@ -141,6 +224,8 @@ async def run_research_agent(
         max_tool_calls: Upper bound on tool calls in this run. Must be >= 1.
         recursion_limit: LangGraph backstop; defaults to `default_recursion_limit`.
         system_prompt: Overrides the default instructions.
+        on_event: Async listener called for each `AgentEvent`. If it raises,
+            the run stops there and the exception propagates unchanged.
 
     Raises:
         ValueError: `topic` is blank or a bound is not positive.
@@ -159,6 +244,10 @@ async def run_research_agent(
     elif recursion_limit < 1:
         raise ValueError("recursion_limit must be at least 1")
 
+    middleware = [_tool_call_limit(max_tool_calls), _end_on_free_text]
+    if on_event is not None:
+        middleware.append(_event_middleware(on_event))
+
     agent = create_agent(
         model,
         tools=list(tools),
@@ -166,7 +255,7 @@ async def run_research_agent(
         # handle_errors=False: invalid output raises instead of re-prompting the
         # model, so a bad generation can never be quietly patched into a report.
         response_format=ToolStrategy(ResearchReport, handle_errors=False),
-        middleware=[_tool_call_limit(max_tool_calls), _end_on_free_text],
+        middleware=middleware,
     )
 
     try:
