@@ -31,7 +31,7 @@ cookiecutter gh:eodgooch/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system with **95 files**:
+Every generated project is a complete distributed system with **105 files**:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -179,6 +179,7 @@ Every generated project is a complete distributed system with **95 files**:
 │   │   ├── runner.py              #   3-step AI pipeline
 │   │   ├── settings.py            #   Config from env vars
 │   │   ├── llm_utils.py           #   LLM provider abstraction
+│   │   ├── agents/                #   Standalone agents (research_agent.py)
 │   │   ├── tools/                 #   Custom pipeline tools
 │   │   ├── tests/                 #   Pytest suite
 │   │   ├── pyproject.toml         #   Poetry dependencies
@@ -398,6 +399,34 @@ The `project-scaffolder` agent can be spawned by Claude for complex scaffolding 
 1. Create a tool in `workers/app/tools/my_step.py`
 2. Add the step to `PIPELINE_STEPS` in `workers/app/runner.py`
 3. The worker will automatically include it in the job pipeline
+
+### Running the Research Agent
+
+`workers/app/agents/research_agent.py` is a self-contained LangGraph agent
+(built with `langchain.agents.create_agent`). It is not yet wired into the job
+pipeline; it takes everything from its caller and knows nothing about Redis,
+BullMQ, or `settings`:
+
+```python
+from agents.research_agent import run_research_agent, ResearchAgentError
+
+report = await run_research_agent(
+    "solar power",
+    model=llm_utils.get_llm(),   # any LangChain chat model that supports tool calling
+    tools=[my_tool],             # any LangChain tools; may be empty
+    max_tool_calls=8,            # explicit bound; the call that would exceed it never runs
+)
+```
+
+- The result is a `ResearchReport` (Pydantic). Output that does not satisfy the
+  schema raises `ReportSchemaError`; a partial report is never returned.
+- Bounds end the run with a typed error, not a hang: `ToolCallLimitReached`
+  (the tool-call limit) and `RecursionBackstopReached` (the LangGraph
+  `recursion_limit` backstop). All three subclass `ResearchAgentError`.
+- Tests use a scripted fake model (`tests/fakes.py`), so they need no provider
+  key or network. To try a ready-made search tool, add its package (for example
+  `langchain-tavily` or `langchain-community`) with `poetry add` and pass the
+  tool in `tools=`.
 
 ### Adding a New Database Table
 
