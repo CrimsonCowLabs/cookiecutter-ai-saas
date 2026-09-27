@@ -167,15 +167,18 @@ async def progress_of(monkeypatch, model):
     use_model(monkeypatch, model)
     events = []
 
-    async def record(pct, step, status, message):
-        events.append((pct, step, status, message))
+    async def record(pct, step, status, message, detail=None):
+        # Step-boundary events only; the agent's own events are covered in
+        # test_agent_progress.py.
+        if detail is None:
+            events.append((pct, step, status, message))
 
     result = await run_job("job-1", "default", "user-1", INPUT_DATA, progress_callback=record)
     return events, result
 
 
 @pytest.mark.asyncio
-async def test_progress_is_identical_however_many_tool_calls_run(monkeypatch):
+async def test_step_boundaries_are_identical_however_many_tool_calls_run(monkeypatch):
     runs = {
         "zero calls": ScriptedChatModel(responses=tool_calls(0)),
         "three calls": ScriptedChatModel(responses=tool_calls(3)),
