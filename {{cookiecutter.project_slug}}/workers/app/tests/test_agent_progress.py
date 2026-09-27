@@ -129,11 +129,8 @@ async def test_a_four_argument_callback_still_works(monkeypatch):
 @pytest.mark.asyncio
 async def test_cancelling_mid_agent_stops_the_job(monkeypatch):
     model = script(5)
-    checks = 0
 
     async def cancel_after_first_tool_call():
-        nonlocal checks
-        checks += 1
         # Let the pipeline start, then cancel once the agent is working.
         return any(i["detail"] and i["detail"]["kind"] == "tool_end" for i in events.items)
 
@@ -172,6 +169,19 @@ async def test_a_failing_agent_is_not_reported_as_cancelled_or_failed(monkeypatc
 
     assert result["status"] == "completed"
     assert result["results"]["AI Processing"]["reason"] == "invalid_report"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_progress_publish_does_not_fail_the_agent(monkeypatch):
+    monkeypatch.setattr(llm_utils, "get_llm", lambda: script(1))
+
+    async def flaky(pct, step, status, message, detail=None):
+        if detail is not None:
+            raise ConnectionError("redis down")
+
+    result = await run_job("j", "default", "u", INPUT_DATA, progress_callback=flaky)
+
+    assert result["results"]["AI Processing"]["status"] == "processed"
 
 
 # JobProgress: the monotonic emitter the runner is built on.

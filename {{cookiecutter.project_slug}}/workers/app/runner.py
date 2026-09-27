@@ -189,7 +189,14 @@ def _agent_progress_listener(progress: StepProgress | None, max_tool_calls: int)
         detail = {"kind": event.kind, "step": event.step, "tool_calls": done}
         if event.tool:
             detail["tool"] = event.tool
-        await progress.update(fraction, message, detail)
+        try:
+            await progress.update(fraction, message, detail)
+        except JobCancelled:
+            raise
+        except Exception:
+            # Progress is best effort: a failed publish must not turn a
+            # working agent into an "error" AI step.
+            logger.warning("Could not report agent progress", exc_info=True)
 
     return on_event
 
