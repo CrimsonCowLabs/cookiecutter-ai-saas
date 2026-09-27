@@ -176,7 +176,7 @@ Every generated project is a complete distributed system with **105 files**:
 ├── workers/
 │   ├── app/                       # Python worker
 │   │   ├── worker.py              #   BullMQ consumer (async)
-│   │   ├── runner.py              #   3-step AI pipeline
+│   │   ├── runner.py              #   3-step pipeline; step 2 runs the research agent
 │   │   ├── settings.py            #   Config from env vars
 │   │   ├── llm_utils.py           #   LLM provider abstraction
 │   │   ├── agents/                #   Standalone agents (research_agent.py)
@@ -312,6 +312,9 @@ After generation, configure these in `.env.local`:
 | Anthropic | `ANTHROPIC_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_BASE_URL` (optional) |
 
+Also optional: `RESEARCH_MAX_TOOL_CALLS` (default `8`) caps the tool calls the
+AI step's agent may make in one job.
+
 ---
 
 ## Available Scripts
@@ -400,12 +403,18 @@ The `project-scaffolder` agent can be spawned by Claude for complex scaffolding 
 2. Add the step to `PIPELINE_STEPS` in `workers/app/runner.py`
 3. The worker will automatically include it in the job pipeline
 
-### Running the Research Agent
+### The AI Step and the Research Agent
 
-`workers/app/agents/research_agent.py` is a self-contained LangGraph agent
-(built with `langchain.agents.create_agent`). It is not yet wired into the job
-pipeline; it takes everything from its caller and knows nothing about Redis,
-BullMQ, or `settings`:
+Step 2 of the pipeline (`_step_process_with_ai` in `workers/app/runner.py`) runs
+`workers/app/agents/research_agent.py`, a LangGraph tool-calling agent built
+with `langchain.agents.create_agent`. The agent can call tools in a loop
+(the example tool is handed in as `collect`) and finishes by submitting a
+`ResearchReport`, which the step maps onto its usual output:
+`analysis.summary`, `analysis.insights` (the report's findings) and
+`analysis.recommendations` (always empty; the report has none). The full report
+is also under `research`. The agent module is standalone and takes everything
+from its caller; it knows nothing about Redis, BullMQ, or `settings`. You can
+use it directly:
 
 ```python
 from agents.research_agent import run_research_agent, ResearchAgentError
@@ -418,15 +427,25 @@ report = await run_research_agent(
 )
 ```
 
-- The result is a `ResearchReport` (Pydantic). Output that does not satisfy the
-  schema raises `ReportSchemaError`; a partial report is never returned.
-- Bounds end the run with a typed error, not a hang: `ToolCallLimitReached`
-  (the tool-call limit) and `RecursionBackstopReached` (the LangGraph
-  `recursion_limit` backstop). All three subclass `ResearchAgentError`.
+Bounds and exit behaviour. A runaway loop cannot run up an unbounded bill:
+
+- `RESEARCH_MAX_TOOL_CALLS` (default 8) is the tool-call limit, the real
+  bound; the LangGraph `recursion_limit` is derived from it as a backstop.
+- Whatever ends the agent, the job still completes, with the same progress
+  (0, 30, 30, 70, 70, 100, 100) however many tool calls ran. The AI step
+  returns `{"status": "error", "reason": ..., "error": ...}` and the results
+  step reports `ai_enhanced: false`. `reason` is `tool_call_limit`,
+  `recursion_limit` or `invalid_report` (a report that does not satisfy the
+  schema; no partial report is used). A provider or tool failure gives
+  `status: "error"` without a `reason`.
+- With no model configured (for example a missing API key) the step returns
+  `{"status": "skipped", "reason": "no_llm_configured"}`.
+- The rate limiter holds one slot for the whole agent run, not one per model
+  call, so a run with many tool calls makes more requests than `*_RPM` implies.
 - Tests use a scripted fake model (`tests/fakes.py`), so they need no provider
   key or network. To try a ready-made search tool, add its package (for example
-  `langchain-tavily` or `langchain-community`) with `poetry add` and pass the
-  tool in `tools=`.
+  `langchain-tavily` or `langchain-community`) with `poetry add` and add it to
+  the `tools` list in `runner.py`.
 
 ### Adding a New Database Table
 

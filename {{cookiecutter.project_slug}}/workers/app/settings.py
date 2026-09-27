@@ -51,6 +51,10 @@ class Settings:
     openrouter_rpm: int = int(_env("OPENROUTER_RPM", "20") or "20")
     openrouter_max_concurrency: int = int(_env("OPENROUTER_MAX_CONCURRENCY", "4") or "4")
 
+    # Upper bound on tool calls the AI step's agent may make in one job. The
+    # graph recursion limit is derived from it as a backstop.
+    research_max_tool_calls: int = int(_env("RESEARCH_MAX_TOOL_CALLS", "8") or "8")
+
     # Redis
     redis_url: str = _env("REDIS_URL", "redis://localhost:6379") or "redis://localhost:6379"
 
