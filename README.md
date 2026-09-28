@@ -31,7 +31,7 @@ cookiecutter gh:eodgooch/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system with **105 files**:
+Every generated project is a complete distributed system with **112 files**:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -180,7 +180,7 @@ Every generated project is a complete distributed system with **105 files**:
 │   │   ├── settings.py            #   Config from env vars
 │   │   ├── llm_utils.py           #   LLM provider abstraction
 │   │   ├── agents/                #   Standalone agents (research_agent.py)
-│   │   ├── tools/                 #   Custom pipeline tools
+│   │   ├── tools/                 #   Agent tools, auto-discovered (fetch_url.py)
 │   │   ├── tests/                 #   Pytest suite
 │   │   ├── pyproject.toml         #   Poetry dependencies
 │   │   └── poetry.lock            #   Locked Python dependency tree
@@ -397,24 +397,92 @@ The `project-scaffolder` agent can be spawned by Claude for complex scaffolding 
 
 ## Customization Guide
 
+### The Shipped Example: a URL Report
+
+A fresh clone does something real on the very first job, and needs no key
+beyond a model provider. Submit a URL on the dashboard and the pipeline fetches
+that page, reads it with a tool-calling agent, and returns a report:
+
+```
+input:  {"url": "https://example.com/article", "question": "optional focus question"}
+output: {"status": "generated", "url", "title", "summary",
+         "insights": [...], "sources": [...], "ai_enhanced": bool}
+```
+
+`url` is required; `question` is optional.
+
+- **Step 1 "Data Collection"** calls `fetch_url` (`workers/app/tools/fetch_url.py`).
+- **Step 2 "AI Processing"** hands the fetched page, plus every discovered tool,
+  to the bounded agent in `workers/app/agents/research_agent.py`.
+- **Step 3 "Results Generation"** assembles the report above.
+
+The UI is `components/dashboard/new-job-form.tsx` to submit and
+`/dashboard/jobs/[id]` for live progress and then the report.
+
+`fetch_url` deliberately needs no API key — that is what keeps a first run free
+of third-party signup. Because the URL comes from an end user and the worker
+shares a Docker network with Postgres and Redis, the tool treats every request
+as hostile: http/https only, and any host resolving to a loopback, private,
+link-local, reserved or otherwise non-public address is refused — re-checked on
+**every redirect hop**, since validating only the first URL is the usual SSRF
+bypass. It caps the response size while reading rather than after, enforces a
+timeout, accepts only text-ish content types, and truncates extracted text to a
+character budget so a large page cannot blow up the prompt. It does not defend
+against DNS rebinding; the module documents that limit rather than implying
+coverage it lacks.
+
+When there is no report — no model configured, the page could not be read, the
+agent spent its tool-call budget — the job still completes, `ai_enhanced` is
+`false`, and `summary` is a plain sentence naming what to change instead of a
+bare "Processing complete".
+
+### Adding a Tool the Agent Can Call
+
+**One new file.** `workers/app/tools/__init__.py` discovers tools, so there is
+no registry list to edit:
+
+1. Create `workers/app/tools/my_tool.py`.
+2. Expose the callable as a module-level `TOOL`:
+
+   ```python
+   from langchain_core.tools import StructuredTool
+
+   async def _summarize(text: str) -> str:
+       """Summarize text. The model reads this docstring, so be specific."""
+       ...
+
+   TOOL = StructuredTool.from_function(coroutine=_summarize, name="summarize")
+   ```
+
+That is the entire change: the AI step passes whatever `discover_tools()`
+returns. Modules are visited in sorted order so the tool list — and therefore
+the prompt — stays reproducible. A module with no `TOOL` is a plain helper and
+is skipped, as are private modules (`_draft.py`) and subpackages. A module that
+fails to import, or whose `TOOL` is not a LangChain `BaseTool`, raises
+`ToolRegistryError` naming the module: a broken tool is never skipped quietly,
+because an agent silently running with fewer tools is the worse failure.
+`workers/app/tests/test_tool_registry.py` proves the one-file property.
+
+To use a ready-made tool, add its package (`poetry add langchain-tavily`) and
+re-export its tool as `TOOL` from one such file.
+
 ### Adding a New Pipeline Step
 
-1. Create a tool in `workers/app/tools/my_step.py`
-2. Add the step to `PIPELINE_STEPS` in `workers/app/runner.py`
-3. The worker will automatically include it in the job pipeline
+1. Put the work in a tool under `workers/app/tools/`
+2. Add a `_step_*` function and an entry in `PIPELINE_STEPS` in `workers/app/runner.py`
+3. Return a structured `status` instead of raising, so a job always finishes cleanly
 
 ### The AI Step and the Research Agent
 
 Step 2 of the pipeline (`_step_process_with_ai` in `workers/app/runner.py`) runs
 `workers/app/agents/research_agent.py`, a LangGraph tool-calling agent built
-with `langchain.agents.create_agent`. The agent can call tools in a loop
-(the example tool is handed in as `collect`) and finishes by submitting a
-`ResearchReport`, which the step maps onto its usual output:
-`analysis.summary`, `analysis.insights` (the report's findings) and
-`analysis.recommendations` (always empty; the report has none). The full report
-is also under `research`. The agent module is standalone and takes everything
-from its caller; it knows nothing about Redis, BullMQ, or `settings`. You can
-use it directly:
+with `langchain.agents.create_agent`. The agent can call tools in a loop — it
+gets the whole discovered tool set, so a new tool file reaches it with no change
+to `runner.py` — and finishes by submitting a `ResearchReport`, which the step
+maps onto `analysis.summary` and `analysis.insights` (the report's findings).
+The full report is also under `research`. The agent module is standalone and
+takes everything from its caller; it knows nothing about Redis, BullMQ, or
+`settings`. You can use it directly:
 
 ```python
 from agents.research_agent import run_research_agent, ResearchAgentError
@@ -440,12 +508,12 @@ Bounds and exit behaviour. A runaway loop cannot run up an unbounded bill:
   `status: "error"` without a `reason`.
 - With no model configured (for example a missing API key) the step returns
   `{"status": "skipped", "reason": "no_llm_configured"}`.
+- Every one of those cases becomes a user-facing sentence in the report's
+  `summary`, so a job that produced nothing still says why.
 - The rate limiter holds one slot for the whole agent run, not one per model
   call, so a run with many tool calls makes more requests than `*_RPM` implies.
-- Tests use a scripted fake model (`tests/fakes.py`), so they need no provider
-  key or network. To try a ready-made search tool, add its package (for example
-  `langchain-tavily` or `langchain-community`) with `poetry add` and add it to
-  the `tools` list in `runner.py`.
+- Tests use a scripted fake model (`tests/fakes.py`) and an injected fake
+  fetcher, so the whole suite runs with no provider key and no network.
 
 ### Adding a New Database Table
 

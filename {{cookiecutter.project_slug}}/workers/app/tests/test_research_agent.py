@@ -97,26 +97,25 @@ async def test_returns_typed_report_after_calling_the_tool(search_tool):
 
 
 @pytest.mark.asyncio
-async def test_existing_example_tool_can_be_handed_to_the_agent():
-    """The worker's example tool becomes an agent tool without modification."""
-    from tools.example_tool import example_processing_step
+async def test_the_workers_registered_tools_can_be_handed_to_the_agent(serve_page):
+    """Whatever the worker's tool registry ships is usable here unmodified."""
+    from tools import discover_tools
 
-    async def collect(query: str) -> dict:
-        """Collect example items for a query."""
-        return await example_processing_step({"query": query})
+    serve_page("<html><head><title>Solar</title></head><body><p>Panels got cheaper.</p></body></html>")
+    tools = discover_tools()
+    assert "fetch_url" in {tool.name for tool in tools}
 
-    tool = StructuredTool.from_function(coroutine=collect, name="collect")
     model = ScriptedChatModel(
         responses=[
-            tool_call_message("collect", {"query": "solar"}, call_id="c1"),
+            tool_call_message("fetch_url", {"url": "https://example.com/solar"}, call_id="c1"),
             tool_call_message("ResearchReport", GOOD_REPORT, call_id="c2"),
         ]
     )
 
-    await run_research_agent("solar power", model=model, tools=[tool])
+    await run_research_agent("solar power", model=model, tools=tools)
 
     tool_message = next(m for m in model.seen[1] if isinstance(m, ToolMessage))
-    assert "Result for: solar" in tool_message.content
+    assert "Panels got cheaper." in tool_message.content
 
 
 @pytest.mark.asyncio

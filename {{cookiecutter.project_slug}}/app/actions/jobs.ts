@@ -10,15 +10,33 @@ import { dispatchJob, cancelJob } from "@/lib/queue/jobs";
 import { getRedis } from "@/lib/redis";
 import { audit } from "@/lib/audit";
 import { enforceRateLimit } from "@/lib/rate-limit";
+import { getJobInputSchema } from "@/lib/validations";
 
-type ActionResult = { success: true; data?: unknown } | { success: false; error: string };
+type ActionResult<T = unknown> =
+  | { success: true; data?: T }
+  | { success: false; error: string };
 
 export async function submitJob(
   type: string,
   input: Record<string, unknown>
-): Promise<ActionResult> {
+): Promise<ActionResult<{ jobId: string }>> {
   const session = await auth();
   if (!session?.user?.id) return { success: false, error: "Not authenticated" };
+
+  // Client-side validation is a convenience; this is the enforcement point.
+  // Job types registered in `jobInputSchemas` cannot be submitted unvalidated.
+  const inputSchema = getJobInputSchema(type);
+  let jobInput: Record<string, unknown> = input;
+  if (inputSchema) {
+    const parsed = inputSchema.safeParse(input);
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: parsed.error.issues[0]?.message ?? "Invalid job input",
+      };
+    }
+    jobInput = parsed.data as Record<string, unknown>;
+  }
 
   try {
     await enforceRateLimit(`job:${session.user.id}`, 10, 60);
@@ -58,7 +76,7 @@ export async function submitJob(
     .values({
       userId: session.user.id,
       type,
-      input,
+      input: jobInput,
       status: "queued",
     })
     .returning();
@@ -68,7 +86,7 @@ export async function submitJob(
     jobId: job.id,
     userId: session.user.id,
     type,
-    input,
+    input: jobInput,
     userPlan: user.plan ?? "free",
   });
 
@@ -130,6 +148,7 @@ export async function cancelJobAction(jobId: string): Promise<ActionResult> {
   });
 
   revalidatePath("/dashboard");
+  revalidatePath(`/dashboard/jobs/${jobId}`);
 
   return { success: true };
 }

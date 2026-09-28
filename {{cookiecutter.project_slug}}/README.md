@@ -82,6 +82,77 @@ python worker.py
 npm run worker:db-writer
 ```
 
+## Your First Job
+
+The shipped example reads a web page and reports on it. It needs a model
+provider and nothing else — no search API, no scraping service.
+
+1. **Point it at a model.** In `.env.local` set `LLM_PROVIDER` and the matching
+   key:
+
+   ```bash
+   LLM_PROVIDER=openai
+   OPENAI_API_KEY=sk-...
+   ```
+
+   `anthropic` and `openrouter` work the same way. The default, `ollama`, needs
+   no key but does need Ollama running locally at `OLLAMA_BASE_URL`.
+
+2. **Sign in** and open `/dashboard`.
+
+3. **Paste a URL** into "New report" — optionally add a question to focus it —
+   and submit. You'll land on `/dashboard/jobs/<id>`, watch progress stream in
+   over SSE, and get a summary, the key takeaways and the sources.
+
+If the report can't be produced — no model key, an unreachable page, the agent
+spending its tool-call budget — the job still completes and tells you which of
+those happened, rather than failing silently.
+
+### What the example does
+
+| Step | What runs |
+| --- | --- |
+| Data Collection | `fetch_url` in `workers/app/tools/fetch_url.py` |
+| AI Processing | the bounded agent in `workers/app/agents/research_agent.py` |
+| Results Generation | assembles `summary`, `insights`, `sources` |
+
+`fetch_url` treats the URL as hostile input, because it is: end users supply it
+and the worker shares a network with Postgres and Redis. It allows http(s)
+only, refuses hosts that resolve to loopback, private, link-local or otherwise
+non-public addresses, re-checks every redirect hop, caps response size and
+time, accepts only text-ish content types, and truncates the extracted text so
+a large page can't blow up the prompt.
+
+### Adding a tool
+
+One new file. Create `workers/app/tools/my_tool.py` and expose a module-level
+`TOOL`:
+
+```python
+from langchain_core.tools import StructuredTool
+
+async def _summarize(text: str) -> str:
+    """Summarize text. The model reads this docstring, so be specific."""
+    ...
+
+TOOL = StructuredTool.from_function(coroutine=_summarize, name="summarize")
+```
+
+There is no registry to update: `workers/app/tools/__init__.py` discovers it and
+the agent gets it on the next job. A tool module that fails to import raises
+loudly instead of leaving the agent quietly short a tool.
+
+### Running the worker tests
+
+```bash
+cd workers/app
+poetry install
+poetry run pytest
+```
+
+They use a scripted fake model and an injected fake fetcher, so they need no
+API key and never touch the network.
+
 ## Dependency Notes
 
 Two dependencies are deliberately held back:

@@ -36,10 +36,10 @@ def mock_llm():
 
 @pytest.fixture
 def sample_input_data():
-    """Sample job input data for testing."""
+    """Sample job input data: the pipeline's `url` / optional `question` contract."""
     return {
-        "query": "test query",
-        "options": {"format": "json"},
+        "url": "https://example.com/article",
+        "question": "What does the article claim?",
     }
 
 
@@ -52,3 +52,35 @@ def sample_job_data(sample_input_data):
         "userId": "user-456",
         "input": sample_input_data,
     }
+
+
+@pytest.fixture(autouse=True)
+def block_network(monkeypatch):
+    """No test may reach the network: the default fetcher refuses to run.
+
+    Tests that need a page use `serve_page`; anything that tries to fetch
+    without it fails loudly instead of quietly making a real request.
+    """
+    from tools import fetch_url
+
+    def refuse(url, **kwargs):
+        raise AssertionError(f"a test tried to fetch {url!r} over the network")
+
+    monkeypatch.setattr(fetch_url, "http_get", refuse)
+
+
+@pytest.fixture
+def serve_page(monkeypatch):
+    """Serve canned content to `tools.fetch_url.fetch_page`.
+
+    Call it with the same arguments as `tests.fakes.fake_fetcher`.
+    """
+    from tests.fakes import fake_fetcher
+    from tools import fetch_url
+
+    def serve(*args, **kwargs):
+        fetcher = fake_fetcher(*args, **kwargs)
+        monkeypatch.setattr(fetch_url, "http_get", fetcher)
+        return fetcher
+
+    return serve
