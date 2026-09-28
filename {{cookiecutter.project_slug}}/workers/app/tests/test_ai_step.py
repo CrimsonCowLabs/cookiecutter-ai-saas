@@ -30,14 +30,6 @@ PAGE = (
 INPUT_DATA = {"url": "https://example.com/article", "question": "Is solar getting cheaper?"}
 
 
-@pytest.fixture(autouse=True)
-def fresh_rate_limiter(monkeypatch):
-    """A limiter per test, so no test waits on another's rpm spacing."""
-    limiter = llm_utils.LLMRateLimiter(rpm=6000, max_concurrency=1)
-    monkeypatch.setattr(llm_utils, "get_rate_limiter", lambda: limiter)
-    return limiter
-
-
 def use_model(monkeypatch, model):
     monkeypatch.setattr(llm_utils, "get_llm", lambda: model)
 

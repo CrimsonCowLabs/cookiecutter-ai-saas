@@ -31,7 +31,7 @@ cookiecutter gh:eodgooch/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system with **112 files**:
+Every generated project is a complete distributed system with **114 files**:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -179,6 +179,7 @@ Every generated project is a complete distributed system with **112 files**:
 │   │   ├── runner.py              #   3-step pipeline; step 2 runs the research agent
 │   │   ├── settings.py            #   Config from env vars
 │   │   ├── llm_utils.py           #   LLM provider abstraction
+│   │   ├── tracing.py             #   Opt-in LangSmith tracing (off by default)
 │   │   ├── agents/                #   Standalone agents (research_agent.py)
 │   │   ├── tools/                 #   Agent tools, auto-discovered (fetch_url.py)
 │   │   ├── tests/                 #   Pytest suite
@@ -314,6 +315,37 @@ After generation, configure these in `.env.local`:
 
 Also optional: `RESEARCH_MAX_TOOL_CALLS` (default `8`) caps the tool calls the
 AI step's agent may make in one job.
+
+### Tracing (optional, off by default)
+
+The worker can trace its agent runs to [LangSmith](https://docs.smith.langchain.com/).
+It is opt-in, and stays off unless both switches below are set, because a trace
+carries your users' prompts and the model's completions.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `LANGSMITH_TRACING` | `false` | The on switch. Tracing needs this **and** an API key. |
+| `LANGSMITH_API_KEY` | — | Collector credential. Empty means tracing stays off. |
+| `LANGSMITH_ENDPOINT` | `https://api.smith.langchain.com` | Hosted collector by default; point it at a self-hosted LangSmith (`http://langsmith.internal:8000/api`) to keep traces on your own infrastructure. |
+| `LANGSMITH_PROJECT` | `default` | Which LangSmith project runs land in. `.env.example` prefills it with your project slug. |
+
+`workers/app/tracing.py` owns every one of these variables: it writes them from
+settings at startup, clears any on switch it did not set — `LANGCHAIN_TRACING_V2`
+and the retired v1 pair `LANGCHAIN_TRACING` / `LANGCHAIN_HANDLER` — and drops
+LangSmith's memoised view of the environment so the result takes effect. A
+variable inherited from the shell therefore cannot switch tracing on behind the
+worker's back. Clearing the v1 pair matters twice over: LangChain raises on
+*every* model call when it finds one of them set, so a forgotten export would
+turn each job into a report-less one.
+
+It fails open, in both directions. A missing key or an unwritable environment
+leaves tracing off and logs why; the worker still starts. Once tracing is on,
+delivery happens on LangSmith's background thread and LangChain swallows
+callback failures, so an unreachable collector costs a log line, never a job.
+
+Each traced run is named `job:<job type>`, tagged `job_type:<job type>`, and
+carries `job_id`, `job_type` and `user_id` as metadata (`anonymous` when a job
+has no user), so a trace can be matched back to the job row that produced it.
 
 ---
 
@@ -514,6 +546,12 @@ Bounds and exit behaviour. A runaway loop cannot run up an unbounded bill:
   call, so a run with many tool calls makes more requests than `*_RPM` implies.
 - Tests use a scripted fake model (`tests/fakes.py`) and an injected fake
   fetcher, so the whole suite runs with no provider key and no network.
+
+`run_research_agent` also takes `run_config`, LangChain runnable config merged
+into the invocation (`metadata`, `tags`, `run_name`, `callbacks`). The AI step
+fills it with the job's identity so traces are findable; it cannot loosen the
+bounds, because `recursion_limit` always comes from the argument. See
+"Tracing" under Environment Variables.
 
 ### Adding a New Database Table
 

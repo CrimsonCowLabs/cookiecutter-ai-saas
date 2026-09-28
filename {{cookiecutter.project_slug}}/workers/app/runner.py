@@ -29,6 +29,7 @@ from agents.research_agent import (
 from settings import settings
 from tools import discover_tools
 from tools.fetch_url import FetchError, fetch_page
+from tracing import job_trace_config
 
 logger = logging.getLogger("runner")
 
@@ -226,8 +227,10 @@ async def _step_process_with_ai(input_data: dict, context: dict) -> dict:
 
     Runs `agents.research_agent.run_research_agent` with the configured LLM and
     every tool `tools.discover_tools()` finds, so a new tool file reaches the
-    agent with no change here. The agent may call tools in a loop, bounded by
-    `settings.research_max_tool_calls` (with a graph recursion backstop).
+    agent with no change here. The job's identity, type and user go along as
+    trace metadata, which only a configured collector ever reads. The agent may
+    call tools in a loop, bounded by `settings.research_max_tool_calls` (with a
+    graph recursion backstop).
 
     Exit behaviour, so the job always finishes cleanly:
     - no LLM configured -> `{"status": "skipped", "reason": "no_llm_configured"}`
@@ -266,6 +269,13 @@ async def _step_process_with_ai(input_data: dict, context: dict) -> dict:
                 tools=discover_tools(),
                 max_tool_calls=settings.research_max_tool_calls,
                 system_prompt=system_prompt,
+                # Labels the run for whatever tracer is configured; a no-op
+                # when tracing is off, which is the default.
+                run_config=job_trace_config(
+                    job_id=context.get("job_id"),
+                    job_type=context.get("job_type"),
+                    user_id=context.get("user_id"),
+                ),
             )
         finally:
             limiter.release()
