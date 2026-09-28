@@ -31,7 +31,7 @@ cookiecutter gh:eodgooch/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system with **114 files**:
+Every generated project is a complete distributed system with **115 files**:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -103,8 +103,8 @@ Every generated project is a complete distributed system with **114 files**:
 | `project_slug` | my-ai-app | auto-generated | URL/directory-safe name |
 | `project_description` | A full-stack AI-powered SaaS application | any string | Used in meta tags and README |
 | `author_name` | Your Name | any string | Package author |
-| `author_email` | you@example.com | any string | Package author email |
-| `domain_name` | myapp.example.com | any string | Production domain |
+| `author_email` | you@example.com | any string | Package author email, and the ACME account address in the `Caddyfile` — a placeholder here means no `email` directive (see [HTTPS](#https)) |
+| `domain_name` | myapp.example.com | any string | Production domain. The `Caddyfile` serves and obtains a certificate for exactly this name |
 | `primary_color` | #c2410c | any hex color | Brand color (DaisyUI primary) |
 | `daisyui_theme` | dark | any DaisyUI theme | Base UI theme |
 | `database_extensions` | none | none, pgvector | PostgreSQL extensions |
@@ -192,7 +192,8 @@ Every generated project is a complete distributed system with **114 files**:
 │
 ├── Dockerfile                     # Multi-stage (builder, runner, ops, migrator)
 ├── docker-compose.yml             # Dev: app + worker + db-writer + postgres + redis
-├── docker-compose.prod.yml        # Prod: Caddy network
+├── docker-compose.prod.yml        # Prod: adds Caddy; nothing else on the host's ports
+├── Caddyfile                      # TLS + HTTP→HTTPS for your domain
 ├── config.ts                      # Central app config (plans, resend, colors, auth)
 ├── middleware.ts                   # Edge-safe route protection
 ├── postcss.config.js              # Tailwind 4 PostCSS plugin (theme lives in app/globals.css)
@@ -386,9 +387,88 @@ Scale workers: `docker compose up -d --scale worker=3`
 
 Same services with:
 - Pre-built images (no build context)
-- Caddy reverse proxy network
-- No exposed database/redis ports
+- A `caddy` service that terminates TLS (see [HTTPS](#https))
+- Only Caddy on the host's ports: the app, database and Redis are reachable
+  only from inside the stack
 - `.env-production` file mounted read-only
+
+---
+
+## HTTPS
+
+TLS needs no step of its own. The stack runs its own Caddy, generated from the
+`domain_name` you answered, which obtains a certificate from Let's Encrypt on
+first boot, renews it, and redirects HTTP to HTTPS — so once the stack is up,
+HTTPS is up. There is no external proxy to stand up and no network to create by
+hand.
+
+Bringing the stack up still means what it did before: `docker-compose.prod.yml`
+has no build context, so `./scripts/deploy.sh full` builds the images and ships
+them, and `.env-production` has to exist next to the compose file or compose
+aborts. Nothing about the proxy changes that.
+
+Two prerequisites for the certificate, and neither is optional:
+
+- **Point the domain's A/AAAA record at the host before the first deploy.**
+  Issuance is a challenge against that name, so it fails until DNS resolves and
+  ports 80 and 443 reach the container. Caddy retries with a backoff, so fixing
+  DNS afterwards recovers without intervention — but Let's Encrypt rate-limits
+  failures, so the record is cheaper to get in first.
+- **Set `NEXTAUTH_URL=https://<your domain>` in `.env-production`**, and register
+  that origin's OAuth callback URLs with your providers. Caddy sets
+  `X-Forwarded-Proto`, which is what lets NextAuth (`trustHost: true`) build
+  `https://` callbacks — but the configured origin still has to match.
+
+| Concern | Where it lives |
+|---------|----------------|
+| Proxy config | `Caddyfile`, rendered from `domain_name` at generation time |
+| Certificates | the `caddydata` volume — keep it across deploys, or every boot re-issues into a rate limit |
+| Expiry warnings | mailed to `author_email`, unless that is at a reserved example domain (see below) |
+| Published ports | `80`, `443`, `443/udp` (HTTP/3), on the `caddy` service only |
+
+The app sits with Caddy on a `caddy-net` network that Postgres and Redis never
+join, so the internet-facing container has no route to the database even if it is
+compromised.
+
+Responses are not compressed at the proxy. Next.js already compresses its own
+output, and compressing a stream is how the SSE job-progress endpoint stops
+arriving live.
+
+### Smoke-testing before DNS exists
+
+`SITE_ADDRESS` overrides the name Caddy serves. Set it to `https://localhost` and
+Caddy issues from its own local CA instead of asking Let's Encrypt for a name
+that does not resolve yet:
+
+```bash
+SITE_ADDRESS=https://localhost docker compose -f docker-compose.prod.yml up -d
+curl -k https://localhost/
+```
+
+Everything else — the redirect, TLS termination, the proxy hop — is the
+production path; only the issuer differs, so this proves the wiring and not the
+ACME exchange. CI's `tls-stack` job runs exactly this, via
+`scripts/check_tls_stack.sh`.
+
+### If `author_email` is at a reserved example domain
+
+The ACME account address comes from `author_email`. A certificate authority can
+reject an address it cannot deliver to, so a project generated with an address no
+mail can reach ships **no** `email` directive at all. Certificates are still
+issued; the account is just anonymous, which means nobody is told when renewal
+starts failing.
+
+"Unreachable" is the set RFC 2606 reserves: the `example.com`, `example.org` and
+`example.net` domains, and the `.test`, `.invalid`, `.localhost` and `.example`
+TLDs. It is the mail domain that is tested, not a suffix, so a real domain like
+`acme-example.com` keeps its account. Add a global block to the `Caddyfile` once
+you have a real address:
+
+```caddyfile
+{
+    email you@your-real-domain.com
+}
+```
 
 ---
 
@@ -599,6 +679,13 @@ Edit `app/globals.css` (Tailwind 4 and DaisyUI 5 configure themes in CSS):
 ## CI flag matrix
 
 CI generates, typechecks, lints and builds eight named flag combinations (the `flag-matrix` job in `.github/workflows/generate-and-build.yml`). `python scripts/check_ci_matrix.py` fails if any value of any choice in `cookiecutter.json` is missing from the matrix, so a new choice value needs a matrix entry.
+
+Two further jobs cover the proxy, which no flag varies:
+
+| Job | What it proves |
+|---|---|
+| `proxy-config` | The `Caddyfile` names the `domain_name` that was answered, and carries an `author_email` as the ACME account only when mail could reach it. Each case also goes through `scripts/check_caddyfile.sh`: fully rendered, `caddy fmt`-clean, and accepted by `caddy validate` |
+| `tls-stack` | Bringing up `docker-compose.prod.yml` serves the app over HTTPS with a certificate that verifies, redirects HTTP to it, and publishes no port but the proxy's. Runs `scripts/check_tls_stack.sh` |
 
 ---
 

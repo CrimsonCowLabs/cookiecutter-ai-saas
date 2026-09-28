@@ -1,0 +1,65 @@
+# Reverse proxy and TLS for {{ cookiecutter.project_name }}.
+#
+# Caddy runs inside docker-compose.prod.yml and is the only service that
+# publishes ports, so `docker compose -f docker-compose.prod.yml up -d` is all
+# it takes to serve HTTPS. Caddy obtains a certificate from Let's Encrypt on
+# first boot, renews it before it expires, and redirects HTTP to HTTPS itself.
+#
+# Before the first deploy, point the domain's A/AAAA record at this host.
+# Issuance is a challenge against that name, so it fails until DNS resolves and
+# ports 80 and 443 reach this container.
+{#- Every Jinja tag in this file trims its own newline (`{%-`, `-%}`). That is
+    load-bearing, not tidiness: a bare `{% %}` leaves the blank line its tag
+    occupied, and CI diffs the rendered file against `caddy fmt`, which rejects
+    a stray blank line before the global block.
+
+    The ACME account address is emitted only for an address that could actually
+    receive mail. RFC 2606 reserves example.com/.org/.net and the .test,
+    .invalid, .localhost and .example TLDs; a suffix test on "example.com"
+    would also wrongly suppress a real domain like acme-example.com. -#}
+{%- set _email = cookiecutter.author_email.strip() -%}
+{%- set _domain = _email.rpartition('@')[2].lower() if '@' in _email else '' -%}
+{%- set _reserved_domains = ('example.com', 'example.org', 'example.net') -%}
+{%- set _reserved_tlds = ('test', 'invalid', 'localhost', 'example', 'local') -%}
+{%- if _domain and '.' in _domain and _domain not in _reserved_domains and _domain.rpartition('.')[2] not in _reserved_tlds %}
+{
+	# ACME account address. The certificate authority mails renewal failures
+	# and expiry warnings here; it is never served to anyone.
+	email {{ cookiecutter.author_email }}
+}
+{%- else %}
+
+# There is no ACME account address: the address answered at generation time is
+# at a reserved example domain, so no mail can reach it and a certificate
+# authority can reject one it cannot deliver to. Certificates are still issued — the account is simply anonymous,
+# so nobody is told when renewal starts failing. Add a global block once you
+# have a real address:
+#
+#     {
+#         email you@your-real-domain.com
+#     }
+{%- endif %}
+
+# The site this proxy serves, with a publicly trusted certificate:
+#
+#     https://{{ cookiecutter.domain_name }}
+#
+# SITE_ADDRESS overrides that name, which is how you smoke-test the stack before
+# DNS exists: set it to https://localhost and Caddy issues from its own local CA
+# rather than asking Let's Encrypt for a name that does not resolve yet.
+# Everything else — the redirect, TLS termination, the proxy hop — is unchanged.
+{$SITE_ADDRESS:https://{{ cookiecutter.domain_name }}} {
+	# `app` is the compose service name and 3000 the port inside that
+	# container. It publishes no host port, so this proxy is the only route in.
+	# Caddy sets X-Forwarded-For/-Proto/-Host itself, which is what lets
+	# NextAuth (trustHost: true in lib/auth.config.ts) build https:// callbacks.
+	reverse_proxy app:3000
+
+	# Access log, so requests show up in `docker compose logs caddy`.
+	log
+}
+
+# Nothing is compressed here on purpose. Next.js compresses its own output
+# (`compress` defaults to true), so an `encode` directive would only add a
+# second pass over already-gzipped bytes — and compressing a stream is how the
+# SSE job-progress endpoint stops arriving live.
