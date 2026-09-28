@@ -131,6 +131,7 @@ async def run_research_agent(
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
     recursion_limit: int | None = None,
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    run_config: dict | None = None,
 ) -> ResearchReport:
     """Research `topic` with `model` and `tools` and return a validated report.
 
@@ -141,6 +142,10 @@ async def run_research_agent(
         max_tool_calls: Upper bound on tool calls in this run. Must be >= 1.
         recursion_limit: LangGraph backstop; defaults to `default_recursion_limit`.
         system_prompt: Overrides the default instructions.
+        run_config: Extra LangChain runnable config for this run — `metadata`,
+            `tags`, `run_name`, `callbacks` — which a tracer records when one
+            is configured. It cannot change the bounds: `recursion_limit` here
+            is ignored in favour of the argument above.
 
     Raises:
         ValueError: `topic` is blank or a bound is not positive.
@@ -169,10 +174,12 @@ async def run_research_agent(
         middleware=[_tool_call_limit(max_tool_calls), _end_on_free_text],
     )
 
+    config = {**(run_config or {}), "recursion_limit": recursion_limit}
+
     try:
         result = await agent.ainvoke(
             {"messages": [{"role": "user", "content": f"Research topic: {topic.strip()}"}]},
-            config={"recursion_limit": recursion_limit},
+            config=config,
         )
     except GraphRecursionError as exc:
         raise RecursionBackstopReached(recursion_limit) from exc

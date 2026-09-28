@@ -142,6 +142,34 @@ There is no registry to update: `workers/app/tools/__init__.py` discovers it and
 the agent gets it on the next job. A tool module that fails to import raises
 loudly instead of leaving the agent quietly short a tool.
 
+### Tracing what the agent did
+
+The worker can ship each agent run to [LangSmith](https://docs.smith.langchain.com/)
+so you can read the prompts, tool calls and completions behind a job. It is
+**off unless you turn it on** — a trace contains your users' prompts and the
+model's answers, so that is a decision, not a default.
+
+```bash
+# In .env.local (host) and .env.docker.local (containers)
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=lsv2_...
+```
+
+Both are required: with the switch on and no key, tracing stays off and the
+worker logs why at startup. `LANGSMITH_ENDPOINT` defaults to the hosted
+collector (`https://api.smith.langchain.com`); set it to your own instance's
+API URL (for example `http://langsmith.internal:8000/api`) to keep traces on
+your infrastructure. `LANGSMITH_PROJECT` chooses the project runs land in;
+`.env.example` prefills it with your project slug, and unset it falls back to
+LangSmith's `default` project.
+
+Runs are named `job:<job type>` and carry the job id, job type and user id as
+metadata, so a trace maps back to the row in `jobs`.
+
+Tracing never costs you a job. `workers/app/tracing.py` never raises, and once
+tracing is on the traces are delivered in the background, so an unreachable
+collector shows up as a log line while the job finishes normally.
+
 ### Running the worker tests
 
 ```bash
@@ -208,6 +236,7 @@ lib/
   stripe.ts             # Stripe helpers
 workers/
   app/                  # Python worker
+    tracing.py          # Opt-in LangSmith tracing (off by default)
   db-writer/            # Node.js DB writer
 scripts/
   deploy.sh             # Deployment script
