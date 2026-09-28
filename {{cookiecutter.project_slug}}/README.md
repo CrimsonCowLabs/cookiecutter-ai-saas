@@ -12,7 +12,7 @@
 - **Queue:** BullMQ (Redis-backed)
 - **Payments:** Stripe (subscriptions)
 - **Email:** Resend
-- **Deployment:** Docker, Caddy reverse proxy
+- **Deployment:** Docker Compose, Caddy reverse proxy (TLS in the stack)
 
 ## Getting Started
 
@@ -216,6 +216,62 @@ Drizzle ORM/Kit stay on the stable 0.x line; 1.0 is still a release candidate.
 
 See `scripts/deploy.sh` for available targets: `app`, `worker`, `db-writer`, `migrator`, `ops`.
 
+### HTTPS
+
+TLS needs no step of its own. The production stack runs its own Caddy, so once
+the stack is up, HTTPS is up: Caddy obtains a certificate for
+`{{ cookiecutter.domain_name }}` from Let's Encrypt on first boot, renews it, and
+redirects HTTP to HTTPS. Nothing else publishes a port — the app, PostgreSQL and
+Redis are reachable only from inside the stack.
+
+Bringing the stack up is still `./scripts/deploy.sh full`: `docker-compose.prod.yml`
+has no build context, so the images have to be built and shipped, and
+`.env-production` has to exist next to the compose file or compose aborts.
+
+**Point `{{ cookiecutter.domain_name }}`'s A/AAAA record at the host before the
+first deploy.** Issuance is a challenge against that name, so it fails until DNS
+resolves and ports 80 and 443 reach the container. Caddy retries with a backoff,
+so fixing DNS later recovers on its own — but Let's Encrypt rate-limits
+failures, so the record is cheaper to get right first.
+
+Set `NEXTAUTH_URL=https://{{ cookiecutter.domain_name }}` in `.env-production`,
+and register that origin's `/api/auth/callback/...` URLs with your OAuth
+providers.
+
+Certificates and the ACME account key live in the `caddydata` volume. Keep it
+across deploys — losing it re-issues on the next boot, straight into a rate
+limit.
+
+Edit `Caddyfile` to change the proxy's behaviour: the domain was baked in at
+generation time, not read from anywhere at runtime, so serving a different name
+means editing that file.
+
+If `Caddyfile` has no `email` in a global block, that is deliberate: the address
+this project was generated with was at a reserved example domain, which a
+certificate authority can reject. Certificates are still issued on an anonymous
+account — but nobody is mailed when renewal starts failing, so add a real
+address once you have one:
+
+```caddyfile
+{
+	email you@your-real-domain.com
+}
+```
+
+#### Smoke-testing before DNS exists
+
+`SITE_ADDRESS` overrides the name Caddy serves. Point it at localhost and Caddy
+issues from its own local CA instead of asking Let's Encrypt for a name that
+does not resolve yet:
+
+```bash
+SITE_ADDRESS=https://localhost docker compose -f docker-compose.prod.yml up -d
+curl -k https://localhost/
+```
+
+The redirect, TLS termination and the proxy hop are the production path; only
+the issuer differs.
+
 ## Project Structure
 
 ```
@@ -241,6 +297,7 @@ workers/
 scripts/
   deploy.sh             # Deployment script
   migrate.sh            # Migration runner
+Caddyfile               # TLS and HTTP->HTTPS for {{ cookiecutter.domain_name }}
 ```
 
 ## License
