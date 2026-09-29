@@ -216,6 +216,55 @@ Drizzle ORM/Kit stay on the stable 0.x line; 1.0 is still a release candidate.
 
 See `scripts/deploy.sh` for available targets: `app`, `worker`, `db-writer`, `migrator`, `ops`.
 
+This assumes a host that has already been provisioned — see below — and
+`VPS_HOST` filled in at the top of `scripts/deploy.sh`.
+
+### Provisioning the host
+
+`ansible/provision.yml` takes a fresh VPS to the state the stack needs. Put the
+server's address in `ansible/inventory.ini` and run it:
+
+```bash
+pipx install ansible          # or pip install ansible
+ansible-playbook -i ansible/inventory.ini ansible/provision.yml
+```
+
+Running it again changes nothing, so re-run it rather than applying edits to
+`ansible/group_vars/all.yml` by hand. The host has to be Debian-family (Ubuntu
+LTS) and answer as root over SSH with your key the first time; a stock cloud
+image does.
+
+What it leaves behind:
+
+- **`__DEPLOY_USER__`**, the account `scripts/deploy.sh` logs in as — key-only,
+  passwordless sudo, in the `docker` group, with
+  `/app/{{ cookiecutter.project_slug }}` to deploy into.
+- **SSH with no way in but a key.** Root login and password authentication are
+  both off, and the playbook asserts that against `sshd -T` rather than trusting
+  the file it just wrote.
+- **A firewall** (`ufw`) denying inbound traffic except SSH, 80, and 443 on both
+  TCP and UDP — the UDP rule is HTTP/3, which Caddy advertises.
+- **`fail2ban`** banning repeated SSH authentication failures, reading the
+  journal rather than the `/var/log/auth.log` this release no longer writes.
+- **Unattended security upgrades**, restricted to security origins, with no
+  automatic reboot — kernel updates wait for a reboot you choose.
+- **Log rotation** that covers the three places logs pile up: `logrotate`, a
+  capped journal, and a cap on Docker's own container logs.
+- **Docker Engine and the compose plugin**, from Docker's apt repository rather
+  than the distribution's `docker.io`, which ships no `docker compose`.
+
+The first run connects as root; after it, root cannot log in, so later runs
+connect as the deploy user. The playbook works out which of the two answers
+before it connects, so the command never changes. Within the run, the deploy
+user is created, given your key, and watched logging in *before* root's access
+is removed — a wrong key fails while you can still get in.
+
+No reverse proxy is installed: Caddy runs in the stack (see [HTTPS](#https)), so
+provisioning's job is to leave 80 and 443 open and unoccupied. One caveat worth
+knowing: Docker publishes ports through its own iptables chain, which `ufw` does
+not filter. That is fine as long as the production stack publishes only 80 and
+443 — publish another and it is exposed whatever `ufw` says.
+
 ### HTTPS
 
 TLS needs no step of its own. The production stack runs its own Caddy, so once
@@ -297,6 +346,10 @@ workers/
 scripts/
   deploy.sh             # Deployment script
   migrate.sh            # Migration runner
+ansible/
+  provision.yml         # Takes a fresh VPS to a ready state
+  inventory.ini         # The host to provision
+  group_vars/all.yml    # Deploy account, open ports, log caps
 Caddyfile               # TLS and HTTP->HTTPS for {{ cookiecutter.domain_name }}
 ```
 

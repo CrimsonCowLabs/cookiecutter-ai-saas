@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
-VPS_USER="{{ cookiecutter.author_name | lower | replace(' ', '') }}"
+# The account ansible/provision.yml creates on the host. Both names come from
+# one place at generation time, so deploys land on the account provisioning made.
+VPS_USER="__DEPLOY_USER__"
+# The same host as ansible/inventory.ini.
 VPS_HOST="YOUR_VPS_IP"
 VPS_PATH="/app/{{ cookiecutter.project_slug }}"
 

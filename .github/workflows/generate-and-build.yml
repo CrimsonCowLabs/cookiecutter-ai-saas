@@ -142,6 +142,11 @@ jobs:
           # The proxy config is flag-independent, so every combination must
           # still produce a Caddyfile naming the default domain.
           grep -qF '{$SITE_ADDRESS:https://myapp.example.com}' "$G/Caddyfile"
+          # So is provisioning: every combination ships a playbook with the
+          # deploy account substituted in and no placeholder left behind.
+          grep -q '^deploy_user: yourname$' "$G/ansible/group_vars/all.yml"
+          grep -q '^VPS_USER="yourname"$' "$G/scripts/deploy.sh"
+          ! grep -rqE '__[A-Z_]+__' "$G/ansible"
           grep -q '^LLM_PROVIDER=${{ matrix.llm_provider }}' "$G/.env.example"
           if [ "${{ matrix.llm_provider }}" = openrouter ]; then
             grep -q '^OPENROUTER_API_KEY=' "$G/.env.example"
@@ -280,3 +285,55 @@ jobs:
 
       - name: Serve HTTPS from the stack
         run: scripts/check_tls_stack.sh .generated-tls/tls-app
+
+  # Acceptance criteria for the provisioning playbook: a fresh host reaches a
+  # ready state from one command, SSH is key-only with no root login, the
+  # firewall exposes only what is needed, unattended upgrades and log rotation
+  # are active, and a second run changes nothing.
+  #
+  # scripts/check_provisioning.sh does the end-to-end run; this job adds what is
+  # true of the generated files before anything is run against a host.
+  provisioning:
+    name: A fresh host reaches a ready state
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Not the 3.14 the other jobs use: this Python is the control machine's,
+      # not the generated project's, and ansible-core supports a trailing window
+      # of interpreter versions rather than the newest.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # The `ansible` distribution rather than ansible-core: it bundles the
+      # community.general and ansible.posix collections the playbook uses, which
+      # is what ansible/requirements.yml documents for people who install core.
+      - run: python -m pip install cookiecutter ansible ansible-lint
+
+      - name: Generate project
+        run: |
+          cookiecutter . --no-input -o .generated-provision project_name="Provision App" \
+            author_name="Ada Lovelace"
+
+      - name: The deploy account is one name, in both places that use it
+        working-directory: .generated-provision/provision-app
+        run: |
+          grep -q '^deploy_user: adalovelace$' ansible/group_vars/all.yml
+          grep -q '^VPS_USER="adalovelace"$' scripts/deploy.sh
+
+      - name: A name that is not a valid Linux account still produces one
+        # useradd takes [a-z_][a-z0-9_-]*, so an apostrophe or a leading digit
+        # has to be dropped rather than passed through into a failing playbook.
+        run: |
+          cookiecutter . --no-input -o .generated-provision-name project_name="Punct App" \
+            author_name="9 O'Brien-Smith Jr."
+          grep -q "^deploy_user: obrien-smithjr$" .generated-provision-name/punct-app/ansible/group_vars/all.yml
+
+      - name: The playbook parses and lints clean
+        working-directory: .generated-provision/provision-app
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/provision.yml --syntax-check
+          ansible-lint ansible/
+
+      - name: Provision a throwaway host and check what it left
+        run: scripts/check_provisioning.sh .generated-provision/provision-app

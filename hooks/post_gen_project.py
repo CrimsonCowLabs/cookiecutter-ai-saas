@@ -2,7 +2,8 @@
 """Post-generation hook for cookiecutter template.
 
 Runs after the project is generated to:
-- Replace __PLACEHOLDER__ strings in .ts/.tsx files (which skip Jinja2 rendering)
+- Replace __PLACEHOLDER__ strings in files that skip Jinja2 rendering (.ts/.tsx,
+  the Ansible tree) or that carry a value derived here (scripts/deploy.sh)
 - Remove optional features based on cookiecutter choices
 """
 
@@ -28,6 +29,20 @@ PYTHON_VERSION = "{{ cookiecutter.python_version }}"
 # cookiecutter.json default). Keep in sync with both.
 LOCKED_PYTHON_VERSION = "3.14"
 
+def linux_username(name, fallback="deploy"):
+    """Turn a person's name into a Linux account name.
+
+    `useradd` accepts `[a-z_][a-z0-9_-]*` up to 32 characters, so a name like
+    "O'Brien Smith" has to lose more than its spaces. The deploy script and the
+    Ansible playbook both take the account name from here, so whatever this
+    returns is the one name in play — the alternative is a playbook that creates
+    an account the deploy script never logs in as.
+    """
+    cleaned = "".join(c for c in name.lower() if c.isascii() and (c.isalnum() or c in "_-"))
+    cleaned = cleaned.lstrip("0123456789-")[:32]
+    return cleaned or fallback
+
+
 def daisyui_themes_list(chosen):
     """DaisyUI 5 `themes:` value: chosen theme is default; light and dark stay
     available, with dark as the prefers-color-scheme theme. No name is listed twice."""
@@ -39,6 +54,7 @@ def daisyui_themes_list(chosen):
 
 
 DAISYUI_THEMES = daisyui_themes_list(DAISYUI_THEME)
+DEPLOY_USER = linux_username(AUTHOR_NAME)
 
 # Placeholder → actual value mapping
 REPLACEMENTS = {
@@ -51,10 +67,30 @@ REPLACEMENTS = {
     "__DAISYUI_THEMES__": DAISYUI_THEMES,
     "__AUTHOR_NAME__": AUTHOR_NAME,
     "__AUTHOR_EMAIL__": AUTHOR_EMAIL,
+    # The Linux account deploys land on, for both scripts/deploy.sh and the
+    # Ansible playbook that creates it.
+    "__DEPLOY_USER__": DEPLOY_USER,
 }
 
-# File extensions to process for placeholder replacement
-EXTENSIONS = {".ts", ".tsx", ".mjs", ".js", ".py", ".json", ".css", ".toml"}
+# File extensions to process for placeholder replacement. .sh, .yml, .ini and
+# .md are here for the deploy script, the Ansible tree and the README, all of
+# which name the deploy account; the Ansible files additionally skip Jinja
+# rendering (see _copy_without_render), which is what keeps their own Jinja —
+# Ansible's, not cookiecutter's — intact through generation.
+EXTENSIONS = {
+    ".ts",
+    ".tsx",
+    ".mjs",
+    ".js",
+    ".py",
+    ".json",
+    ".css",
+    ".toml",
+    ".sh",
+    ".yml",
+    ".ini",
+    ".md",
+}
 
 
 def replace_placeholders_in_file(filepath):
@@ -77,7 +113,7 @@ def replace_placeholders_in_file(filepath):
 
 def process_all_files():
     """Walk through all files and replace placeholders in supported extensions."""
-    print("Replacing placeholders in TypeScript/JavaScript files...")
+    print("Replacing placeholders...")
     for root, _dirs, files in os.walk("."):
         # Skip node_modules and .next
         if "node_modules" in root or ".next" in root:
