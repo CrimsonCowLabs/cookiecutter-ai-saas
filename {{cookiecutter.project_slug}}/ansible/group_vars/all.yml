@@ -1,14 +1,18 @@
 ---
-# Everything about provision.yml that is a decision rather than a mechanism.
+# Everything about the playbooks that is a decision rather than a mechanism.
 # Loaded automatically for every host in inventory.ini; edit here rather than in
-# the playbook, or override a single value on the command line with -e.
+# the playbooks, or override a single value on the command line with -e.
+#
+# Nothing here is a secret. Secrets live in ansible/vault.yml, encrypted, and
+# are read only by deploy.yml.
 
-# The account deploys land on. Generated from author_name, and the same value
-# scripts/deploy.sh logs in as — both come from one source at generation time,
-# so they cannot drift apart. Change it here and in scripts/deploy.sh together.
+# The account deploys land on. Generated from author_name; provision.yml creates
+# it and deploy.yml logs in as it, both from this one value, so they cannot
+# drift apart.
 deploy_user: __DEPLOY_USER__
 
-# Where scripts/deploy.sh rsyncs the stack.
+# Where the stack lives on the host: the compose file, the Caddyfile and
+# .env-production, written by deploy.yml.
 app_dir: /app/__PROJECT_SLUG__
 
 # Public keys to authorize for the deploy user. Left empty, the keys root is
@@ -44,3 +48,70 @@ fail2ban_bantime: 1h
 docker_log_max_size: 10m
 docker_log_max_file: "3"
 journal_max_use: 500M
+
+# ── Deploying ───────────────────────────────────────────────────────────────
+# Everything above is about the host and is read by provision.yml. Everything
+# below is about shipping the application onto it, and is read by deploy.yml.
+# Secrets are not here: they are in ansible/vault.yml, encrypted.
+
+# The project, as its images, its compose project and its database are named.
+# The same value app_dir above ends in; both are substituted at generation time.
+project_slug: __PROJECT_SLUG__
+
+# The database inside the stack. docker-compose.prod.yml turns the slug's
+# dashes into underscores to name it, so this follows the same rule rather than
+# repeating the answer.
+postgres_db: "{{ project_slug | replace('-', '_') }}"
+postgres_user: postgres
+
+# The name the certificate is for and the DNS precheck resolves. It is the
+# domain answered at generation time, which the Caddyfile also carries.
+domain_name: __DOMAIN_NAME__
+
+# Overrides the name Caddy serves, exactly as SITE_ADDRESS does in the compose
+# file. Empty means the Caddyfile's own default, https://__DOMAIN_NAME__. Set it
+# to https://localhost to smoke-test the stack on a host the domain does not
+# point at yet: Caddy then issues from its own local CA instead of asking
+# Let's Encrypt for a name that does not resolve. The DNS precheck follows it.
+site_address: ""
+
+# The origin NextAuth builds its callbacks from. It has to match the redirect
+# URIs registered with the OAuth providers, so it follows the domain rather
+# than site_address.
+nextauth_url: "https://__DOMAIN_NAME__"
+
+# Which images a deploy builds and ships, comma-separated — the replacement for
+# the old deploy script's positional arguments:
+#
+#     ansible-playbook ... -e deploy_targets=app
+#     ansible-playbook ... -e deploy_targets=worker,db-writer
+#
+# migrator joins the set whenever anything ships, because the migrator image on
+# the host is otherwise the previous release's and would apply the previous
+# release's migrations. `--tags env` re-renders .env-production and restarts,
+# shipping no image at all.
+deploy_targets: "app,worker,db-writer,migrator,ops"
+
+# The platform the images are built for. It is the host's architecture, not the
+# control machine's: building on an arm64 laptop for an amd64 VPS is the normal
+# case, and an image for the wrong one fails at `docker run`, not at build.
+deploy_platform: linux/amd64
+
+# Refuse to deploy until the served name resolves to the target host. The
+# certificate authority rate-limits failed challenges, so deploying before DNS
+# propagates costs hours of issuance rather than one failed attempt. Turn it off
+# (-e dns_check=false) when the answer is deliberately not this host — a record
+# proxied through a CDN, say — and read what the check says before you do.
+dns_check: true
+
+# Run the database migrations, before the new app containers start serving. Off
+# only for a deploy you have reasoned about: app code arriving ahead of its
+# schema is the failure this ordering exists to prevent.
+run_migrations: true
+
+# How long the switched-over stack has to answer before the deploy is called
+# failed and the previous release's images are put back: retries × delay
+# seconds. Long enough for Next.js to boot and for Postgres to accept the first
+# connection, short enough that a broken release is not a five-minute outage.
+deploy_health_retries: 30
+deploy_health_delay: 5

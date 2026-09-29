@@ -50,6 +50,13 @@ venv/
 *.egg-info/
 .eggs/
 
+# Ansible
+# ansible/vault.yml is committed — encrypted. What must never be is the
+# password that opens it, so these are the paths --vault-password-file is
+# pointed at. The vault itself is deliberately absent from this list.
+.vault-pass
+ansible/.vault-pass
+
 # Docker
 *.tar.gz
 

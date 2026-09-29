@@ -204,12 +204,14 @@ Every generated project is a complete distributed system with **115 files**:
 ├── tsconfig.json                  # Strict TypeScript
 ├── .env.example                   # All env vars documented
 ├── scripts/
-│   ├── deploy.sh                  # VPS deployment
-│   └── migrate.sh                 # Database migrations
+│   └── migrate.sh                 # Database migrations (the migrator image's command)
 ├── ansible/
 │   ├── provision.yml              # Takes a fresh VPS to a ready state
-│   ├── inventory.ini              # The host to provision
-│   ├── group_vars/all.yml         # Deploy account, open ports, log caps
+│   ├── deploy.yml                 # Builds, ships, migrates and switches over
+│   ├── inventory.ini              # The host both playbooks act on
+│   ├── group_vars/all.yml         # Deploy account, open ports, log caps, deploy settings
+│   ├── vault.yml.example          # Every production secret, to fill in and encrypt
+│   ├── templates/env-production.j2 # Rendered to .env-production on the host
 │   └── requirements.yml           # Collections, for bare ansible-core
 └── content/blog/                  # Sample blog posts (JSON)
 ```
@@ -369,8 +371,16 @@ has no user), so a trace can be matched back to the job row that produced it.
 | `npm run db:migrate` | Run pending migrations |
 | `npm run db:studio` | Open Drizzle Studio (DB browser) |
 | `npm run worker:db-writer` | Start the Node.js DB writer |
-| `./scripts/deploy.sh full` | Build and deploy all services |
-| `./scripts/deploy.sh app` | Deploy app only |
+
+Provisioning and deploying are playbooks, not scripts — see
+[Provisioning the host](#provisioning-the-host) and [Deploying](#deploying):
+
+| Command | Description |
+|---------|-------------|
+| `ansible-playbook -i ansible/inventory.ini ansible/provision.yml` | Take a fresh VPS to a ready state |
+| `ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass` | Build, ship, migrate and switch |
+| `... ansible/deploy.yml -e deploy_targets=app` | Deploy one image |
+| `... ansible/deploy.yml --tags preflight` | Check the vault and DNS, deploy nothing |
 
 ---
 
@@ -395,7 +405,9 @@ Same services with:
 - A `caddy` service that terminates TLS (see [HTTPS](#https))
 - Only Caddy on the host's ports: the app, database and Redis are reachable
   only from inside the stack
-- `.env-production` file mounted read-only
+- `.env-production` read by compose and injected as environment variables —
+  the file itself is never mounted into a container, because it is `0600` and
+  owned by the deploy account (see [Deploying](#deploying))
 
 ---
 
@@ -403,7 +415,7 @@ Same services with:
 
 Deploying assumes a host that already has a deploy account, a firewall and a
 container runtime. `ansible/provision.yml` is what puts them there. It is
-separate from `scripts/deploy.sh` on purpose: it runs when a server is new and
+separate from `ansible/deploy.yml` on purpose: it runs when a server is new and
 almost never again, so a routine deploy never re-runs apt and firewall tasks.
 
 ```bash
@@ -423,7 +435,7 @@ it.
 
 | Concern | What the playbook leaves |
 |---------|--------------------------|
-| Deploy account | A user named from `author_name`, key-only, passwordless sudo, in the `docker` group — the account `scripts/deploy.sh` logs in as |
+| Deploy account | A user named from `author_name`, key-only, passwordless sudo, in the `docker` group — the account `ansible/deploy.yml` logs in as |
 | SSH | Key-only, no root login, no passwords, in `/etc/ssh/sshd_config.d/00-hardening.conf` |
 | Firewall | `ufw`: inbound denied by default; SSH, `80/tcp`, `443/tcp` and `443/udp` (HTTP/3) open |
 | Intrusion banning | `fail2ban`'s sshd jail, reading the journal |
@@ -458,8 +470,139 @@ lockout hard.
   chain. That is survivable here only because the production stack publishes 80
   and 443 and nothing else — add a published port to that stack and it is
   exposed whatever ufw says.
-- **No application.** Provisioning ends at a ready host; `scripts/deploy.sh`
+- **No application.** Provisioning ends at a ready host; `ansible/deploy.yml`
   takes it from there.
+
+---
+
+## Deploying
+
+`ansible/deploy.yml` builds the images, ships them, runs the migrations and
+switches the stack over — one command, reading the host out of the same
+inventory provisioning used:
+
+```bash
+cp ansible/vault.yml.example ansible/vault.yml
+$EDITOR ansible/vault.yml                    # every secret the stack needs
+ansible-vault encrypt ansible/vault.yml      # asks for a vault password
+git add ansible/vault.yml                    # committed, encrypted
+
+ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass
+```
+
+There is no address to fill in and no `.env-production` to copy: the address is
+in the inventory and the env file is rendered on the host from the vault. Both
+of those were how the shell script this replaces leaked secrets into shell
+history.
+
+| Instead of | Now |
+|------------|-----|
+| `./scripts/deploy.sh full` | `ansible-playbook -i ansible/inventory.ini ansible/deploy.yml` |
+| `./scripts/deploy.sh app` | `... -e deploy_targets=app` |
+| `./scripts/deploy.sh worker db-writer` | `... -e deploy_targets=worker,db-writer` |
+| `./scripts/deploy.sh env` | `... -e deploy_targets=none` |
+| — | `... --tags preflight` — check the vault and DNS, deploy nothing |
+
+`migrator` is added to any non-empty `deploy_targets`, because the migrator
+image already on the host belongs to the *previous* release: shipping new app
+code and running the previous release's migrations against it is the failure
+the ordering below exists to prevent. `-e run_migrations=false` skips running
+them; nothing skips shipping the right image.
+
+### Secrets
+
+`ansible/vault.yml` holds every production secret, encrypted with
+`ansible-vault`, and is committed that way. `.gitignore` excludes the vault
+*password* file (`.vault-pass`) and never the vault. Every variable in it is
+prefixed `vault_`, so a secret is recognisable wherever it is used. Change one
+with `ansible-vault edit ansible/vault.yml`, which never writes plaintext to
+disk.
+
+The playbook refuses to run if the vault's first line is not `$ANSIBLE_VAULT` —
+an operator who copies the example and forgets the encrypt step gets a refusal,
+not a successful deploy and a plaintext secret in a commit.
+
+Be clear about what this buys, because it is not "the secrets never leave the
+vault": `ansible-vault` decrypts on the **control machine**, in memory, and the
+rendered `.env-production` lands on the host at mode `0600` owned by the deploy
+account. Nothing is at rest in plaintext anywhere else — not in the repository,
+not in a shell history, not in a file on your laptop. The machine running the
+deploy still holds the password and sees the values while it runs; it has to.
+
+Non-secret settings — the domain, the origin NextAuth builds callbacks from,
+feature flags — are in `ansible/group_vars/all.yml` and in
+`ansible/templates/env-production.j2`, in the clear, where they can be read in
+a diff.
+
+### The DNS pre-flight
+
+Before anything is built, the playbook resolves the name the certificate will
+be for (the domain, or `site_address` where that is set) and compares it with
+the host the inventory points at. A mismatch aborts, saying what resolved, what
+was expected and what to do.
+
+That check is there because the certificate authority rate-limits **failed**
+challenges, and Caddy asks for a certificate the moment it starts. Deploying
+before a record propagates therefore does not cost one failed attempt — it can
+lock issuance for that name for hours, on a host where nothing else is wrong.
+
+It handles the cases that are not mistakes honestly:
+
+- **The generation-time default** (`myapp.example.com`) aborts naming RFC 2606:
+  no record can point it here and no CA will issue for it.
+- **`site_address=https://localhost`** — smoke-testing the stack — skips the
+  check and says so, because no public record covers a loopback name.
+- **A record that is deliberately not the host** — proxied through a CDN, where
+  the answer is the proxy's address — cannot be told apart from a record nobody
+  updated. So the check says what it saw and stops, rather than claiming to
+  have verified something: `-e dns_check=false` proceeds, and the message says
+  what the proxy then has to pass through.
+
+### Why the order is the guarantee
+
+"A failed deployment leaves the previous version serving" is a property of
+ordering, not of a rollback step. Everything that can fail happens before
+anything changes what is serving:
+
+1. **Pre-flight** — the vault, the record. Nothing built.
+2. **Build, on the control machine.** A $5 VPS running the database has no
+   business also running `next build`, and the host never needs the source.
+3. **Ship** the compose file, the `Caddyfile`, the rendered env file and the
+   new images — under a **release tag**, not `:latest`. The running containers
+   hold their own images and their own copy of the env file, so none of this
+   touches them. `template` replaces a file by renaming over it, which is why
+   the running containers keep reading the copy they opened.
+4. **Migrate**, from this release's migrator image, with Postgres and Redis up
+   but the app not switched. A failing migration stops the deploy here.
+5. **Switch**: move each `:latest` tag and bring the stack up. If the
+   switched-over stack does not answer, put the previous release's images back,
+   restart on them, and fail loudly.
+
+The release name defaults to a digest of the image ids rather than a timestamp,
+so deploying unchanged code twice produces the same release instead of shipping
+byte-identical images under a new name — which is what lets a re-run transfer
+nothing and report no changes at all. `-e deploy_release=v1.4.0` names one
+yourself.
+
+Two things this does not claim. The switch is `docker compose up -d`, which
+stops a container before starting its replacement, so a release that cannot
+start costs the seconds between the recreate and the rollback — the guarantee
+is the end state, not zero downtime. And the health gate proves the app boots
+and answers on the stack's own network, not that TLS works: a certificate
+arrives from an asynchronous ACME exchange that has not necessarily finished on
+a first deploy, which is what the DNS pre-flight protects instead.
+
+| Concern | Where it lives |
+|---------|----------------|
+| Secrets | `ansible/vault.yml`, encrypted; `ansible/vault.yml.example` documents every name |
+| Non-secret settings | `ansible/group_vars/all.yml` |
+| The production env file | `ansible/templates/env-production.j2`, rendered to `/app/<slug>/.env-production` on the host, `0600` |
+| What is deployed | `/app/<slug>/RELEASE` on the host |
+| Previous releases | still on the host, tagged `<slug>-<image>:<release>` |
+
+`scripts/check_deploy.sh` is CI's end-to-end run of all of this against a
+throwaway host, including deploying a deliberately broken release on top of a
+working one and asserting the working one still answers.
 
 ---
 
@@ -472,9 +615,9 @@ HTTPS is up. There is no external proxy to stand up and no network to create by
 hand.
 
 Bringing the stack up still means what it did before: `docker-compose.prod.yml`
-has no build context, so `./scripts/deploy.sh full` builds the images and ships
-them, and `.env-production` has to exist next to the compose file or compose
-aborts. Nothing about the proxy changes that.
+has no build context, so `ansible/deploy.yml` builds the images and ships them,
+and `.env-production` has to exist next to the compose file or compose aborts —
+which is why the playbook renders it there. Nothing about the proxy changes that.
 
 Two prerequisites for the certificate, and neither is optional:
 

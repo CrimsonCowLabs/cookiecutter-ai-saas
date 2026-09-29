@@ -1,14 +1,20 @@
 ---
-# The two collections provision.yml uses beyond ansible.builtin.
+# The collections the playbooks use beyond ansible.builtin.
 #
-# The `ansible` distribution (pipx install ansible) already bundles both, so
-# this file matters only if you installed bare ansible-core:
+# The `ansible` distribution (pipx install ansible) already bundles all of
+# them, so this file matters only if you installed bare ansible-core:
 #
 #     ansible-galaxy collection install -r ansible/requirements.yml
 collections:
-  # community.general.ufw — the firewall rules, idempotently. Driving `ufw`
-  # through the command module instead would report a change on every run.
+  # community.general.ufw — provision.yml's firewall rules, idempotently.
+  # Driving `ufw` through the command module instead would report a change on
+  # every run.
   - name: community.general
   # ansible.posix.authorized_key — adds the deploy key without replacing keys
   # somebody added by hand.
   - name: ansible.posix
+  # community.docker.docker_compose_v2 — deploy.yml brings the stack up with
+  # it. It drives the compose plugin over the Docker CLI and needs no Python
+  # SDK on the host, and it reports whether compose actually changed anything,
+  # which `command: docker compose up` cannot.
+  - name: community.docker

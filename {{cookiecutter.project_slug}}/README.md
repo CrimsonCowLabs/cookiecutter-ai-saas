@@ -205,19 +205,85 @@ Drizzle ORM/Kit stay on the stable 0.x line; 1.0 is still a release candidate.
 | `npm run db:push` | Push schema (dev only) |
 | `npm run db:migrate` | Run pending migrations |
 | `npm run db:studio` | Open Drizzle Studio |
-| `./scripts/deploy.sh full` | Build & deploy all |
-| `./scripts/deploy.sh app` | Deploy app only |
 
 ## Deployment
 
 ```bash
-./scripts/deploy.sh full
+ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass
 ```
 
-See `scripts/deploy.sh` for available targets: `app`, `worker`, `db-writer`, `migrator`, `ops`.
+That is the whole thing: it builds the images locally, ships them, runs the
+migrations and switches the stack over. The host comes from
+`ansible/inventory.ini` — the same one provisioning uses — so there is no
+address to fill in anywhere, and the production secrets come from
+`ansible/vault.yml`, which is committed encrypted, so there is no
+`.env-production` to copy by hand.
 
-This assumes a host that has already been provisioned — see below — and
-`VPS_HOST` filled in at the top of `scripts/deploy.sh`.
+Before the first deploy, set the secrets up once:
+
+```bash
+cp ansible/vault.yml.example ansible/vault.yml
+$EDITOR ansible/vault.yml                    # every value it lists
+ansible-vault encrypt ansible/vault.yml      # asks for a vault password
+git add ansible/vault.yml                    # committed, encrypted
+```
+
+`.gitignore` excludes the vault *password* file, never the vault. Change a
+value later with `ansible-vault edit ansible/vault.yml`, which never writes
+plaintext to disk — and the playbook refuses to run if the vault is not
+encrypted, so forgetting that step is a refusal rather than a leak.
+
+Deploying a subset, which the shell script this replaces did with positional
+arguments:
+
+```bash
+ansible-playbook ... ansible/deploy.yml -e deploy_targets=app
+ansible-playbook ... ansible/deploy.yml -e deploy_targets=worker,db-writer
+ansible-playbook ... ansible/deploy.yml -e deploy_targets=none   # env file only
+ansible-playbook ... ansible/deploy.yml --tags preflight         # check, deploy nothing
+```
+
+`migrator` joins any non-empty set: the migrator image already on the host is
+the previous release's, so shipping new app code without it would run the
+previous release's migrations. Everything else adjustable — the domain, the
+platform images are built for, how long the health check waits — is in
+`ansible/group_vars/all.yml`.
+
+### What a deploy does, in order
+
+The order is the guarantee that a failed deploy leaves the previous version
+serving: everything that can fail happens before anything changes what serves.
+
+1. **Pre-flight.** The vault is encrypted, and `{{ cookiecutter.domain_name }}`
+   resolves to the host being deployed to. Nothing is built yet. That second
+   check exists because Let's Encrypt rate-limits *failed* challenges and Caddy
+   asks for a certificate as it starts, so deploying before DNS propagates can
+   cost hours of issuance rather than one failed attempt. It aborts saying what
+   resolved and what was expected; `-e dns_check=false` proceeds anyway, which
+   is the answer when the record points at a CDN on purpose.
+2. **Build**, on your machine, not the server — the server never needs the
+   source, and a small VPS running the database should not also run
+   `next build`.
+3. **Ship** the compose file, the `Caddyfile`, a freshly rendered
+   `.env-production` (mode `0600`, owned by `__DEPLOY_USER__`) and the new
+   images, tagged with the release rather than only `:latest`. None of this
+   touches the running containers.
+4. **Migrate**, using this release's migrator image, with Postgres up and the
+   app not yet switched. A migration that fails stops the deploy here.
+5. **Switch**: move the `:latest` tags and bring the stack up. If the
+   switched-over stack does not answer, the previous release's images are put
+   back, the stack is restarted on them, and the deploy fails loudly.
+
+The release name is a digest of the images in it, so re-running an unchanged
+deploy ships nothing and changes nothing. `/app/{{ cookiecutter.project_slug }}/RELEASE`
+on the host records which release is serving.
+
+Two honest limits. `ansible-vault` decrypts on *your* machine and the rendered
+env file lands on the host — so nothing is at rest in plaintext anywhere except
+that one `0600` file, but the machine running the deploy does see the values.
+And the switch is `docker compose up -d`, which stops a container before
+starting its replacement: a broken release costs the seconds until the
+rollback, not zero.
 
 ### Provisioning the host
 
@@ -236,7 +302,7 @@ image does.
 
 What it leaves behind:
 
-- **`__DEPLOY_USER__`**, the account `scripts/deploy.sh` logs in as — key-only,
+- **`__DEPLOY_USER__`**, the account `ansible/deploy.yml` logs in as — key-only,
   passwordless sudo, in the `docker` group, with
   `/app/{{ cookiecutter.project_slug }}` to deploy into.
 - **SSH with no way in but a key.** Root login and password authentication are
@@ -273,9 +339,10 @@ the stack is up, HTTPS is up: Caddy obtains a certificate for
 redirects HTTP to HTTPS. Nothing else publishes a port — the app, PostgreSQL and
 Redis are reachable only from inside the stack.
 
-Bringing the stack up is still `./scripts/deploy.sh full`: `docker-compose.prod.yml`
-has no build context, so the images have to be built and shipped, and
-`.env-production` has to exist next to the compose file or compose aborts.
+Bringing the stack up is `ansible/deploy.yml`: `docker-compose.prod.yml` has no
+build context, so the images have to be built and shipped, and `.env-production`
+has to exist next to the compose file or compose aborts — which is why the
+playbook renders it there rather than expecting you to copy one.
 
 **Point `{{ cookiecutter.domain_name }}`'s A/AAAA record at the host before the
 first deploy.** Issuance is a challenge against that name, so it fails until DNS
@@ -344,12 +411,14 @@ workers/
     tracing.py          # Opt-in LangSmith tracing (off by default)
   db-writer/            # Node.js DB writer
 scripts/
-  deploy.sh             # Deployment script
-  migrate.sh            # Migration runner
+  migrate.sh            # Migration runner (the migrator image's command)
 ansible/
   provision.yml         # Takes a fresh VPS to a ready state
-  inventory.ini         # The host to provision
-  group_vars/all.yml    # Deploy account, open ports, log caps
+  deploy.yml            # Builds, ships, migrates and switches over
+  inventory.ini         # The host both playbooks act on
+  group_vars/all.yml    # Deploy account, open ports, log caps, deploy settings
+  vault.yml.example     # Every production secret, to fill in and encrypt
+  templates/            # .env-production, rendered on the host
 Caddyfile               # TLS and HTTP->HTTPS for {{ cookiecutter.domain_name }}
 ```
 

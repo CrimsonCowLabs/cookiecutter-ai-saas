@@ -1,0 +1,88 @@
+---
+# Every secret __PROJECT_NAME__ needs in production, and nothing else.
+#
+# ansible/deploy.yml renders these into .env-production on the host. They are
+# the only values in the repository that must not be readable, which is why
+# they live in one file that is committed encrypted rather than scattered
+# through a script's arguments or an operator's shell history.
+#
+# Set it up once:
+#
+#     cp ansible/vault.yml.example ansible/vault.yml
+#     $EDITOR ansible/vault.yml                    # fill in every value
+#     ansible-vault encrypt ansible/vault.yml      # asks for a vault password
+#     git add ansible/vault.yml                    # committed, encrypted
+#
+# Then deploy with the password to hand — the vault password file itself is the
+# one thing .gitignore keeps out:
+#
+#     ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass
+#
+# Edit a value later with `ansible-vault edit ansible/vault.yml`, which keeps
+# the file encrypted the whole time; plain `$EDITOR` on an encrypted file would
+# leave you staring at ciphertext, and decrypting it in place is how it ends up
+# committed in the clear. deploy.yml refuses to run if that happens, but do not
+# rely on being saved.
+#
+# Every name here is prefixed `vault_` so that a variable holding a secret is
+# recognisable wherever it is used, and so that a plain group_vars variable can
+# never silently shadow one.
+
+# ─── Required ──────────────────────────────────────────────────────────────
+# deploy.yml refuses to run while either of these is empty: the first leaves
+# every session cookie forgeable, and the second is the database's password.
+
+# openssl rand -hex 32
+vault_nextauth_secret: ""
+
+# The password for the `postgres` role inside the stack. It is also what
+# DATABASE_URL is built from, so it is set in one place only.
+#
+# Set it before the first deploy. Postgres takes this password when it
+# initialises its data directory and ignores it afterwards, so changing it
+# later needs an ALTER ROLE inside the running database as well.
+vault_postgres_password: ""
+
+# ─── OAuth ─────────────────────────────────────────────────────────────────
+# From the provider's console, for the production callback URL
+# (https://__DOMAIN_NAME__/api/auth/callback/...). Sign-in fails with an
+# opaque provider error if these belong to a different redirect URI.
+# cc:begin google
+vault_google_id: ""
+vault_google_secret: ""
+# cc:end google
+# cc:begin microsoft
+vault_microsoft_entra_id_id: ""
+vault_microsoft_entra_id_secret: ""
+# Leave empty for the multi-tenant "common" endpoint.
+vault_microsoft_entra_id_tenant_id: ""
+# cc:end microsoft
+
+# cc:begin stripe
+# ─── Stripe ────────────────────────────────────────────────────────────────
+# The live keys, not the test ones — and the webhook secret belongs to the
+# endpoint you registered for this domain, not to `stripe listen`.
+vault_stripe_public_key: ""
+vault_stripe_secret_key: ""
+vault_stripe_webhook_secret: ""
+# cc:end stripe
+
+# cc:begin resend
+# ─── Email ─────────────────────────────────────────────────────────────────
+# Resend sends the magic-link emails and the contact-form notifications.
+vault_resend_api_key: ""
+# cc:end resend
+
+# ─── Model provider ────────────────────────────────────────────────────────
+# Only the one LLM_PROVIDER names is read; the rest can stay empty. Ollama
+# needs no key unless something in front of it asks for one.
+vault_ollama_api_key: ""
+vault_openai_api_key: ""
+vault_anthropic_api_key: ""
+vault_openrouter_api_key: ""
+
+# ─── Tracing ───────────────────────────────────────────────────────────────
+# Only read when langsmith_tracing is turned on in group_vars/all.yml. Leaving
+# it empty is what keeps tracing off: the worker treats a missing key as "not
+# configured" rather than failing a job over it.
+vault_langsmith_api_key: ""
