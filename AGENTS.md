@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues live as GitHub issues on `eodgooch/cookiecutter-ai-saas` (`origin` remote). See `docs/agents/issue-tracker.md`.
+Issues live as GitHub issues on `CrimsonCowLabs/cookiecutter-ai-saas` (`origin` remote). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

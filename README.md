@@ -14,13 +14,13 @@ jobs, and one-command VPS deployment.
 
 ```bash
 pip install cookiecutter
-cookiecutter gh:eodgooch/cookiecutter-ai-saas
+cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas
 ```
 
 ### Non-Interactive
 
 ```bash
-cookiecutter gh:eodgooch/cookiecutter-ai-saas \
+cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
   --no-input \
   project_name="Invoice AI" \
   database_extensions=pgvector \
