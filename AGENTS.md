@@ -11,3 +11,8 @@ Default canonical labels (`needs-triage`, `needs-info`, `ready-for-agent`, `read
 ### Domain docs
 
 Single-context: one root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
+
+## Public site
+
+The landing page is served from GitHub Pages on this repo, at
+`https://crimsoncowlabs.github.io/cookiecutter-ai-saas/`. See `docs/public-site.md`.
