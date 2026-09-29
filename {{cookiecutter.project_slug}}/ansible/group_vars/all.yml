@@ -1,0 +1,46 @@
+---
+# Everything about provision.yml that is a decision rather than a mechanism.
+# Loaded automatically for every host in inventory.ini; edit here rather than in
+# the playbook, or override a single value on the command line with -e.
+
+# The account deploys land on. Generated from author_name, and the same value
+# scripts/deploy.sh logs in as — both come from one source at generation time,
+# so they cannot drift apart. Change it here and in scripts/deploy.sh together.
+deploy_user: __DEPLOY_USER__
+
+# Where scripts/deploy.sh rsyncs the stack.
+app_dir: /app/__PROJECT_SLUG__
+
+# Public keys to authorize for the deploy user. Left empty, the keys root is
+# already trusted with are reused — on a fresh VPS that is the key you just
+# connected with, which is almost always what you want. Point it at a .pub file
+# to authorize a different key:
+#
+#     ansible-playbook ... -e deploy_public_key_file=~/.ssh/id_ed25519.pub
+deploy_public_key_file: ""
+
+# Refuse to disable root login until the deploy user has been observed logging
+# in. Turn this off only if the control machine legitimately cannot reach the
+# host as that user (a key that lives elsewhere, say) — it is the one thing
+# standing between a mistyped key and a locked-out host.
+deploy_login_check: true
+
+# The port sshd answers on, which is also the port the firewall keeps open.
+# Follows the inventory: set ansible_port there and both move together.
+ssh_port: "{{ ansible_port | default(22) }}"
+
+# Everything the outside world is allowed to reach, on top of SSH. 443/udp is
+# HTTP/3, which Caddy advertises; without it clients fall back to TCP.
+firewall_tcp_ports: [80, 443]
+firewall_udp_ports: [443]
+
+# How hard to bounce someone failing SSH authentication.
+fail2ban_maxretry: 5
+fail2ban_findtime: 10m
+fail2ban_bantime: 1h
+
+# Container logs and the journal are the two things most likely to fill a small
+# VPS's disk, and it is the same disk Postgres is on.
+docker_log_max_size: 10m
+docker_log_max_file: "3"
+journal_max_use: 500M

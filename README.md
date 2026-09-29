@@ -2,7 +2,7 @@
 
 A cookiecutter template for scaffolding production-ready, full-stack AI SaaS
 applications: Next.js + a Python AI worker, with auth, billing, background
-jobs, and one-command VPS deployment.
+jobs, and one-command VPS provisioning and deployment.
 
 > **Status: pre-release.** This template is being modernized ahead of its first
 > tagged release — dependencies, the agent layer, and deployment tooling are all
@@ -206,6 +206,11 @@ Every generated project is a complete distributed system with **115 files**:
 ├── scripts/
 │   ├── deploy.sh                  # VPS deployment
 │   └── migrate.sh                 # Database migrations
+├── ansible/
+│   ├── provision.yml              # Takes a fresh VPS to a ready state
+│   ├── inventory.ini              # The host to provision
+│   ├── group_vars/all.yml         # Deploy account, open ports, log caps
+│   └── requirements.yml           # Collections, for bare ansible-core
 └── content/blog/                  # Sample blog posts (JSON)
 ```
 
@@ -391,6 +396,70 @@ Same services with:
 - Only Caddy on the host's ports: the app, database and Redis are reachable
   only from inside the stack
 - `.env-production` file mounted read-only
+
+---
+
+## Provisioning the host
+
+Deploying assumes a host that already has a deploy account, a firewall and a
+container runtime. `ansible/provision.yml` is what puts them there. It is
+separate from `scripts/deploy.sh` on purpose: it runs when a server is new and
+almost never again, so a routine deploy never re-runs apt and firewall tasks.
+
+```bash
+pipx install ansible          # or pip install ansible
+# put the server's address in ansible/inventory.ini, then:
+ansible-playbook -i ansible/inventory.ini ansible/provision.yml
+```
+
+That is the whole procedure, and running it again is a no-op — CI asserts a
+second run reports zero changes, so it is safe to re-run after editing a value
+rather than applying the difference by hand.
+
+The host needs to be Debian-family (Ubuntu LTS is what CI exercises) and to
+answer as root over SSH with your key the first time — a stock cloud image does.
+The playbook refuses to run against anything else rather than half-provisioning
+it.
+
+| Concern | What the playbook leaves |
+|---------|--------------------------|
+| Deploy account | A user named from `author_name`, key-only, passwordless sudo, in the `docker` group — the account `scripts/deploy.sh` logs in as |
+| SSH | Key-only, no root login, no passwords, in `/etc/ssh/sshd_config.d/00-hardening.conf` |
+| Firewall | `ufw`: inbound denied by default; SSH, `80/tcp`, `443/tcp` and `443/udp` (HTTP/3) open |
+| Intrusion banning | `fail2ban`'s sshd jail, reading the journal |
+| Security updates | `unattended-upgrades`, restricted to security origins, no automatic reboot |
+| Log rotation | `logrotate.timer`, the journal capped at 500M, Docker's json-file logs capped |
+| Container runtime | Docker Engine and the compose plugin, from Docker's apt repository |
+| Where deploys land | `/app/<project_slug>`, owned by the deploy account |
+
+Everything adjustable is in `ansible/group_vars/all.yml` — the account name, the
+open ports, the ban thresholds, the log caps — or overridable for one run with
+`-e`.
+
+### One command, before and after hardening
+
+A fresh VPS answers as root; a provisioned one refuses to. The playbook probes
+the host before connecting and uses whichever account currently answers, so the
+command does not change between the first run and the tenth.
+
+The order inside the run matters for the same reason: the deploy user is
+created, given the key, and **observed logging in** before root's ability to log
+in is removed. A wrong key fails while root still answers. That check is the one
+thing you can turn off (`-e deploy_login_check=false`), and it exists to make
+lockout hard.
+
+### What it deliberately leaves alone
+
+- **No reverse proxy.** Caddy runs inside the production stack (see
+  [HTTPS](#https)), so provisioning's part is to leave 80 and 443 open and
+  unoccupied. The playbook fails if a host nginx or Apache is running on them,
+  rather than letting Caddy fail to bind on the first deploy.
+- **ufw does not see Docker's published ports.** Docker writes its own iptables
+  chain. That is survivable here only because the production stack publishes 80
+  and 443 and nothing else — add a published port to that stack and it is
+  exposed whatever ufw says.
+- **No application.** Provisioning ends at a ready host; `scripts/deploy.sh`
+  takes it from there.
 
 ---
 
@@ -680,12 +749,13 @@ Edit `app/globals.css` (Tailwind 4 and DaisyUI 5 configure themes in CSS):
 
 CI generates, typechecks, lints and builds eight named flag combinations (the `flag-matrix` job in `.github/workflows/generate-and-build.yml`). `python scripts/check_ci_matrix.py` fails if any value of any choice in `cookiecutter.json` is missing from the matrix, so a new choice value needs a matrix entry.
 
-Two further jobs cover the proxy, which no flag varies:
+Three further jobs cover deployment, which no flag varies:
 
 | Job | What it proves |
 |---|---|
 | `proxy-config` | The `Caddyfile` names the `domain_name` that was answered, and carries an `author_email` as the ACME account only when mail could reach it. Each case also goes through `scripts/check_caddyfile.sh`: fully rendered, `caddy fmt`-clean, and accepted by `caddy validate` |
 | `tls-stack` | Bringing up `docker-compose.prod.yml` serves the app over HTTPS with a certificate that verifies, redirects HTTP to it, and publishes no port but the proxy's. Runs `scripts/check_tls_stack.sh` |
+| `provisioning` | The playbook lints clean, then takes a throwaway host from stock image to ready state and leaves it that way: root refused over SSH, the deploy user logging in with a key, only the expected ports open, upgrades and rotation active — and a second run that changes nothing. Runs `scripts/check_provisioning.sh` |
 
 ---
 
