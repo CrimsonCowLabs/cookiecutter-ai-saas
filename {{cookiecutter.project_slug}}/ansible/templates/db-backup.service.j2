@@ -1,0 +1,31 @@
+# Managed by ansible/backup.yml. Edits here are overwritten by the next run.
+[Unit]
+Description=Dump the {{ app_dir | basename }} database and copy it off this host
+Documentation=file://{{ app_dir }}/ansible/backup.yml
+# The dump comes out of a container, so there is nothing to do before the
+# runtime is up. Wants= rather than Requires= on purpose: on a boot where
+# Docker never starts, this unit should run, fail and raise the alarm, not be
+# skipped as a dependency casualty and leave the day with no backup and no
+# complaint.
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+# This is the whole of "a failure is visible". %n is this unit's own name, which
+# the alert unit takes as its instance so the report can say what failed.
+OnFailure={{ backup_name }}-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/{{ backup_name }}
+# A dump that has not finished in this long is wedged rather than slow. Letting
+# it fail alerts somebody and leaves tomorrow's run a clear field; letting it
+# hang would overlap runs and say nothing.
+TimeoutStartSec={{ backup_timeout }}
+# The backup is the least urgent thing on this host. Postgres serving requests
+# is the most, and pg_dump is a long sequential read that will otherwise take
+# the disk from it.
+Nice=10
+IOSchedulingClass=idle
+# Runs as root: it drives the Docker socket (membership in the `docker` group is
+# equivalent to root anyway, so a dedicated account would buy nothing) and
+# writes dumps into a directory only root may read.
+User=root

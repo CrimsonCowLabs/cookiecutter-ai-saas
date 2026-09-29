@@ -1,0 +1,15 @@
+# Managed by ansible/backup.yml. Edits here are overwritten by the next run.
+#
+# A template unit, so one alert path serves every unit that can fail. Started
+# only by an OnFailure=, never by a timer or a target.
+[Unit]
+Description=Report that %i failed to back up the {{ app_dir | basename }} database
+Documentation=file://{{ app_dir }}/ansible/backup.yml
+
+[Service]
+Type=oneshot
+# %i, not %I. What arrives here is a unit name that the failing unit's %n
+# handed over — "{{ backup_name }}.service" — and %I would unescape it, turning
+# the dashes in that name into slashes.
+ExecStart=/usr/local/bin/{{ backup_name }}-alert %i
+User=root

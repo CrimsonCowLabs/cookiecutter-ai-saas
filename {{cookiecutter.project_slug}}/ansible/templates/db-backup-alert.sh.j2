@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Tell somebody that a {{ app_dir | basename }} backup unit failed.
+#
+# Installed by ansible/backup.yml — edits here are overwritten by the next run.
+# Run by {{ backup_name }}-alert@.service, which is the OnFailure= target of
+# both {{ backup_name }}.service and {{ backup_name }}-watch.service. The one
+# argument is the name of the unit that failed.
+#
+# The journal on its own is not visibility. It is a complete record that nobody
+# reads unprompted, which is exactly why a timer whose service has been failing
+# for a month is indistinguishable from one that has never failed. So this
+# reports through three channels with different failure modes:
+#
+#   1. a journal entry at priority err, which `journalctl -p err` finds;
+#   2. a marker file, which is what an operator already on the box trips over;
+#   3. a POST to an alert URL, which is the only one of the three that reaches
+#      somebody who was not already looking.
+#
+# Channel 3 is why vault_backup_alert_url is required rather than optional: with
+# it empty, this criterion would be satisfied on paper and not in practice.
+
+# Not `set -e`: every channel must be attempted even when an earlier one fails,
+# because they exist precisely to cover each other.
+set -uo pipefail
+
+STATE_DIR={{ backup_state_dir | quote }}
+ALERT_URL={{ vault_backup_alert_url | quote }}
+CONTENT_TYPE={{ backup_alert_content_type | quote }}
+PAYLOAD={{ backup_alert_payload | quote }}
+TAG={{ backup_name | quote }}
+
+unit="${1:-unknown}"
+reason="(no reason recorded; see journalctl -u $unit)"
+if [ -r "$STATE_DIR/last-failure-reason" ]; then
+  reason="$(cat "$STATE_DIR/last-failure-reason")"
+fi
+
+last_success="never"
+if [ -r "$STATE_DIR/last-success" ]; then
+  last_success="$(cat "$STATE_DIR/last-success")"
+fi
+
+message="{{ app_dir | basename }} database backup FAILED on $(hostname): $unit: $reason"
+message="$message | last success: $last_success"
+# The message is assembled from a filename, a hostname and text this project
+# wrote, so it is not hostile — but it does get pasted into a JSON payload
+# below, and a stray quote or newline there would produce a body the endpoint
+# rejects, turning a backup failure into a silent backup failure.
+message="$(printf '%s' "$message" | tr -d '"\\' | tr '\n\r\t' '   ')"
+
+# ── 1. The journal, at a priority that stands out ────────────────────────────
+# Explicitly via systemd-cat: a unit's stdout and stderr both land in the
+# journal at `info` by default, so writing to stderr here would produce a record
+# that `journalctl -p err` does not return.
+printf '%s\n' "$message" | systemd-cat -t "$TAG" -p err
+
+# ── 2. A marker on the filesystem ────────────────────────────────────────────
+# Removed by the next successful backup, so its presence means "broken now"
+# rather than "broke once".
+printf '%s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$message" > "$STATE_DIR/FAILED"
+chmod 0644 "$STATE_DIR/FAILED"
+
+# ── 3. Off the host ──────────────────────────────────────────────────────────
+# Bash's own substitution rather than sed, so a message containing slashes or
+# ampersands cannot corrupt the body.
+body="${PAYLOAD//%MESSAGE%/$message}"
+# Retried, because a backup failing at 03:30 and the alert endpoint being
+# briefly unreachable at 03:30 are not independent events on a host with a
+# network problem.
+if curl -fsS --max-time 20 --retry 3 --retry-delay 5 \
+     -H "Content-Type: $CONTENT_TYPE" \
+     --data-binary "$body" \
+     -o /dev/null \
+     "$ALERT_URL"; then
+  printf 'alerted %s\n' "${ALERT_URL%%\?*}"
+  exit 0
+fi
+
+# Exiting non-zero leaves this unit in a failed state, which is the only trace
+# left of an alert nobody received. `systemctl --failed` shows it.
+printf '%s\n' "could not deliver the alert to ${ALERT_URL%%\?*}" \
+  | systemd-cat -t "$TAG" -p err
+exit 1

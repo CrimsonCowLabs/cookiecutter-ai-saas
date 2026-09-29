@@ -1,0 +1,14 @@
+# Managed by ansible/backup.yml. Edits here are overwritten by the next run.
+[Unit]
+Description=Check the age of the last {{ app_dir | basename }} database backup
+
+[Timer]
+OnCalendar={{ backup_watch_schedule }}
+# More often than the backup itself, and deliberately: this is the only thing
+# that notices a backup that stopped happening, so how stale a backup can get
+# before somebody hears about it is set here.
+Persistent=true
+Unit={{ backup_name }}-watch.service
+
+[Install]
+WantedBy=timers.target

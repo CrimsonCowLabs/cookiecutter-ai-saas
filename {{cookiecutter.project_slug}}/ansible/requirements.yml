@@ -12,3 +12,8 @@ collections:
   # ansible.posix.authorized_key — adds the deploy key without replacing keys
   # somebody added by hand.
   - name: ansible.posix
+
+# ansible/backup.yml adds nothing to this list. Scheduled dumps, their systemd
+# units and the vault are all ansible.builtin, and the one thing that is not a
+# module — rclone talking to the destination — is a command by design, because
+# its own config file is the interface every rclone backend shares.

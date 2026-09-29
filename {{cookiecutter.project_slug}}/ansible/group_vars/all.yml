@@ -44,3 +44,72 @@ fail2ban_bantime: 1h
 docker_log_max_size: 10m
 docker_log_max_file: "3"
 journal_max_use: 500M
+
+# ── Backups (ansible/backup.yml) ────────────────────────────────────────────
+# Everything about scheduled database backups that is a decision rather than a
+# mechanism. The destination's credentials are not here: they are secrets, so
+# they live in ansible/vault.yml — see ansible/vault.yml.example.
+
+# Docker Compose names its project after the directory it runs in, and deploys
+# run `docker compose` from app_dir, so this is the label every container in the
+# stack carries. The backup finds Postgres by that label rather than by
+# connecting to it: docker-compose.prod.yml publishes no port for the database
+# and keeps it on the compose `default` network, which nothing outside the stack
+# joins. Override this only if you run compose with an explicit -p.
+backup_compose_project: "{{ app_dir | basename }}"
+
+# Where dumps land on this host on their way to the destination, and where the
+# "when did a backup last work" stamp lives. Split because they have different
+# audiences: the dumps are the whole database and are readable by root alone,
+# while the stamp is a timestamp anyone allowed on the box may read.
+backup_local_dir: /var/backups/{{ app_dir | basename }}
+backup_state_dir: /var/lib/{{ app_dir | basename }}-backup
+
+# The name every unit and script gets built from, so a host can back up more
+# than one stack without the two colliding.
+backup_name: "{{ app_dir | basename }}-db-backup"
+
+# When the dump runs, in systemd's OnCalendar syntax (`systemd-analyze calendar
+# '<value>'` will tell you what it means). Early morning UTC by default, with a
+# random delay so a fleet of hosts does not hit the same destination at once.
+backup_schedule: "*-*-* 03:30:00"
+backup_schedule_jitter: 45m
+
+# A dump still running after this long is wedged rather than slow. Failing is
+# better than overlapping with tomorrow's run, and failing is also what raises
+# the alarm.
+backup_timeout: 1h
+
+# ── Retention ──
+# How many dumps to keep, newest first. The local copy is a convenience — it
+# makes a same-day restore fast and survives nothing — so it is deliberately
+# shorter than the destination's, which is the copy that outlives the host.
+#
+# Neither may be zero: pruning happens after a verified upload, and a policy of
+# zero would delete the dump that was just proved good. The playbook refuses to
+# install a schedule with either below 1.
+backup_keep_local: 7
+backup_keep_remote: 30
+
+# ── Staying visible ──
+# A run that fails is loud (see the OnFailure= unit). A timer that stopped
+# firing is not: it fails nothing, so it says nothing, and a backup that quietly
+# stopped a month ago looks exactly like one that never failed. This is the
+# dead-man's switch that closes that gap — it runs on its own schedule and fails
+# when the last success is too old, which routes to the same alert.
+backup_watch_schedule: "*-*-* 0/6:15:00"
+# Comfortably more than a day, so a single skipped or slow nightly run is not an
+# alert, and comfortably less than two, so a stopped timer cannot go a day
+# unnoticed. While it is stale you will hear about it on every watch run — four
+# times a day, on purpose: a nag is how an alert survives a busy week.
+backup_max_age_hours: 30
+
+# How the alert leaves this host. A POST is the only channel a stock VPS has —
+# there is no mail transfer agent here, and installing one to send alerts about
+# a broken backup adds a second thing that can break silently. The body is the
+# payload with %MESSAGE% substituted; the default shape is what Slack,
+# Mattermost and Google Chat incoming webhooks accept. For ntfy.sh or
+# healthchecks.io use text/plain and a payload of just %MESSAGE%; for Discord,
+# replace "text" with "content".
+backup_alert_content_type: application/json
+backup_alert_payload: '{"text": "%MESSAGE%"}'
