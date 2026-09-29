@@ -9,6 +9,7 @@ from bullmq import Worker
 import redis.asyncio as aioredis
 
 from runner import run_job, JobCancelled
+from tracing import configure_tracing
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("worker")
@@ -118,6 +119,10 @@ async def process_job(job, token):
 
 
 async def main():
+    # Owns every LangSmith variable and logs what it decided. Off by default,
+    # and never raises: a broken tracing setup must not stop the worker.
+    configure_tracing()
+
     logger.info("Worker starting, connecting to %s", REDIS_URL)
 
     worker = Worker(

@@ -39,6 +39,7 @@
     "openrouter"
   ],
   "_copy_without_render": [
+    "ansible/*",
     "*.ts",
     "*.tsx",
     "*.js",

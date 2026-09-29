@@ -1,0 +1,548 @@
+---
+# Take a fresh Ubuntu/Debian VPS to the state __PROJECT_NAME__ needs in order to
+# run, and no further:
+#
+#     ansible-playbook -i ansible/inventory.ini ansible/provision.yml
+#
+# This is provisioning, not deployment. It installs the host's state — the
+# deploy account, SSH hardening, firewall, intrusion banning, security updates,
+# log rotation and the container runtime — and stops there. `scripts/deploy.sh`
+# ships the application on top of it and runs far more often, which is exactly
+# why the two are separate: a routine deploy should not re-run apt and firewall
+# tasks.
+#
+# There is no reverse proxy here on purpose. Caddy runs inside
+# docker-compose.prod.yml (see the Caddyfile), so provisioning's part in serving
+# HTTPS is to leave 80 and 443 open and unoccupied — which the firewall tasks do,
+# and the web-server check below enforces.
+#
+# Running it twice changes nothing: every task is idempotent, and CI asserts a
+# second run reports zero changes.
+
+# ── Which account to connect as ─────────────────────────────────────────────
+# A fresh VPS answers as root. Once this playbook has run, root can no longer
+# log in — so the same command has to connect as the deploy user instead. Rather
+# than make that the operator's problem, probe the host first and use whichever
+# account is currently reachable.
+- name: Decide which account to connect as
+  hosts: all
+  gather_facts: false
+  connection: local
+  vars:
+    # This play runs on the control machine, so hand it the Python already
+    # running Ansible. Left to discover one, Ansible caches what it found as
+    # *this host's* interpreter — and then the next play tries to run the
+    # control machine's Python path on the VPS, which fails at the first task.
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Work out how to reach this host over SSH
+      ansible.builtin.set_fact:
+        # Everything but the user, host and command, so the checks below can
+        # reuse it. Inventory settings are honoured: a non-default port, an
+        # explicit key, whatever the inventory adds in ansible_ssh_common_args.
+        ssh_probe_argv: >-
+          {{ ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+              '-p', (ansible_port | default(22)) | string]
+             + (['-i', ansible_ssh_private_key_file, '-o', 'IdentitiesOnly=yes']
+                if ansible_ssh_private_key_file is defined else [])
+             + (ansible_ssh_common_args | default('')).split() }}
+        probe_host: "{{ ansible_host | default(inventory_hostname) }}"
+
+    - name: Check whether root still answers on SSH
+      ansible.builtin.command:
+        argv: "{{ ssh_probe_argv + ['root@' ~ probe_host, 'true'] }}"
+      register: root_probe
+      # A refusal is the expected answer on an already-provisioned host, not a
+      # failure, and this command changes nothing either way.
+      failed_when: false
+      changed_when: false
+
+    - name: Connect as root while it answers, as the deploy user afterwards
+      ansible.builtin.set_fact:
+        provision_remote_user: "{{ 'root' if root_probe.rc == 0 else deploy_user }}"
+
+    - name: Report the account chosen
+      ansible.builtin.debug:
+        msg: >-
+          Connecting as {{ provision_remote_user }}
+          ({{ 'first run: root still answers' if provision_remote_user == 'root'
+              else 'root login is already disabled' }})
+
+# ── The host itself ─────────────────────────────────────────────────────────
+- name: Provision the host
+  hosts: all
+  remote_user: "{{ provision_remote_user }}"
+  become: true
+
+  # Every tunable this play reads — the deploy account, the open ports, the log
+  # caps — is in group_vars/all.yml, next to the inventory that names the host.
+
+  handlers:
+    - name: Restart ssh
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: Restart fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+
+    - name: Restart docker
+      ansible.builtin.service:
+        name: docker
+        state: restarted
+
+    - name: Restart journald
+      ansible.builtin.service:
+        name: systemd-journald
+        state: restarted
+
+  tasks:
+    - name: Refuse to run against a distribution this playbook does not manage
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == 'Debian'
+        fail_msg: >-
+          This playbook provisions Debian-family hosts (Ubuntu LTS is what it is
+          tested against); this host reports
+          {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}.
+        quiet: true
+
+    # ── Packages the rest of the playbook and the deploy script rely on ──────
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - logrotate
+          - fail2ban
+          # fail2ban reads the journal rather than /var/log/auth.log on current
+          # Ubuntu (see the jail below), which needs these bindings. Without
+          # them the sshd jail starts and quietly watches nothing.
+          - python3-systemd
+          - rsync          # scripts/deploy.sh ships the stack with it
+          - sudo
+          - ufw
+          - unattended-upgrades
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Apply outstanding security updates
+      ansible.builtin.apt:
+        upgrade: safe
+        update_cache: true
+        cache_valid_time: 3600
+
+    # ── The deploy account ───────────────────────────────────────────────────
+    - name: Create the deploy user
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        shell: /bin/bash
+        create_home: true
+        password_lock: true   # key-only: no password can be used to log in
+        state: present
+      register: deploy_account
+
+    - name: Let the deploy user run sudo without a password
+      # Deploys are non-interactive, so a password prompt would just be a
+      # secret kept on the deploy machine. What protects root here is that the
+      # only way into this account is an SSH key, which is why the hardening
+      # below is not optional.
+      ansible.builtin.copy:
+        content: "{{ deploy_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        dest: /etc/sudoers.d/{{ deploy_user }}
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Read the keys root is already trusted with
+      ansible.builtin.slurp:
+        src: /root/.ssh/authorized_keys
+      register: root_authorized_keys
+      when: deploy_public_key_file | length == 0
+      failed_when: false
+
+    - name: Work out which keys to authorize
+      ansible.builtin.set_fact:
+        deploy_authorized_keys: >-
+          {{ lookup('file', deploy_public_key_file)
+             if deploy_public_key_file | length > 0
+             else (root_authorized_keys.content | default('') | b64decode) }}
+
+    - name: Look for keys the deploy user already has
+      # So that a later run, on a host where root's authorized_keys has since
+      # been cleaned up, is the no-op it should be rather than an abort: there
+      # is nothing to copy, but nothing to do either.
+      ansible.builtin.stat:
+        path: "{{ deploy_account.home }}/.ssh/authorized_keys"
+      register: deploy_key_file
+
+    - name: Fail early if there is no key to authorize
+      ansible.builtin.assert:
+        that: >-
+          deploy_authorized_keys | trim | length > 0
+          or (deploy_key_file.stat.exists and deploy_key_file.stat.size > 0)
+        fail_msg: >-
+          {{ deploy_user }} has no authorized key and there is none to copy:
+          /root/.ssh/authorized_keys is missing or empty on this host. Pass one
+          explicitly, e.g. -e deploy_public_key_file=~/.ssh/id_ed25519.pub
+        quiet: true
+
+    - name: Authorize those keys for the deploy user
+      # Additive: a key added by hand later survives the next run.
+      ansible.posix.authorized_key:
+        user: "{{ deploy_user }}"
+        key: "{{ deploy_authorized_keys }}"
+        state: present
+        exclusive: false
+      when: deploy_authorized_keys | trim | length > 0
+
+    - name: Confirm the deploy user can log in, while root still can
+      # Ordering is the whole point of this task. Everything that could lock the
+      # host out happens after it, so a wrong key fails here — while root still
+      # answers — rather than after the door has closed.
+      ansible.builtin.command:
+        argv: "{{ ssh_probe_argv + [deploy_user ~ '@' ~ probe_host, 'true'] }}"
+      delegate_to: localhost
+      become: false   # this runs on the control machine; do not sudo here
+      changed_when: false
+      register: deploy_login
+      failed_when: deploy_login.rc != 0
+      when: deploy_login_check | bool
+
+    # ── SSH: keys only, no root ──────────────────────────────────────────────
+    - name: Harden sshd
+      # sshd takes the *first* value it sees for a setting, and the stock config
+      # includes this directory before anything else, so the lowest-sorting file
+      # here wins — including over a cloud-init drop-in that re-enables password
+      # authentication. Hence 00-, not 99-.
+      ansible.builtin.copy:
+        content: |
+          # Managed by ansible/provision.yml. Edits here are overwritten.
+          PermitRootLogin no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          PermitEmptyPasswords no
+          X11Forwarding no
+          # No MaxAuthTries below sshd's default of 6. With passwords off there
+          # is nothing to guess, and a lower limit locks out the operator whose
+          # agent offers several keys before it reaches the right one — which
+          # scripts/deploy.sh would hit too. Repeat offenders are fail2ban's job.
+          LoginGraceTime 30
+          ClientAliveInterval 300
+          ClientAliveCountMax 2
+        dest: /etc/ssh/sshd_config.d/00-hardening.conf
+        owner: root
+        group: root
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+      notify: Restart ssh
+
+    - name: Apply the SSH configuration now, not at the end of the play
+      # The assertion below reads the running daemon's effective configuration,
+      # so the restart has to have happened by then.
+      ansible.builtin.meta: flush_handlers
+
+    - name: Read the effective sshd configuration
+      ansible.builtin.command: /usr/sbin/sshd -T
+      changed_when: false
+      register: sshd_effective
+
+    - name: Confirm root login and passwords are actually off
+      # Asserting on the file would only prove what was written. This asks sshd
+      # what it resolved to after every include and override on this host.
+      ansible.builtin.assert:
+        that:
+          - "'permitrootlogin no' in sshd_effective.stdout_lines"
+          - "'passwordauthentication no' in sshd_effective.stdout_lines"
+        fail_msg: >-
+          sshd still permits root login or password authentication. Something
+          else on this host is setting them first — check
+          /etc/ssh/sshd_config.d/ for a file sorting before 00-hardening.conf.
+        quiet: true
+
+    # ── Firewall ─────────────────────────────────────────────────────────────
+    # Note what ufw does not cover: Docker publishes ports by writing its own
+    # iptables chain, which ufw's rules do not see. That is survivable here only
+    # because the production stack publishes 80 and 443 and nothing else — the
+    # database and Redis are reachable only from inside the compose network. Add
+    # a published port to that stack and it is exposed regardless of what
+    # follows.
+    - name: Deny inbound traffic by default
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Allow outbound traffic
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Keep SSH reachable
+      # Before the firewall is enabled, so enabling it cannot cut this session.
+      community.general.ufw:
+        rule: allow
+        port: "{{ ssh_port }}"
+        proto: tcp
+        comment: SSH
+
+    - name: Open the ports the proxy serves on
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+        comment: HTTP/HTTPS (caddy)
+      loop: "{{ firewall_tcp_ports }}"
+
+    - name: Open HTTP/3
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: udp
+        comment: HTTP/3 (caddy)
+      loop: "{{ firewall_udp_ports }}"
+
+    - name: Enable the firewall
+      community.general.ufw:
+        state: enabled
+
+    # ── Intrusion banning ────────────────────────────────────────────────────
+    - name: Ban repeated SSH authentication failures
+      ansible.builtin.copy:
+        content: |
+          # Managed by ansible/provision.yml. Edits here are overwritten.
+          [sshd]
+          enabled = true
+          # Current Ubuntu logs sshd to the journal and ships no
+          # /var/log/auth.log, which the packaged jail still reads. Without this
+          # the jail runs and bans nobody.
+          backend = systemd
+          port = {{ ssh_port }}
+          maxretry = {{ fail2ban_maxretry }}
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+        dest: /etc/fail2ban/jail.d/sshd.local
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart fail2ban
+
+    - name: Run fail2ban at boot
+      ansible.builtin.service:
+        name: fail2ban
+        enabled: true
+        state: started
+
+    # ── Unattended security upgrades ─────────────────────────────────────────
+    - name: Run the unattended upgrade daily
+      ansible.builtin.copy:
+        content: |
+          // Managed by ansible/provision.yml. Edits here are overwritten.
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          APT::Periodic::AutocleanInterval "7";
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Limit unattended upgrades to security updates
+      # 52- sorts after the packaged 50unattended-upgrades, so this wins. The
+      # #clear is load-bearing: APT appends to a list rather than replacing it,
+      # so without it the packaged origins would still apply and this file would
+      # only widen what gets installed unattended.
+      ansible.builtin.copy:
+        content: |
+          // Managed by ansible/provision.yml. Edits here are overwritten.
+          #clear Unattended-Upgrade::Allowed-Origins;
+          Unattended-Upgrade::Allowed-Origins {
+              "${distro_id}:${distro_codename}-security";
+              "${distro_id}ESMApps:${distro_codename}-apps-security";
+              "${distro_id}ESM:${distro_codename}-infra-security";
+          };
+          Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+          // Left off deliberately: an unannounced reboot takes the site down.
+          // Kernel updates therefore need a reboot you choose.
+          Unattended-Upgrade::Automatic-Reboot "false";
+        dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Run unattended-upgrades at boot
+      # This unit is only the shutdown-time hook: it holds a shutdown open
+      # while an upgrade finishes. It is not what runs the upgrade.
+      ansible.builtin.service:
+        name: unattended-upgrades
+        enabled: true
+        state: started
+
+    - name: Run the daily upgrade on schedule
+      # These are what read APT::Periodic above and actually install anything.
+      # They are enabled on a stock image, but masked often enough on minimal
+      # and hardened ones to be worth insisting on — and if they are off, every
+      # other check here still passes while nothing is ever upgraded.
+      ansible.builtin.service:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+
+    # ── Log rotation ─────────────────────────────────────────────────────────
+    - name: Rotate the system logs
+      ansible.builtin.service:
+        name: logrotate.timer
+        enabled: true
+        state: started
+
+    - name: Create the journald drop-in directory
+      # systemd reads it if it is there, but ships without it.
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Cap the journal
+      # Unbounded, the journal grows to 10% of the filesystem. On a small VPS
+      # that is the disk the database also lives on.
+      ansible.builtin.copy:
+        content: |
+          # Managed by ansible/provision.yml. Edits here are overwritten.
+          [Journal]
+          SystemMaxUse={{ journal_max_use }}
+          MaxRetentionSec=1month
+        dest: /etc/systemd/journald.conf.d/00-size.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart journald
+
+    # ── Container runtime ────────────────────────────────────────────────────
+    - name: Create the apt keyring directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Trust Docker's package signing key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/{{ ansible_facts.distribution | lower }}/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Read the architecture apt packages are built for
+      # ansible_facts.architecture is the kernel's name for it (x86_64), not
+      # dpkg's (amd64), and the repository line needs dpkg's.
+      ansible.builtin.command: dpkg --print-architecture
+      changed_when: false
+      register: deb_architecture
+
+    - name: Add Docker's apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ deb_architecture.stdout }} signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/{{ ansible_facts.distribution | lower }}
+          {{ ansible_facts.distribution_release }} stable
+        filename: docker
+        state: present
+
+    - name: Install Docker Engine and the compose plugin
+      # From Docker's own repository rather than the distribution's: the
+      # packaged docker.io ships no `docker compose`, which the deploy script
+      # and docker-compose.prod.yml both need.
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Bound container log growth
+      # json-file logs are otherwise unrotated and unbounded, and logrotate
+      # never sees them.
+      ansible.builtin.copy:
+        content: |
+          {
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "{{ docker_log_max_size }}",
+              "max-file": "{{ docker_log_max_file }}"
+            }
+          }
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart docker
+
+    - name: Run Docker at boot
+      ansible.builtin.service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Let the deploy user drive Docker
+      # Membership in this group is equivalent to root — it is what lets the
+      # deploy script load images and bring the stack up without sudo.
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        groups: docker
+        append: true
+
+    # ── Where deploys land ───────────────────────────────────────────────────
+    - name: Create the application directory
+      # scripts/deploy.sh rsyncs into this path as the deploy user, so it has to
+      # exist and be writable before the first deploy rather than after it fails.
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0755"
+
+    # ── Nothing else may hold the proxy's ports ──────────────────────────────
+    - name: Collect the services on this host
+      ansible.builtin.service_facts:
+
+    - name: Fail if a host web server would collide with the stack's proxy
+      # Images that ship nginx or apache running are common enough to be worth
+      # catching here: Caddy would fail to bind 80/443 on the first deploy, and
+      # the reason would not be obvious from compose's output.
+      ansible.builtin.assert:
+        that: >-
+          ansible_facts.services[item].state | default('stopped') != 'running'
+        fail_msg: >-
+          {{ item }} is running and would hold ports 80/443, which the stack's
+          own Caddy needs. Disable it (systemctl disable --now {{ item }})
+          and run this playbook again.
+        quiet: true
+      loop:
+        - nginx.service
+        - apache2.service
+      when: item in ansible_facts.services
+
+  post_tasks:
+    - name: Report what the host is now
+      ansible.builtin.debug:
+        msg:
+          - "Host provisioned. From here:"
+          - "  1. Point __DOMAIN_NAME__'s A/AAAA record at this host, if you have not."
+          - "  2. Set VPS_HOST in scripts/deploy.sh to this host."
+          - "  3. ./scripts/deploy.sh full"
+          - "SSH is key-only and root cannot log in; deploys go as {{ deploy_user }}."

@@ -1,0 +1,14 @@
+---
+# The two collections provision.yml uses beyond ansible.builtin.
+#
+# The `ansible` distribution (pipx install ansible) already bundles both, so
+# this file matters only if you installed bare ansible-core:
+#
+#     ansible-galaxy collection install -r ansible/requirements.yml
+collections:
+  # community.general.ufw — the firewall rules, idempotently. Driving `ufw`
+  # through the command module instead would report a change on every run.
+  - name: community.general
+  # ansible.posix.authorized_key — adds the deploy key without replacing keys
+  # somebody added by hand.
+  - name: ansible.posix

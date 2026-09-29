@@ -214,6 +214,7 @@ async def run_research_agent(
     recursion_limit: int | None = None,
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     on_event: EventListener | None = None,
+    run_config: dict | None = None,
 ) -> ResearchReport:
     """Research `topic` with `model` and `tools` and return a validated report.
 
@@ -226,6 +227,10 @@ async def run_research_agent(
         system_prompt: Overrides the default instructions.
         on_event: Async listener called for each `AgentEvent`. If it raises,
             the run stops there and the exception propagates unchanged.
+        run_config: Extra LangChain runnable config for this run — `metadata`,
+            `tags`, `run_name`, `callbacks` — which a tracer records when one
+            is configured. It cannot change the bounds: `recursion_limit` here
+            is ignored in favour of the argument above.
 
     Raises:
         ValueError: `topic` is blank or a bound is not positive.
@@ -258,10 +263,12 @@ async def run_research_agent(
         middleware=middleware,
     )
 
+    config = {**(run_config or {}), "recursion_limit": recursion_limit}
+
     try:
         result = await agent.ainvoke(
             {"messages": [{"role": "user", "content": f"Research topic: {topic.strip()}"}]},
-            config={"recursion_limit": recursion_limit},
+            config=config,
         )
     except GraphRecursionError as exc:
         raise RecursionBackstopReached(recursion_limit) from exc

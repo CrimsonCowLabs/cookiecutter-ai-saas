@@ -1,8 +1,35 @@
 services:
+  caddy:
+    image: caddy:2-alpine
+    # The only service that publishes ports. Caddy terminates TLS, redirects
+    # HTTP to HTTPS and proxies to `app`, so bringing this stack up is all that
+    # serving the site over HTTPS takes.
+    ports:
+      - "80:80"
+      - "443:443"
+      # HTTP/3. Caddy advertises it via Alt-Svc; without the UDP port clients
+      # retry over TCP, so this is a performance line, not a correctness one.
+      - "443:443/udp"
+    environment:
+      # Pass-through with no default: unset means the Caddyfile's own default,
+      # https://{{ cookiecutter.domain_name }}. Set it to https://localhost to
+      # smoke-test the stack on a box with no DNS for that name.
+      - SITE_ADDRESS
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and the ACME account key. Losing this volume means
+      # re-issuing on the next boot, and Let's Encrypt rate-limits that.
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - app
+    networks:
+      - caddy-net
+    restart: unless-stopped
+
   app:
     image: {{ cookiecutter.project_slug }}-app:latest
-    ports:
-      - "3000:3000"
+    # No `ports`: the app is reachable only through caddy on caddy-net.
     env_file: .env-production
     depends_on:
       postgres:
@@ -87,7 +114,11 @@ services:
 volumes:
   pgdata:
   redisdata:
+  caddydata:
+  caddyconfig:
 
 networks:
-    caddy-net:
-      external: true
+  # caddy <-> app only. Postgres and Redis sit on the implicit `default` network,
+  # which the proxy never joins, so the internet-facing container has no route to
+  # the database even if it is compromised.
+  caddy-net:

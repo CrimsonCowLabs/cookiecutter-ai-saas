@@ -3,6 +3,9 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users, jobs } from "@/lib/db/schema";
 import { StatsCard } from "@/components/dashboard/stats-card";
+import { NewJobForm } from "@/components/dashboard/new-job-form";
+import { readJobInputUrl, URL_REPORT_JOB_TYPE } from "@/lib/url-report";
+import { displayUrl } from "@/lib/url";
 import Link from "next/link";
 
 export default async function DashboardPage() {
@@ -41,6 +44,11 @@ export default async function DashboardPage() {
         </p>
       </div>
 
+      {/* Submit a job */}
+      <div id="new-report" className="scroll-mt-6">
+        <NewJobForm />
+      </div>
+
       {/* Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatsCard label="Total Jobs" value={jobStats?.total ?? 0} />
@@ -57,7 +65,12 @@ export default async function DashboardPage() {
 
         {recentJobs.length === 0 ? (
           <div className="text-center py-12 bg-base-200 rounded-lg">
-            <p className="text-base-content/60 mb-4">No jobs yet. Create your first job to get started.</p>
+            <p className="text-base-content/60 mb-4">
+              No jobs yet. Paste a URL above to generate your first report.
+            </p>
+            <a href="#new-report" className="btn btn-sm btn-primary">
+              Create your first report
+            </a>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -67,36 +80,51 @@ export default async function DashboardPage() {
                   <th>Job</th>
                   <th>Status</th>
                   <th>Created</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
-                {recentJobs.map((job) => (
-                  <tr key={job.id}>
-                    <td>
-                      <div>
-                        <p className="font-medium">{job.type}</p>
-                        <p className="text-xs text-base-content/50">{job.id}</p>
-                      </div>
-                    </td>
-                    <td>
-                      <span className={`badge badge-sm ${
-                        job.status === "completed" ? "badge-success" :
-                        job.status === "running" ? "badge-warning" :
-                        job.status === "failed" ? "badge-error" :
-                        "badge-ghost"
-                      }`}>
-                        {job.status}
-                      </span>
-                    </td>
-                    <td className="text-sm text-base-content/60">
-                      {new Date(job.createdAt).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </td>
-                  </tr>
-                ))}
+                {recentJobs.map((job) => {
+                  const href = `/dashboard/jobs/${job.id}`;
+                  const inputUrl = readJobInputUrl(job.input);
+                  const label =
+                    job.type === URL_REPORT_JOB_TYPE
+                      ? (displayUrl(inputUrl) ?? inputUrl ?? "URL report")
+                      : job.type;
+
+                  return (
+                    <tr key={job.id} className="hover">
+                      <td>
+                        <Link href={href} className="block">
+                          <p className="font-medium truncate max-w-xs">{label}</p>
+                          <p className="text-xs text-base-content/50">{job.type}</p>
+                        </Link>
+                      </td>
+                      <td>
+                        <span className={`badge badge-sm ${
+                          job.status === "completed" ? "badge-success" :
+                          job.status === "running" ? "badge-warning" :
+                          job.status === "failed" ? "badge-error" :
+                          "badge-ghost"
+                        }`}>
+                          {job.status}
+                        </span>
+                      </td>
+                      <td className="text-sm text-base-content/60">
+                        {new Date(job.createdAt).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })}
+                      </td>
+                      <td className="text-right">
+                        <Link href={href} className="link link-hover text-sm text-primary">
+                          View
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

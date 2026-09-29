@@ -10,11 +10,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
 def _env(key: str, default: str | None = None) -> str | None:
     value = os.getenv(key)
     if value is None or value == "":
         return default
     return value
+
+
+def _flag(key: str, default: bool = False) -> bool:
+    """A boolean switch. Unset or empty means `default`; anything unrecognized is off."""
+    value = _env(key)
+    if value is None:
+        return default
+    return value.strip().lower() in _TRUTHY
 
 
 @dataclass(frozen=True)
@@ -54,6 +65,15 @@ class Settings:
     # Upper bound on tool calls the AI step's agent may make in one job. The
     # graph recursion limit is derived from it as a backstop.
     research_max_tool_calls: int = int(_env("RESEARCH_MAX_TOOL_CALLS", "8") or "8")
+
+    # LangSmith tracing. Opt-in and off by default: see `tracing.py`, which owns
+    # every LangSmith environment variable the SDK reads. Enabling it ships
+    # prompts and completions to the configured collector.
+    langsmith_tracing: bool = _flag("LANGSMITH_TRACING")
+    langsmith_api_key: str | None = _env("LANGSMITH_API_KEY")
+    # Empty means the hosted collector; set it to a self-hosted LangSmith.
+    langsmith_endpoint: str | None = _env("LANGSMITH_ENDPOINT")
+    langsmith_project: str | None = _env("LANGSMITH_PROJECT")
 
     # Redis
     redis_url: str = _env("REDIS_URL", "redis://localhost:6379") or "redis://localhost:6379"

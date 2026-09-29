@@ -47,3 +47,49 @@ class ScriptedChatModel(BaseChatModel):
 def tool_call_message(name: str, args: dict, call_id: str = "call-1") -> AIMessage:
     """An AI message that asks for one tool call."""
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": call_id}])
+
+
+def fake_fetcher(
+    body: str = "<html><head><title>Example</title></head><body><p>Hello.</p></body></html>",
+    *,
+    content_type: str = "text/html",
+    url: str = "https://example.com/article",
+):
+    """A blocking `str -> RawResponse` fetcher that never touches the network."""
+    from tools.fetch_url import RawResponse
+
+    def fetch(requested: str) -> RawResponse:
+        return RawResponse(url=url or requested, content_type=content_type, body=body)
+
+    return fetch
+
+
+class FakeHTTPResponse:
+    """The minimum `tools.fetch_url.http_get` needs from an opened response."""
+
+    def __init__(self, status: int = 200, headers: dict | None = None, body: bytes = b"") -> None:
+        self.status = status
+        self.headers = headers if headers is not None else {"Content-Type": "text/html"}
+        self._body = body
+        self.closed = False
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            chunk, self._body = self._body, b""
+            return chunk
+        chunk, self._body = self._body[:size], self._body[size:]
+        return chunk
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def public_resolver(address: str = "93.184.216.34"):
+    """A `socket.getaddrinfo` stand-in that resolves every host to `address`."""
+    import socket
+
+    def resolve(host, port, **kwargs):
+        family = socket.AF_INET6 if ":" in address else socket.AF_INET
+        return [(family, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    return resolve

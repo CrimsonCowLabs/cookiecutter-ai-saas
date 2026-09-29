@@ -139,6 +139,14 @@ jobs:
           else
             ! grep -q 'pgvector/pgvector' "$G/docker-compose.yml" "$G/docker-compose.prod.yml"
           fi
+          # The proxy config is flag-independent, so every combination must
+          # still produce a Caddyfile naming the default domain.
+          grep -qF '{$SITE_ADDRESS:https://myapp.example.com}' "$G/Caddyfile"
+          # So is provisioning: every combination ships a playbook with the
+          # deploy account substituted in and no placeholder left behind.
+          grep -q '^deploy_user: yourname$' "$G/ansible/group_vars/all.yml"
+          grep -q '^VPS_USER="yourname"$' "$G/scripts/deploy.sh"
+          ! grep -rqE '__[A-Z_]+__' "$G/ansible"
           grep -q '^LLM_PROVIDER=${{ matrix.llm_provider }}' "$G/.env.example"
           if [ "${{ matrix.llm_provider }}" = openrouter ]; then
             grep -q '^OPENROUTER_API_KEY=' "$G/.env.example"
@@ -206,3 +214,126 @@ jobs:
           cookiecutter . --no-input -o .generated-alt project_name="Alt App" python_version=3.13
           test ! -e ".generated-alt/alt-app/workers/app/poetry.lock"
           grep -q 'python = ">=3.13,<4"' .generated-alt/alt-app/workers/app/pyproject.toml
+
+  # Acceptance criterion 1: the proxy config carries the domain answered at
+  # generation time. The ACME account address is conditional, so every branch of
+  # that condition is generated and handed to Caddy's own parser.
+  #
+  # scripts/check_caddyfile.sh holds what is true of any Caddyfile; each step
+  # adds only what its own answers imply.
+  proxy-config:
+    name: Caddyfile is generated from the answers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install cookiecutter
+
+      - name: A deliverable address becomes the ACME account
+        run: |
+          cookiecutter . --no-input -o .generated-proxy project_name="Proxy App" \
+            domain_name=app.proxy-test.dev author_email=ops@proxy-test.dev
+          C=.generated-proxy/proxy-app/Caddyfile
+          scripts/check_caddyfile.sh "$C"
+          grep -qF '{$SITE_ADDRESS:https://app.proxy-test.dev}' "$C"
+          grep -q '^[[:space:]]*email ops@proxy-test.dev$' "$C"
+
+      - name: A reserved example domain leaves the ACME account anonymous
+        run: |
+          cookiecutter . --no-input -o .generated-proxy-default project_name="Default App"
+          C=.generated-proxy-default/default-app/Caddyfile
+          scripts/check_caddyfile.sh "$C"
+          grep -qF '{$SITE_ADDRESS:https://myapp.example.com}' "$C"
+          # No mail reaches you@example.com and a CA may reject it. Omitting the
+          # directive entirely still issues certificates, on an anonymous account.
+          ! grep -q '^[[:space:]]*email ' "$C"
+
+      - name: A real domain that merely ends in example.com is not treated as reserved
+        run: |
+          cookiecutter . --no-input -o .generated-proxy-lookalike project_name="Lookalike App" \
+            author_email=dev@acme-example.com
+          C=.generated-proxy-lookalike/lookalike-app/Caddyfile
+          scripts/check_caddyfile.sh "$C"
+          grep -q '^[[:space:]]*email dev@acme-example.com$' "$C"
+
+  # Acceptance criteria 2-4: bringing up the production stack is sufficient for
+  # working TLS, HTTP redirects to it, and nothing but the proxy is on the
+  # host's ports. See scripts/check_tls_stack.sh for why localhost stands in for
+  # the real domain.
+  tls-stack:
+    name: Production stack serves HTTPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install cookiecutter
+
+      - name: Generate project
+        run: cookiecutter . --no-input -o .generated-tls project_name="TLS App"
+
+      # docker-compose.prod.yml runs pre-built images. Only the app image is on
+      # the path a request takes, so the worker images are not built here.
+      - name: Build the app image
+        working-directory: .generated-tls/tls-app
+        run: docker build -t tls-app-app:latest --target runner -f Dockerfile .
+
+      - name: Serve HTTPS from the stack
+        run: scripts/check_tls_stack.sh .generated-tls/tls-app
+
+  # Acceptance criteria for the provisioning playbook: a fresh host reaches a
+  # ready state from one command, SSH is key-only with no root login, the
+  # firewall exposes only what is needed, unattended upgrades and log rotation
+  # are active, and a second run changes nothing.
+  #
+  # scripts/check_provisioning.sh does the end-to-end run; this job adds what is
+  # true of the generated files before anything is run against a host.
+  provisioning:
+    name: A fresh host reaches a ready state
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Not the 3.14 the other jobs use: this Python is the control machine's,
+      # not the generated project's, and ansible-core supports a trailing window
+      # of interpreter versions rather than the newest.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # The `ansible` distribution rather than ansible-core: it bundles the
+      # community.general and ansible.posix collections the playbook uses, which
+      # is what ansible/requirements.yml documents for people who install core.
+      - run: python -m pip install cookiecutter ansible ansible-lint
+
+      - name: Generate project
+        run: |
+          cookiecutter . --no-input -o .generated-provision project_name="Provision App" \
+            author_name="Ada Lovelace"
+
+      - name: The deploy account is one name, in both places that use it
+        working-directory: .generated-provision/provision-app
+        run: |
+          grep -q '^deploy_user: adalovelace$' ansible/group_vars/all.yml
+          grep -q '^VPS_USER="adalovelace"$' scripts/deploy.sh
+
+      - name: A name that is not a valid Linux account still produces one
+        # useradd takes [a-z_][a-z0-9_-]*, so an apostrophe or a leading digit
+        # has to be dropped rather than passed through into a failing playbook.
+        run: |
+          cookiecutter . --no-input -o .generated-provision-name project_name="Punct App" \
+            author_name="9 O'Brien-Smith Jr."
+          grep -q "^deploy_user: obrien-smithjr$" .generated-provision-name/punct-app/ansible/group_vars/all.yml
+
+      - name: The playbook parses and lints clean
+        working-directory: .generated-provision/provision-app
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/provision.yml --syntax-check
+          ansible-lint ansible/
+
+      - name: Provision a throwaway host and check what it left
+        run: scripts/check_provisioning.sh .generated-provision/provision-app

@@ -10,5 +10,6 @@ venv/
 # macOS
 .DS_Store
 ._*
-.generated/
-.generated-alt/
+
+# Generated projects: the checks and CI jobs each use their own suffix
+.generated*/

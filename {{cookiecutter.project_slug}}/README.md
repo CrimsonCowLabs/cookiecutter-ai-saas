@@ -12,7 +12,7 @@
 - **Queue:** BullMQ (Redis-backed)
 - **Payments:** Stripe (subscriptions)
 - **Email:** Resend
-- **Deployment:** Docker, Caddy reverse proxy
+- **Deployment:** Docker Compose, Caddy reverse proxy (TLS in the stack)
 
 ## Getting Started
 
@@ -82,6 +82,105 @@ python worker.py
 npm run worker:db-writer
 ```
 
+## Your First Job
+
+The shipped example reads a web page and reports on it. It needs a model
+provider and nothing else — no search API, no scraping service.
+
+1. **Point it at a model.** In `.env.local` set `LLM_PROVIDER` and the matching
+   key:
+
+   ```bash
+   LLM_PROVIDER=openai
+   OPENAI_API_KEY=sk-...
+   ```
+
+   `anthropic` and `openrouter` work the same way. The default, `ollama`, needs
+   no key but does need Ollama running locally at `OLLAMA_BASE_URL`.
+
+2. **Sign in** and open `/dashboard`.
+
+3. **Paste a URL** into "New report" — optionally add a question to focus it —
+   and submit. You'll land on `/dashboard/jobs/<id>`, watch progress stream in
+   over SSE, and get a summary, the key takeaways and the sources.
+
+If the report can't be produced — no model key, an unreachable page, the agent
+spending its tool-call budget — the job still completes and tells you which of
+those happened, rather than failing silently.
+
+### What the example does
+
+| Step | What runs |
+| --- | --- |
+| Data Collection | `fetch_url` in `workers/app/tools/fetch_url.py` |
+| AI Processing | the bounded agent in `workers/app/agents/research_agent.py` |
+| Results Generation | assembles `summary`, `insights`, `sources` |
+
+`fetch_url` treats the URL as hostile input, because it is: end users supply it
+and the worker shares a network with Postgres and Redis. It allows http(s)
+only, refuses hosts that resolve to loopback, private, link-local or otherwise
+non-public addresses, re-checks every redirect hop, caps response size and
+time, accepts only text-ish content types, and truncates the extracted text so
+a large page can't blow up the prompt.
+
+### Adding a tool
+
+One new file. Create `workers/app/tools/my_tool.py` and expose a module-level
+`TOOL`:
+
+```python
+from langchain_core.tools import StructuredTool
+
+async def _summarize(text: str) -> str:
+    """Summarize text. The model reads this docstring, so be specific."""
+    ...
+
+TOOL = StructuredTool.from_function(coroutine=_summarize, name="summarize")
+```
+
+There is no registry to update: `workers/app/tools/__init__.py` discovers it and
+the agent gets it on the next job. A tool module that fails to import raises
+loudly instead of leaving the agent quietly short a tool.
+
+### Tracing what the agent did
+
+The worker can ship each agent run to [LangSmith](https://docs.smith.langchain.com/)
+so you can read the prompts, tool calls and completions behind a job. It is
+**off unless you turn it on** — a trace contains your users' prompts and the
+model's answers, so that is a decision, not a default.
+
+```bash
+# In .env.local (host) and .env.docker.local (containers)
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=lsv2_...
+```
+
+Both are required: with the switch on and no key, tracing stays off and the
+worker logs why at startup. `LANGSMITH_ENDPOINT` defaults to the hosted
+collector (`https://api.smith.langchain.com`); set it to your own instance's
+API URL (for example `http://langsmith.internal:8000/api`) to keep traces on
+your infrastructure. `LANGSMITH_PROJECT` chooses the project runs land in;
+`.env.example` prefills it with your project slug, and unset it falls back to
+LangSmith's `default` project.
+
+Runs are named `job:<job type>` and carry the job id, job type and user id as
+metadata, so a trace maps back to the row in `jobs`.
+
+Tracing never costs you a job. `workers/app/tracing.py` never raises, and once
+tracing is on the traces are delivered in the background, so an unreachable
+collector shows up as a log line while the job finishes normally.
+
+### Running the worker tests
+
+```bash
+cd workers/app
+poetry install
+poetry run pytest
+```
+
+They use a scripted fake model and an injected fake fetcher, so they need no
+API key and never touch the network.
+
 ## Dependency Notes
 
 Two dependencies are deliberately held back:
@@ -117,6 +216,111 @@ Drizzle ORM/Kit stay on the stable 0.x line; 1.0 is still a release candidate.
 
 See `scripts/deploy.sh` for available targets: `app`, `worker`, `db-writer`, `migrator`, `ops`.
 
+This assumes a host that has already been provisioned — see below — and
+`VPS_HOST` filled in at the top of `scripts/deploy.sh`.
+
+### Provisioning the host
+
+`ansible/provision.yml` takes a fresh VPS to the state the stack needs. Put the
+server's address in `ansible/inventory.ini` and run it:
+
+```bash
+pipx install ansible          # or pip install ansible
+ansible-playbook -i ansible/inventory.ini ansible/provision.yml
+```
+
+Running it again changes nothing, so re-run it rather than applying edits to
+`ansible/group_vars/all.yml` by hand. The host has to be Debian-family (Ubuntu
+LTS) and answer as root over SSH with your key the first time; a stock cloud
+image does.
+
+What it leaves behind:
+
+- **`__DEPLOY_USER__`**, the account `scripts/deploy.sh` logs in as — key-only,
+  passwordless sudo, in the `docker` group, with
+  `/app/{{ cookiecutter.project_slug }}` to deploy into.
+- **SSH with no way in but a key.** Root login and password authentication are
+  both off, and the playbook asserts that against `sshd -T` rather than trusting
+  the file it just wrote.
+- **A firewall** (`ufw`) denying inbound traffic except SSH, 80, and 443 on both
+  TCP and UDP — the UDP rule is HTTP/3, which Caddy advertises.
+- **`fail2ban`** banning repeated SSH authentication failures, reading the
+  journal rather than the `/var/log/auth.log` this release no longer writes.
+- **Unattended security upgrades**, restricted to security origins, with no
+  automatic reboot — kernel updates wait for a reboot you choose.
+- **Log rotation** that covers the three places logs pile up: `logrotate`, a
+  capped journal, and a cap on Docker's own container logs.
+- **Docker Engine and the compose plugin**, from Docker's apt repository rather
+  than the distribution's `docker.io`, which ships no `docker compose`.
+
+The first run connects as root; after it, root cannot log in, so later runs
+connect as the deploy user. The playbook works out which of the two answers
+before it connects, so the command never changes. Within the run, the deploy
+user is created, given your key, and watched logging in *before* root's access
+is removed — a wrong key fails while you can still get in.
+
+No reverse proxy is installed: Caddy runs in the stack (see [HTTPS](#https)), so
+provisioning's job is to leave 80 and 443 open and unoccupied. One caveat worth
+knowing: Docker publishes ports through its own iptables chain, which `ufw` does
+not filter. That is fine as long as the production stack publishes only 80 and
+443 — publish another and it is exposed whatever `ufw` says.
+
+### HTTPS
+
+TLS needs no step of its own. The production stack runs its own Caddy, so once
+the stack is up, HTTPS is up: Caddy obtains a certificate for
+`{{ cookiecutter.domain_name }}` from Let's Encrypt on first boot, renews it, and
+redirects HTTP to HTTPS. Nothing else publishes a port — the app, PostgreSQL and
+Redis are reachable only from inside the stack.
+
+Bringing the stack up is still `./scripts/deploy.sh full`: `docker-compose.prod.yml`
+has no build context, so the images have to be built and shipped, and
+`.env-production` has to exist next to the compose file or compose aborts.
+
+**Point `{{ cookiecutter.domain_name }}`'s A/AAAA record at the host before the
+first deploy.** Issuance is a challenge against that name, so it fails until DNS
+resolves and ports 80 and 443 reach the container. Caddy retries with a backoff,
+so fixing DNS later recovers on its own — but Let's Encrypt rate-limits
+failures, so the record is cheaper to get right first.
+
+Set `NEXTAUTH_URL=https://{{ cookiecutter.domain_name }}` in `.env-production`,
+and register that origin's `/api/auth/callback/...` URLs with your OAuth
+providers.
+
+Certificates and the ACME account key live in the `caddydata` volume. Keep it
+across deploys — losing it re-issues on the next boot, straight into a rate
+limit.
+
+Edit `Caddyfile` to change the proxy's behaviour: the domain was baked in at
+generation time, not read from anywhere at runtime, so serving a different name
+means editing that file.
+
+If `Caddyfile` has no `email` in a global block, that is deliberate: the address
+this project was generated with was at a reserved example domain, which a
+certificate authority can reject. Certificates are still issued on an anonymous
+account — but nobody is mailed when renewal starts failing, so add a real
+address once you have one:
+
+```caddyfile
+{
+	email you@your-real-domain.com
+}
+```
+
+#### Smoke-testing before DNS exists
+
+`SITE_ADDRESS` overrides the name Caddy serves. Point it at localhost and Caddy
+issues from its own local CA instead of asking Let's Encrypt for a name that
+does not resolve yet:
+
+```bash
+SITE_ADDRESS=https://localhost docker compose -f docker-compose.prod.yml up -d
+curl -k https://localhost/
+```
+
+The redirect, TLS termination and the proxy hop are the production path; only
+the issuer differs.
+
 ## Project Structure
 
 ```
@@ -137,10 +341,16 @@ lib/
   stripe.ts             # Stripe helpers
 workers/
   app/                  # Python worker
+    tracing.py          # Opt-in LangSmith tracing (off by default)
   db-writer/            # Node.js DB writer
 scripts/
   deploy.sh             # Deployment script
   migrate.sh            # Migration runner
+ansible/
+  provision.yml         # Takes a fresh VPS to a ready state
+  inventory.ini         # The host to provision
+  group_vars/all.yml    # Deploy account, open ports, log caps
+Caddyfile               # TLS and HTTP->HTTPS for {{ cookiecutter.domain_name }}
 ```
 
 ## License
