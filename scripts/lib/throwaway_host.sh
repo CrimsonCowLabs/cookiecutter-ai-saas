@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # A throwaway host the Ansible playbooks can be run against for real.
 #
-# Sourced by scripts/check_provisioning.sh and scripts/check_deploy.sh. It is
-# here rather than in either of them because both need the same thing and the
-# thing is fiddly: a privileged systemd container running a real sshd, reached
-# over real SSH on a published port, not `docker exec`. That matters because the
-# criteria those checks assert are about who can log in, what the firewall lets
-# through and what a deploy does over a connection — and a docker connection
-# would prove none of it.
+# Sourced by scripts/check_provisioning.sh, scripts/check_deploy.sh and
+# scripts/check_backups.sh. It is here rather than in any of them because they
+# all need the same thing and the thing is fiddly: a privileged systemd
+# container running a real sshd, reached over real SSH on a published port, not
+# `docker exec`. That matters because the criteria those checks assert are about
+# who can log in, what the firewall lets through, what a deploy does over a
+# connection and whether a systemd timer fires — and a docker connection would
+# prove none of it.
 #
 # What the container cannot stand in for is a reboot or a kernel of its own, so
 # nothing that uses it may depend on either.
@@ -33,10 +34,13 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok: $*"; }
 
 # Poll until a command succeeds. Everything here races something starting up.
+# A minute is enough for a service on an already-built image; raise
+# TH_AWAIT_TRIES before calling if what is being waited for includes pulling an
+# image over the network.
 await() {
   local what="$1"
   shift
-  for _ in $(seq 60); do
+  for _ in $(seq "${TH_AWAIT_TRIES:-60}"); do
     if "$@" >/dev/null 2>&1; then return 0; fi
     sleep 1
   done
@@ -145,4 +149,8 @@ th_ssh() { ssh "${TH_SSH_OPTS[@]}" "$1@127.0.0.1" "$2"; }
 # Run a command on the host the short way, for assertions that are not about
 # who can log in. Every refused login is a strike in fail2ban's ledger, and a
 # check should not be the thing that trips the jail it just installed.
-th_exec() { docker exec "$TH_NAME" bash -c "$1"; }
+#
+# -i so that a heredoc can be piped in, which is how a caller writes a file onto
+# the host. It allocates no TTY, so it changes nothing for callers that pipe
+# nothing.
+th_exec() { docker exec -i "$TH_NAME" bash -c "$1"; }

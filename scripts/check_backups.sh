@@ -6,14 +6,14 @@
 #
 # Three containers, and that they are three is the point:
 #
-#   * the application host — a privileged systemd container running a real sshd,
-#     reached over real SSH, which is the shape scripts/check_provisioning.sh
-#     uses. The criteria here are about systemd timers firing, a real journal
-#     and a real outbound network, and a `docker` connection would prove none of
-#     them. It is taken to a ready state by ansible/provision.yml, because "a
-#     provisioned host" is exactly ansible/backup.yml's contract, and running
-#     the real playbook is less code here than reimplementing a deploy account
-#     and a container runtime — as well as proof that the two compose.
+#   * the application host — scripts/lib/throwaway_host.sh's: a privileged
+#     systemd container running a real sshd, reached over real SSH. The criteria
+#     here are about systemd timers firing, a real journal and a real outbound
+#     network, and a `docker` connection would prove none of them. It is taken to
+#     a ready state by ansible/provision.yml, because "a provisioned host" is
+#     exactly ansible/backup.yml's contract, and running the real playbook is
+#     less code here than reimplementing a deploy account and a container
+#     runtime — as well as proof that the two compose.
 #   * the destination — a MinIO server standing in for S3-compatible object
 #     storage, in its own container with its own filesystem and network
 #     namespace. Every assertion about what arrived there is made from a *third*
@@ -40,15 +40,19 @@
 # against a tree that already has one — point it at a freshly generated project.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/throwaway_host.sh
+source "$SCRIPT_DIR/lib/throwaway_host.sh"
+
 PROJECT_DIR="${1:?usage: check_backups.sh <generated-project-dir>}"
 cd "$PROJECT_DIR"
 PROJECT_DIR="$PWD"
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
-pass() { echo "ok: $*"; }
+throwaway_host_require_tools
 
-command -v docker >/dev/null || fail "docker is required"
-command -v ansible-playbook >/dev/null || fail "ansible-playbook is required (pip install ansible)"
+# Longer than the harness's default minute, because what this waits for includes
+# pulling the Postgres and MinIO images over the network.
+TH_AWAIT_TRIES=120
 
 # An `x && fail` one-liner would be wrong: under `set -e` an AND-list whose left
 # side fails takes the whole script down, so a *missing* vault would abort here.
@@ -64,8 +68,6 @@ SSH_PORT=2223
 HOST="backup-check-host-$$"
 MINIO="backup-check-minio-$$"
 SINK="backup-check-sink-$$"
-WORK="$(mktemp -d)"
-KEY="$WORK/id_check"
 
 # Credentials for the stand-in destination. Not secret — nothing outside this
 # machine can reach it — but they do travel through the vault, because the vault
@@ -75,11 +77,11 @@ SK=backupchecksecret
 BUCKET=backups
 
 cleanup() {
-  echo "==> Tearing down"
-  docker rm -f -v "$HOST" "$MINIO" "$SINK" >/dev/null 2>&1 || true
-  docker image rm -f "$HOST" >/dev/null 2>&1 || true
-  rm -rf "$WORK"
+  # The two stand-ins are this script's; the application host, its image and the
+  # temp directory are the harness's.
+  docker rm -f -v "$MINIO" "$SINK" >/dev/null 2>&1 || true
   rm -f "$PROJECT_DIR/$VAULT"
+  throwaway_host_stop
 }
 trap cleanup EXIT
 
@@ -99,7 +101,12 @@ MAX_AGE_HOURS="$(read_var backup_max_age_hours)"
 [[ -n $DEPLOY_USER && -n $APP_DIR && -n $KEEP_LOCAL && -n $KEEP_REMOTE && -n $MAX_AGE_HOURS ]] \
   || fail "could not read the deploy user, app dir or retention policy out of $VARS"
 
-SLUG="$(basename "$APP_DIR")"
+# The project as the playbooks name it. Read rather than derived from app_dir:
+# deploy.yml passes compose `-p {{ project_slug }}`, and backup_compose_project
+# follows the same variable, so reading anything else here would make this check
+# agree with the playbooks only for as long as app_dir happens to end in the slug.
+SLUG="$(read_var project_slug)"
+[[ -n $SLUG ]] || fail "could not read project_slug out of $VARS"
 # The same names group_vars/all.yml derives, spelled out rather than read: a
 # rename inside the playbook that this script does not know about should show up
 # as a missing unit, not as an assertion that passes vacuously.
@@ -121,15 +128,11 @@ SENTINEL="sentinel-row-3f9a2c"
 
 echo "==> Backups for '$SLUG': unit $UNIT, keeping $KEEP_LOCAL local / $KEEP_REMOTE remote"
 
-await() {
-  local what="$1"
-  shift
-  for _ in $(seq 120); do
-    if "$@" >/dev/null 2>&1; then return 0; fi
-    sleep 1
-  done
-  fail "timed out waiting for $what"
-}
+# ── A host to install backups on ─────────────────────────────────────────────
+# Before the stand-ins, because the harness creates the temp directory the sink's
+# script is written into.
+echo "==> Building and starting the application host"
+throwaway_host_start "$HOST" "$SSH_PORT"
 
 # ── The destination, and somewhere for alerts to land ────────────────────────
 echo "==> Starting the stand-in destination and the alert sink"
@@ -140,7 +143,7 @@ docker run -d --name "$MINIO" \
 # Records every request, so an alert is asserted as a request that arrived
 # somewhere else rather than as a log line on the host that sent it. 204 with no
 # body: it keeps `curl -f` happy and says nothing a client might parse.
-cat > "$WORK/sink.py" <<'SINK'
+cat > "$TH_WORK/sink.py" <<'SINK'
 import http.server
 import pathlib
 
@@ -168,7 +171,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 LOG.touch()
 http.server.HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
 SINK
-docker run -d --name "$SINK" -v "$WORK/sink.py:/sink.py:ro" \
+docker run -d --name "$SINK" -v "$TH_WORK/sink.py:/sink.py:ro" \
   python:3-alpine python /sink.py >/dev/null
 
 # .NetworkSettings.Networks.bridge, not the top-level .NetworkSettings.IPAddress:
@@ -202,58 +205,10 @@ sink_lines() { sink_log | wc -l | tr -d ' '; }
 
 pass "the destination and the alert sink are up, on $MINIO_IP and $SINK_IP"
 
-# ── A host to install backups on ─────────────────────────────────────────────
-ssh-keygen -q -t ed25519 -N "" -f "$KEY" -C backup-check
-cp "$KEY.pub" "$WORK/authorized_keys"
-
-cat > "$WORK/Dockerfile" <<DOCKERFILE
-FROM ubuntu:24.04
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \\
-      systemd systemd-sysv dbus openssh-server sudo python3 \\
-      iproute2 iptables ca-certificates curl gnupg
-RUN systemctl disable ssh.socket && systemctl enable ssh \\
- && printf 'Port $SSH_PORT\\n' > /etc/ssh/sshd_config.d/10-port.conf \\
- && mkdir -p /root/.ssh && chmod 700 /root/.ssh
-COPY authorized_keys /root/.ssh/authorized_keys
-RUN chmod 600 /root/.ssh/authorized_keys
-STOPSIGNAL SIGRTMIN+3
-CMD ["/sbin/init"]
-DOCKERFILE
-
-echo "==> Building and starting the application host"
-docker build -q -t "$HOST" "$WORK" >/dev/null
-# Privileged with the host's cgroup namespace, for the reasons
-# check_provisioning.sh gives: systemd has to manage units and ufw has to write
-# iptables rules. Both image stores are volumes so that the Docker this host
-# installs is not stacking overlayfs on this container's own overlayfs, which
-# the kernel refuses — /var/lib/containerd as well as /var/lib/docker, because
-# Docker 29 keeps images in containerd's snapshotter by default and only the
-# older path would leave the inner daemon unable to start a container at all.
-docker run -d --name "$HOST" \
-  --privileged --cgroupns=host \
-  --tmpfs /run --tmpfs /run/lock \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-  --mount type=volume,dst=/var/lib/docker \
-  --mount type=volume,dst=/var/lib/containerd \
-  -p "127.0.0.1:$SSH_PORT:$SSH_PORT" \
-  "$HOST" >/dev/null
-
-# -i so a heredoc can be piped in, which is how .env-production gets written.
-in_host() { docker exec -i "$HOST" bash -c "$1"; }
-systemd_ready() {
-  docker exec "$HOST" systemctl is-system-running 2>/dev/null | grep -qE '^(running|degraded)$'
-}
-
-cat > "$WORK/inventory.ini" <<INVENTORY
-[vps]
-backup-check ansible_host=127.0.0.1 ansible_port=$SSH_PORT ansible_ssh_private_key_file=$KEY ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-INVENTORY
-
-printf 'backup-check-vault-password\n' > "$WORK/vault-pass"
+printf 'backup-check-vault-password\n' > "$TH_WORK/vault-pass"
 run_backup() {
-  ansible-playbook -i "$WORK/inventory.ini" ansible/backup.yml \
-    --vault-password-file "$WORK/vault-pass" "$@"
+  ansible-playbook -i "$TH_INVENTORY" ansible/backup.yml \
+    --vault-password-file "$TH_WORK/vault-pass" "$@"
 }
 
 # ── Criterion: the vault has to be there, and encrypted ──────────────────────
@@ -263,11 +218,11 @@ run_backup() {
 # otherwise work, and the credentials for the only copy of the database that
 # outlives this host would be sitting in the repository awaiting a `git add`.
 echo "==> Refusing to run without an encrypted vault"
-if run_backup > "$WORK/no-vault.log" 2>&1; then
+if run_backup > "$TH_WORK/no-vault.log" 2>&1; then
   fail "the playbook ran with no ansible/vault.yml at all"
 fi
-grep -q "does not exist" "$WORK/no-vault.log" \
-  || fail "a missing vault produced no message naming it: $(tail -3 "$WORK/no-vault.log")"
+grep -q "does not exist" "$TH_WORK/no-vault.log" \
+  || fail "a missing vault produced no message naming it: $(tail -3 "$TH_WORK/no-vault.log")"
 pass "a missing vault is refused, with a message saying how to make one"
 
 cat > "$VAULT" <<VAULTFILE
@@ -284,43 +239,41 @@ vault_backup_alert_url: http://$SINK_IP:8080/alert
 vault_backup_heartbeat_url: http://$SINK_IP:8080/heartbeat
 VAULTFILE
 
-if run_backup > "$WORK/plain-vault.log" 2>&1; then
+if run_backup > "$TH_WORK/plain-vault.log" 2>&1; then
   fail "the playbook ran against a plaintext ansible/vault.yml"
 fi
-grep -q "is not encrypted" "$WORK/plain-vault.log" \
-  || fail "an unencrypted vault was not refused by name: $(tail -3 "$WORK/plain-vault.log")"
+grep -q "is not encrypted" "$TH_WORK/plain-vault.log" \
+  || fail "an unencrypted vault was not refused by name: $(tail -3 "$TH_WORK/plain-vault.log")"
 pass "an unencrypted vault is refused before the host is touched"
 
-ansible-vault encrypt --vault-password-file "$WORK/vault-pass" "$VAULT" >/dev/null
+ansible-vault encrypt --vault-password-file "$TH_WORK/vault-pass" "$VAULT" >/dev/null
 head -1 "$VAULT" | grep -q '^\$ANSIBLE_VAULT' || fail "ansible-vault did not encrypt $VAULT"
 
 # ── Take the host to the state backup.yml expects ────────────────────────────
-await "systemd to finish booting" systemd_ready
-SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-          -o LogLevel=ERROR -o IdentitiesOnly=yes -o ConnectTimeout=5 -p "$SSH_PORT" -i "$KEY")
-await "sshd to answer" ssh "${SSH_OPTS[@]}" root@127.0.0.1 true
-
 echo "==> Provisioning the host (ansible/provision.yml)"
-ansible-playbook -i "$WORK/inventory.ini" ansible/provision.yml > "$WORK/provision.log" 2>&1 \
-  || { tail -40 "$WORK/provision.log" >&2; fail "provisioning the host failed"; }
+ansible-playbook -i "$TH_INVENTORY" ansible/provision.yml > "$TH_WORK/provision.log" 2>&1 \
+  || { tail -40 "$TH_WORK/provision.log" >&2; fail "provisioning the host failed"; }
 pass "the host is provisioned: $DEPLOY_USER, Docker and $APP_DIR"
 
 echo "==> Bringing up the stack's database and putting a row in it"
-docker cp docker-compose.prod.yml "$HOST:$APP_DIR/docker-compose.prod.yml" >/dev/null
-docker cp Caddyfile "$HOST:$APP_DIR/Caddyfile" >/dev/null
+docker cp docker-compose.prod.yml "$TH_NAME:$APP_DIR/docker-compose.prod.yml" >/dev/null
+docker cp Caddyfile "$TH_NAME:$APP_DIR/Caddyfile" >/dev/null
 # Only what Postgres needs in order to boot. None of it is a real credential,
 # and nothing else in the stack is on the path a backup takes.
-in_host "cat > $APP_DIR/.env-production" <<ENV
+th_exec "cat > $APP_DIR/.env-production" <<ENV
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 ENV
-# Run from $APP_DIR with no -p, exactly as a deploy does, so Compose names the
-# project after the directory — which is what backup_compose_project derives.
-in_host "cd $APP_DIR && docker compose -f docker-compose.prod.yml --env-file .env-production up -d --wait postgres" \
-  > "$WORK/stack.log" 2>&1 \
-  || { tail -20 "$WORK/stack.log" >&2; fail "could not bring up the stack's postgres on the host"; }
+# Run from $APP_DIR with an explicit -p, exactly as deploy.yml does, so the
+# containers carry the Compose project label backup_compose_project names. Left
+# implicit, Compose would name the project after the directory, and this check
+# would pass whether the playbook read project_slug or the directory — which is
+# the confusion it exists to rule out.
+th_exec "cd $APP_DIR && docker compose -p $SLUG -f docker-compose.prod.yml --env-file .env-production up -d --wait postgres" \
+  > "$TH_WORK/stack.log" 2>&1 \
+  || { tail -20 "$TH_WORK/stack.log" >&2; fail "could not bring up the stack's postgres on the host"; }
 
-in_host "cid=\$(docker ps -q --filter label=com.docker.compose.service=postgres | head -1);
+th_exec "cid=\$(docker ps -q --filter label=com.docker.compose.service=postgres | head -1);
   docker exec -i \$cid psql -v ON_ERROR_STOP=1 -U postgres -d '$DB_NAME' -c \"
     create table backup_check (id serial primary key, body text);
     insert into backup_check (body) values ('$SENTINEL');\"" >/dev/null \
@@ -329,11 +282,11 @@ pass "the stack's postgres is running with a row in it"
 
 # ── Criterion: a retention policy cannot be set to eat the last backup ───────
 echo "==> Refusing a retention policy of zero"
-if run_backup -e backup_keep_local=0 > "$WORK/keep-zero.log" 2>&1; then
+if run_backup -e backup_keep_local=0 > "$TH_WORK/keep-zero.log" 2>&1; then
   fail "the playbook installed a schedule that keeps zero local backups"
 fi
-grep -q "have to be at least 1" "$WORK/keep-zero.log" \
-  || fail "keeping zero backups was not refused by name: $(tail -5 "$WORK/keep-zero.log")"
+grep -q "have to be at least 1" "$TH_WORK/keep-zero.log" \
+  || fail "keeping zero backups was not refused by name: $(tail -5 "$TH_WORK/keep-zero.log")"
 pass "a retention policy that could delete the newest backup is refused"
 
 # ── Criterion: the dumps have to leave this host ─────────────────────────────
@@ -344,11 +297,11 @@ pass "a retention policy that could delete the newest backup is refused"
 # looks like a working backup.
 echo "==> Refusing a destination that is this host"
 if run_backup -e '{"vault_backup_remote": {"type": "local"}}' \
-     > "$WORK/local-remote.log" 2>&1; then
+     > "$TH_WORK/local-remote.log" 2>&1; then
   fail "the playbook installed a schedule writing its only copy to this host"
 fi
-grep -q "dies with the machine" "$WORK/local-remote.log" \
-  || fail "a same-host destination was not refused by name: $(tail -5 "$WORK/local-remote.log")"
+grep -q "dies with the machine" "$TH_WORK/local-remote.log" \
+  || fail "a same-host destination was not refused by name: $(tail -5 "$TH_WORK/local-remote.log")"
 pass "a destination that cannot outlive this host is refused"
 
 # ── Criterion: there has to be something to dump ─────────────────────────────
@@ -359,42 +312,42 @@ pass "a destination that cannot outlive this host is refused"
 # operator is still watching.
 echo "==> Refusing to schedule dumps of a database that is not there"
 if run_backup -e backup_compose_project=no-such-stack \
-     > "$WORK/no-source.log" 2>&1; then
+     > "$TH_WORK/no-source.log" 2>&1; then
   fail "the playbook installed a schedule for a database it never found"
 fi
-grep -q "No running postgres container" "$WORK/no-source.log" \
-  || fail "a missing database was not refused by name: $(tail -5 "$WORK/no-source.log")"
+grep -q "No running postgres container" "$TH_WORK/no-source.log" \
+  || fail "a missing database was not refused by name: $(tail -5 "$TH_WORK/no-source.log")"
 pass "a schedule with no database to dump is refused at install time"
 
 # ── Install the backups ──────────────────────────────────────────────────────
 echo "==> Run 1: installing backups"
-run_backup > "$WORK/run1.log" 2>&1 \
-  || { tail -40 "$WORK/run1.log" >&2; fail "installing backups failed"; }
+run_backup > "$TH_WORK/run1.log" 2>&1 \
+  || { tail -40 "$TH_WORK/run1.log" >&2; fail "installing backups failed"; }
 pass "one command installed the backup schedule"
 
-in_host "command -v rclone" >/dev/null || fail "rclone is not installed on the host"
+th_exec "command -v rclone" >/dev/null || fail "rclone is not installed on the host"
 
 # Criterion: the dumps run on a schedule. The units are there, both timers are
 # enabled so they survive a reboot, and both are loaded and waiting. That the
 # timer then actually fires is a separate claim, asserted at the end.
 for unit in "$UNIT.service" "$UNIT.timer" "$UNIT-watch.service" "$UNIT-watch.timer" \
             "$UNIT-alert@.service"; do
-  in_host "test -f /etc/systemd/system/$unit" || fail "$unit was not installed"
+  th_exec "test -f /etc/systemd/system/$unit" || fail "$unit was not installed"
 done
 for timer in "$UNIT.timer" "$UNIT-watch.timer"; do
-  in_host "systemctl is-enabled $timer" >/dev/null || fail "$timer is not enabled"
-  in_host "systemctl is-active $timer" >/dev/null || fail "$timer is not running"
-  next="$(in_host "systemctl show -p NextElapseUSecRealtime --value $timer" | tr -d '\r')"
+  th_exec "systemctl is-enabled $timer" >/dev/null || fail "$timer is not enabled"
+  th_exec "systemctl is-active $timer" >/dev/null || fail "$timer is not running"
+  next="$(th_exec "systemctl show -p NextElapseUSecRealtime --value $timer" | tr -d '\r')"
   [[ -n $next && $next != 0 ]] || fail "$timer has no next run scheduled"
 done
 pass "both timers are installed, enabled and waiting for their next run"
 
 # ── Criterion: a dump is taken, and it leaves the host ───────────────────────
 echo "==> Taking a backup"
-in_host "systemctl start $UNIT.service" \
-  || { in_host "journalctl -u $UNIT.service --no-pager -n 40" >&2; fail "the backup unit failed"; }
+th_exec "systemctl start $UNIT.service" \
+  || { th_exec "journalctl -u $UNIT.service --no-pager -n 40" >&2; fail "the backup unit failed"; }
 
-local_dumps() { in_host "cd $LOCAL_DIR && ls -1 db-*.dump 2>/dev/null | sort" || true; }
+local_dumps() { th_exec "cd $LOCAL_DIR && ls -1 db-*.dump 2>/dev/null | sort" || true; }
 local_count() { local_dumps | wc -l | tr -d ' '; }
 newest_local() { local_dumps | tail -1; }
 
@@ -403,14 +356,14 @@ DUMP1="$(newest_local)"
 
 # Not empty, and a real archive: the two things a failed pg_dump redirected into
 # a file would not be.
-in_host "test -s $LOCAL_DIR/$DUMP1" || fail "$DUMP1 is empty"
-in_host "head -c 5 $LOCAL_DIR/$DUMP1 | grep -q PGDMP" \
+th_exec "test -s $LOCAL_DIR/$DUMP1" || fail "$DUMP1 is empty"
+th_exec "head -c 5 $LOCAL_DIR/$DUMP1 | grep -q PGDMP" \
   || fail "$DUMP1 is not a Postgres custom-format archive"
 
 # Restorable enough to prove it is not an empty shell: pg_restore turns the
 # archive back into SQL and the seeded row is in it. This is what separates "a
 # file was produced" from "the database was backed up".
-in_host "cid=\$(docker ps -q --filter label=com.docker.compose.service=postgres | head -1);
+th_exec "cid=\$(docker ps -q --filter label=com.docker.compose.service=postgres | head -1);
   docker exec -i \$cid pg_restore -f - < $LOCAL_DIR/$DUMP1" 2>/dev/null \
   | grep -q "$SENTINEL" \
   || fail "$DUMP1 does not contain the row that was in the database"
@@ -425,13 +378,13 @@ remote_dumps | grep -qx "$DUMP1" || fail "$DUMP1 is not at the destination"
 # remote copy back through the host being backed up.
 sha256() { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi | awk '{ print $1 }'; }
 remote_sha="$(mc cat "d/$REMOTE_PATH/$DUMP1" | sha256)"
-local_sha="$(in_host "sha256sum $LOCAL_DIR/$DUMP1" | awk '{ print $1 }')"
+local_sha="$(th_exec "sha256sum $LOCAL_DIR/$DUMP1" | awk '{ print $1 }')"
 [[ "$remote_sha" == "$local_sha" ]] \
   || fail "the copy at the destination differs from the dump ($remote_sha vs $local_sha)"
 pass "the dump arrived at the destination byte-for-byte"
 
 # Criterion: at a glance, backups are still running.
-in_host "grep -q '$DUMP1' $STATE_DIR/last-success" \
+th_exec "grep -q '$DUMP1' $STATE_DIR/last-success" \
   || fail "$STATE_DIR/last-success does not name the dump that was just taken"
 sink_log | grep -q "GET /heartbeat" \
   || fail "no heartbeat ping reached the monitor after a successful backup"
@@ -439,7 +392,7 @@ pass "the success stamp names the dump, and the heartbeat monitor was pinged"
 
 # The staleness watch has to pass on a fresh backup, or its failing later would
 # prove nothing at all.
-in_host "systemctl start $UNIT-watch.service" \
+th_exec "systemctl start $UNIT-watch.service" \
   || fail "the staleness check fails even though a backup has just succeeded"
 pass "the staleness check passes while backups are fresh"
 
@@ -450,8 +403,8 @@ pass "the staleness check passes while backups are fresh"
 echo "==> Planting old dumps to push both retention limits over"
 plant_local=$((KEEP_LOCAL + 2))
 plant_remote=$((KEEP_REMOTE + 2))
-in_host "for i in \$(seq -w 1 $plant_local); do echo planted > $LOCAL_DIR/db-2020-\$i.dump; done"
-in_host "rm -rf /tmp/plant && mkdir -p /tmp/plant && cd /tmp/plant \
+th_exec "for i in \$(seq -w 1 $plant_local); do echo planted > $LOCAL_DIR/db-2020-\$i.dump; done"
+th_exec "rm -rf /tmp/plant && mkdir -p /tmp/plant && cd /tmp/plant \
   && for i in \$(seq -w 1 $plant_remote); do echo planted > db-2020-\$i.dump; done \
   && rclone --config $RCLONE_CONF copy /tmp/plant backup:$REMOTE_PATH" \
   || fail "could not plant old dumps at the destination"
@@ -462,8 +415,8 @@ OLDEST_REMOTE="db-2020-$(printf "%0${#plant_remote}d" 1).dump"
 NEWEST_PLANTED_REMOTE="db-2020-$(printf "%0${#plant_remote}d" "$plant_remote").dump"
 
 echo "==> Taking a second backup, which should prune"
-in_host "systemctl start $UNIT.service" \
-  || { in_host "journalctl -u $UNIT.service --no-pager -n 40" >&2; fail "the second backup failed"; }
+th_exec "systemctl start $UNIT.service" \
+  || { th_exec "journalctl -u $UNIT.service --no-pager -n 40" >&2; fail "the second backup failed"; }
 DUMP2="$(newest_local)"
 [[ $DUMP2 != "$DUMP1" ]] || fail "the second run did not produce a new dump"
 
@@ -504,17 +457,17 @@ NEXT_TO_GO="$(local_dumps | grep '^db-2020-' | head -1)"
 # would only fail after rclone's connection timeout.
 echo "==> Making the destination unreachable from the host"
 before_remote="$(remote_count)"
-before_stamp="$(in_host "stat -c %Y $STATE_DIR/last-success" | tr -d '\r')"
-in_host "ufw reject out to $MINIO_IP" >/dev/null \
+before_stamp="$(th_exec "stat -c %Y $STATE_DIR/last-success" | tr -d '\r')"
+th_exec "ufw reject out to $MINIO_IP" >/dev/null \
   || fail "could not cut the host's route to the destination"
 
-if in_host "systemctl start $UNIT.service" 2>/dev/null; then
+if th_exec "systemctl start $UNIT.service" 2>/dev/null; then
   fail "the backup unit reported success with the destination unreachable"
 fi
 # pg_dump itself still works here, which is the point: this is specifically the
 # criterion that an off-box copy is what makes a backup. No destination, no
 # backup, however well the dump ran.
-in_host "systemctl is-failed $UNIT.service" >/dev/null \
+th_exec "systemctl is-failed $UNIT.service" >/dev/null \
   || fail "the backup unit is not in a failed state after failing"
 pass "a dump that cannot leave the host is a failed backup, not a successful one"
 
@@ -526,28 +479,28 @@ alert="$(sink_log | grep 'POST /alert' | tail -1)"
 grep -q "$UNIT.service" <<<"$alert" \
   || fail "the alert does not name the unit that failed: $alert"
 grep -qi "failed" <<<"$alert" || fail "the alert does not say a backup failed: $alert"
-in_host "journalctl -t $UNIT -p err --no-pager | grep -qi 'FAILED'" \
+th_exec "journalctl -t $UNIT -p err --no-pager | grep -qi 'FAILED'" \
   || fail "nothing was written to the journal at priority err"
-in_host "test -f $STATE_DIR/FAILED" || fail "no failure marker was left in $STATE_DIR"
+th_exec "test -f $STATE_DIR/FAILED" || fail "no failure marker was left in $STATE_DIR"
 pass "the failure reached the alert endpoint off the host, the journal at err, and a marker file"
 
 # And it destroyed nothing. A half-working backup that still prunes is how a
 # retention policy comes to eat the last good copy.
 local_dumps | grep -qx "$NEXT_TO_GO" \
   || fail "the failed run pruned $NEXT_TO_GO; a run that cannot upload must not delete"
-[[ "$(in_host "stat -c %Y $STATE_DIR/last-success" | tr -d '\r')" == "$before_stamp" ]] \
+[[ "$(th_exec "stat -c %Y $STATE_DIR/last-success" | tr -d '\r')" == "$before_stamp" ]] \
   || fail "the failed run touched the success stamp, which is what the staleness check trusts"
 [[ "$(remote_count)" == "$before_remote" ]] \
   || fail "the failed run changed the destination: $(remote_count) objects, was $before_remote"
 pass "the failed run pruned nothing, locally or at the destination, and left the stamp alone"
 
 echo "==> Restoring the route to the destination"
-in_host "ufw delete reject out to $MINIO_IP" >/dev/null \
+th_exec "ufw delete reject out to $MINIO_IP" >/dev/null \
   || fail "could not restore the host's route to the destination"
-in_host "systemctl start $UNIT.service" \
-  || { in_host "journalctl -u $UNIT.service --no-pager -n 40" >&2
+th_exec "systemctl start $UNIT.service" \
+  || { th_exec "journalctl -u $UNIT.service --no-pager -n 40" >&2
        fail "the backup did not recover once the destination came back"; }
-in_host "test ! -f $STATE_DIR/FAILED" \
+th_exec "test ! -f $STATE_DIR/FAILED" \
   || fail "the failure marker survived a successful backup, so it says nothing about now"
 pass "a successful backup clears the failure marker"
 
@@ -556,8 +509,8 @@ pass "a successful backup clears the failure marker"
 # the timer simply stopped firing and the last backup recedes into the past.
 echo "==> Letting the last backup go stale"
 lines_before="$(sink_lines)"
-in_host "touch -d '$((MAX_AGE_HOURS + 24)) hours ago' $STATE_DIR/last-success"
-if in_host "systemctl start $UNIT-watch.service" 2>/dev/null; then
+th_exec "touch -d '$((MAX_AGE_HOURS + 24)) hours ago' $STATE_DIR/last-success"
+if th_exec "systemctl start $UNIT-watch.service" 2>/dev/null; then
   fail "the staleness check passed on a backup $((MAX_AGE_HOURS + 24)) hours old"
 fi
 await "the staleness alert to be delivered" \
@@ -569,17 +522,17 @@ grep -q "$UNIT-watch.service" <<<"$stale_alert" \
   || fail "the staleness check failed without sending anything"
 pass "a backup that quietly stopped raises an alert without anything having failed"
 
-in_host "touch $STATE_DIR/last-success"
+th_exec "touch $STATE_DIR/last-success"
 
 # ── Idempotence ─────────────────────────────────────────────────────────────
 echo "==> Run 2: re-running against the host"
-run_backup > "$WORK/run2.log" 2>&1 \
-  || { tail -40 "$WORK/run2.log" >&2; fail "the second run failed"; }
-recap="$(grep -E 'ok=[0-9]+ +changed=' "$WORK/run2.log" | tail -1)"
+run_backup > "$TH_WORK/run2.log" 2>&1 \
+  || { tail -40 "$TH_WORK/run2.log" >&2; fail "the second run failed"; }
+recap="$(grep -E 'ok=[0-9]+ +changed=' "$TH_WORK/run2.log" | tail -1)"
 [[ -n $recap ]] || fail "no play recap in run 2's output"
 if ! grep -qE 'changed=0 +unreachable=0 +failed=0' <<<"$recap"; then
   echo "--- tasks that reported a change on the second run ---" >&2
-  grep -B3 '^changed:' "$WORK/run2.log" >&2 || true
+  grep -B3 '^changed:' "$TH_WORK/run2.log" >&2 || true
   fail "re-running the playbook changed something: $recap"
 fi
 pass "re-running the playbook changes nothing ($recap)"
@@ -598,11 +551,11 @@ pass "re-running the playbook changes nothing ($recap)"
 # the same second, and useless here.
 echo "==> Run 3: a schedule this check can wait for, to prove the timer fires"
 run_backup -e '{"backup_schedule": "*-*-* *:*:00", "backup_schedule_jitter": "1s"}' \
-  > "$WORK/run3.log" 2>&1 \
-  || { tail -40 "$WORK/run3.log" >&2; fail "reinstalling with a per-minute schedule failed"; }
-in_host "rm -f $STATE_DIR/last-success"
+  > "$TH_WORK/run3.log" 2>&1 \
+  || { tail -40 "$TH_WORK/run3.log" >&2; fail "reinstalling with a per-minute schedule failed"; }
+th_exec "rm -f $STATE_DIR/last-success"
 await "the timer to fire the backup with nobody starting it" \
-  docker exec "$HOST" test -f "$STATE_DIR/last-success"
+  docker exec "$TH_NAME" test -f "$STATE_DIR/last-success"
 pass "the timer fires the backup on its own"
 
 echo "==> Backups check passed"
