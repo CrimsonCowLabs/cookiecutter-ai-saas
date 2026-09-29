@@ -3,7 +3,7 @@
 
 Runs after the project is generated to:
 - Replace __PLACEHOLDER__ strings in files that skip Jinja2 rendering (.ts/.tsx,
-  the Ansible tree) or that carry a value derived here (scripts/deploy.sh)
+  the Ansible tree) or that carry a value derived here (the deploy account)
 - Remove optional features based on cookiecutter choices
 """
 
@@ -24,6 +24,7 @@ INCLUDE_MARKETING_EXTRAS = "{{ cookiecutter.include_marketing_extras }}"
 AUTH_PROVIDERS = "{{ cookiecutter.auth_providers }}"
 INCLUDE_MAGIC_LINK = "{{ cookiecutter.include_magic_link }}"
 DAISYUI_THEME = "{{ cookiecutter.daisyui_theme }}"
+LLM_PROVIDER = "{{ cookiecutter.llm_provider }}"
 PYTHON_VERSION = "{{ cookiecutter.python_version }}"
 # Python floor that workers/app/pyproject.toml and poetry.lock ship with (the
 # cookiecutter.json default). Keep in sync with both.
@@ -33,10 +34,11 @@ def linux_username(name, fallback="deploy"):
     """Turn a person's name into a Linux account name.
 
     `useradd` accepts `[a-z_][a-z0-9_-]*` up to 32 characters, so a name like
-    "O'Brien Smith" has to lose more than its spaces. The deploy script and the
-    Ansible playbook both take the account name from here, so whatever this
-    returns is the one name in play — the alternative is a playbook that creates
-    an account the deploy script never logs in as.
+    "O'Brien Smith" has to lose more than its spaces. provision.yml creates the
+    account and deploy.yml logs in as it, both reading it out of
+    ansible/group_vars/all.yml, so whatever this returns is the one name in
+    play — the alternative is a playbook that creates an account the deploy
+    never logs in as.
     """
     cleaned = "".join(c for c in name.lower() if c.isascii() and (c.isalnum() or c in "_-"))
     cleaned = cleaned.lstrip("0123456789-")[:32]
@@ -67,16 +69,19 @@ REPLACEMENTS = {
     "__DAISYUI_THEMES__": DAISYUI_THEMES,
     "__AUTHOR_NAME__": AUTHOR_NAME,
     "__AUTHOR_EMAIL__": AUTHOR_EMAIL,
-    # The Linux account deploys land on, for both scripts/deploy.sh and the
-    # Ansible playbook that creates it.
+    # The Linux account provision.yml creates and deploy.yml logs in as.
     "__DEPLOY_USER__": DEPLOY_USER,
+    # The model provider .env-production is rendered with. The Ansible tree
+    # skips Jinja rendering, so the answer has to arrive as a placeholder.
+    "__LLM_PROVIDER__": LLM_PROVIDER,
 }
 
-# File extensions to process for placeholder replacement. .sh, .yml, .ini and
-# .md are here for the deploy script, the Ansible tree and the README, all of
-# which name the deploy account; the Ansible files additionally skip Jinja
-# rendering (see _copy_without_render), which is what keeps their own Jinja —
-# Ansible's, not cookiecutter's — intact through generation.
+# File extensions to process for placeholder replacement. .sh, .yml, .ini, .j2,
+# .example and .md are here for the Ansible tree and the README, which name the
+# deploy account, the domain and the model provider; the Ansible files
+# additionally skip Jinja rendering (see _copy_without_render), which is what
+# keeps their own Jinja — Ansible's, not cookiecutter's — intact through
+# generation, and is why they take values as placeholders at all.
 EXTENSIONS = {
     ".ts",
     ".tsx",
@@ -89,6 +94,8 @@ EXTENSIONS = {
     ".sh",
     ".yml",
     ".ini",
+    ".j2",
+    ".example",
     ".md",
 }
 
@@ -199,9 +206,11 @@ AUTH_PROVIDER_MARKERS = {
     "google_microsoft": {"google", "microsoft"},
 }
 
-# Files that may carry cc: markers.
-MARKER_EXTENSIONS = {".ts", ".tsx", ".mjs", ".js", ".css", ".py", ".toml"}
-MARKER_FILENAMES = {".env.example"}
+# Files that may carry cc: markers. .j2 and ansible/vault.yml.example are the
+# production env file and the secrets it is rendered from: which keys either
+# one carries follows the same answers the app's own code does.
+MARKER_EXTENSIONS = {".ts", ".tsx", ".mjs", ".js", ".css", ".py", ".toml", ".j2"}
+MARKER_FILENAMES = {".env.example", "vault.yml.example"}
 
 
 def marker_decisions():
@@ -282,7 +291,7 @@ def apply_markers():
 
 def make_scripts_executable():
     """Make shell scripts executable."""
-    scripts = ["scripts/deploy.sh", "scripts/migrate.sh"]
+    scripts = ["scripts/migrate.sh"]
     for script in scripts:
         if os.path.exists(script):
             os.chmod(script, 0o755)

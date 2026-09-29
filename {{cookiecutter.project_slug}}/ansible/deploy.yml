@@ -1,0 +1,876 @@
+---
+# Ship __PROJECT_NAME__ to a host ansible/provision.yml has already prepared:
+#
+#     ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass
+#
+# That is the whole command. The host comes from the same inventory
+# provision.yml uses, so there is no address to edit inside a script, and the
+# secrets come from ansible/vault.yml, which is committed encrypted — so there
+# is no plaintext env file to copy by hand and no secret in shell history.
+#
+# What a deploy does, in the order it does it, because the order is the
+# guarantee that a failure leaves the previous release serving:
+#
+#   1. Pre-flight, on the control machine, before anything is built: the vault
+#      is encrypted, and the name the certificate will be for resolves to the
+#      host being deployed to.
+#   2. Build the images locally and name the release after them.
+#   3. Ship the compose file, the Caddyfile and a freshly rendered
+#      .env-production, then load the new images under their release tag. None
+#      of this touches what is serving: the running containers hold their own
+#      images and their own copy of the env file.
+#   4. Start Postgres and Redis if they are not already up, and run the
+#      migrations from this release's migrator image. A failure here stops the
+#      play with the previous release still serving.
+#   5. Switch: move each :latest tag to this release and bring the stack up.
+#      If the switched-over stack does not answer, put the previous release's
+#      images back, restart on them, and fail loudly.
+#
+# Deploying a subset, as the old shell script's positional arguments did:
+#
+#     -e deploy_targets=app                 # just the app image
+#     -e deploy_targets=worker,db-writer    # two of them
+#     -e deploy_targets=none                # re-render .env-production and restart
+#     --tags preflight                      # check the vault and DNS, deploy nothing
+#
+# Three things this deliberately does not claim:
+#
+#   * ansible-vault decrypts on the *control machine*, in memory, and the
+#     rendered .env-production lands on the host. So nothing is at rest in
+#     plaintext anywhere except that one file, mode 0600, owned by the deploy
+#     user. The control machine still sees the secrets while it runs; it has to,
+#     because it is the thing holding the password.
+#   * The switch is `docker compose up -d`, which stops a container before it
+#     starts its replacement. A release that cannot start therefore costs the
+#     seconds between the recreate and the rollback, not zero. What is
+#     guaranteed is the end state: the previous release serving again.
+#   * The health gate proves the app boots and answers over the stack's own
+#     network. It says nothing about TLS, because a certificate arrives from an
+#     asynchronous ACME exchange that has not necessarily finished on a first
+#     deploy — which is what the DNS pre-flight is protecting instead.
+
+# ── Before anything is built ────────────────────────────────────────────────
+- name: Check what has to be true before a deploy starts
+  hosts: all
+  gather_facts: false
+  connection: local
+  tags: preflight
+  vars:
+    # As in provision.yml: this play runs on the control machine, so hand it
+    # the Python already running Ansible. Left to discover one, Ansible caches
+    # what it found as *this host's* interpreter and the next play tries to run
+    # the control machine's Python path on the VPS.
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+    # The same set the Caddyfile tests author_email against, and for the same
+    # reason: RFC 2606 reserves these, so a name under one of them can never
+    # resolve to a host you own, and a certificate for it can never be issued.
+    reserved_domains: [example.com, example.org, example.net]
+    reserved_tlds: [test, invalid, localhost, example, local]
+
+    # Resolve a name the way the rest of the internet would, using the control
+    # machine's own resolver and no extra Python packages. Both address
+    # families come back: a record that is AAAA-only still has to point here.
+    resolve_name_py: |
+      import socket
+      import sys
+      try:
+          infos = socket.getaddrinfo(sys.argv[1], None)
+      except socket.gaierror as exc:
+          print(exc.strerror or exc, file=sys.stderr)
+          raise SystemExit(2)
+      print("\n".join(sorted({info[4][0] for info in infos})))
+
+  tasks:
+    # ── The vault ───────────────────────────────────────────────────────────
+    - name: Look for the vault
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/vault.yml"
+      register: vault_file
+      tags: always
+
+    - name: Check whether the vault is encrypted
+      # `grep -q` rather than reading the file into a registered variable: if
+      # the vault is *not* encrypted, that variable would hold every secret in
+      # the project, printed by -vvv and kept by any callback plugin that logs.
+      # grep prints nothing and answers in its exit status.
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -q
+          - -e
+          - '^$ANSIBLE_VAULT'
+          - "{{ playbook_dir }}/vault.yml"
+      register: vault_encrypted
+      changed_when: false
+      failed_when: false
+      when: vault_file.stat.exists
+      tags: always
+
+    - name: Refuse to deploy unless the vault is encrypted
+      # The whole point of the vault is that the secrets are encrypted at rest.
+      # An operator who copied the example and forgot the last step would
+      # otherwise get a successful deploy and a plaintext secret committed to
+      # the repository, which is the failure this playbook exists to remove.
+      ansible.builtin.assert:
+        that:
+          - vault_file.stat.exists
+          - vault_encrypted.rc | default(1) == 0
+        fail_msg: >-
+          {{ 'ansible/vault.yml does not exist.'
+             if not vault_file.stat.exists
+             else 'ansible/vault.yml is not encrypted: its first line is not $ANSIBLE_VAULT.' }}
+          Set it up once:
+          cp ansible/vault.yml.example ansible/vault.yml,
+          fill in every value,
+          then ansible-vault encrypt ansible/vault.yml.
+          Commit the encrypted file; the vault password file is what .gitignore
+          keeps out. Use `ansible-vault edit ansible/vault.yml` to change a
+          value later, so it is never decrypted on disk.
+        quiet: true
+      tags: always
+
+    # ── DNS ─────────────────────────────────────────────────────────────────
+    # Why this is worth a pre-flight check rather than a paragraph in the
+    # README: the certificate authority rate-limits *failed* challenges. Caddy
+    # asks for a certificate the moment it starts, so a deploy that lands
+    # before the record propagates does not cost one failed attempt — it can
+    # lock issuance for that name for hours, on a host that is otherwise fine.
+    - name: Work out which name the certificate will be for
+      ansible.builtin.set_fact:
+        # site_address wins where it is set, because it is what Caddy actually
+        # serves; otherwise it is the Caddyfile's default, which is the domain.
+        # Only the host part is a DNS question.
+        deploy_site_name: >-
+          {{ (site_address | urlsplit('hostname'))
+             if site_address | length > 0 else domain_name }}
+        deploy_target_host: "{{ ansible_host | default(inventory_hostname) }}"
+
+    - name: Work out whether that name is one DNS can be asked about
+      # Three honest reasons not to ask, each of which would otherwise abort a
+      # deploy that is perfectly fine: the check is off; the stack is being
+      # smoke-tested under a loopback name, which no public record covers; or
+      # the inventory reaches the host by the very name being checked, which
+      # makes the comparison circular.
+      ansible.builtin.set_fact:
+        dns_skip_reason: >-
+          {{ 'dns_check is off'
+             if not (dns_check | bool)
+             else 'the served name is ' ~ deploy_site_name ~ ', which is not a public name'
+             if deploy_site_name in ['localhost', '127.0.0.1', '::1']
+             else 'the inventory reaches this host as ' ~ deploy_site_name
+                  ~ ' itself, so there is nothing to compare a record against'
+             if deploy_site_name == deploy_target_host
+             else '' }}
+
+    - name: Say why the DNS pre-flight is not running
+      ansible.builtin.debug:
+        msg: >-
+          Skipping the DNS check for {{ deploy_site_name }}:
+          {{ dns_skip_reason }}. Caddy will still ask for a certificate for
+          whatever name it serves.
+      when: dns_skip_reason | length > 0
+
+    - name: Refuse to deploy a name that can never resolve anywhere
+      # A project generated with the default domain has not had one chosen yet.
+      # Caddy would still ask for a certificate for it and still be refused, so
+      # this is a clearer place to stop than the proxy's logs.
+      ansible.builtin.assert:
+        that:
+          # The last label, and the last two. A suffix test would be wrong:
+          # acme-example.com is somebody's real domain and ends in example.com.
+          - deploy_site_name.split('.') | last not in reserved_tlds
+          - deploy_site_name.split('.')[-2:] | join('.') not in reserved_domains
+        fail_msg: >-
+          {{ deploy_site_name }} is a name RFC 2606 reserves for documentation,
+          so no certificate authority will ever issue for it and no record can
+          point it at this host. This is the domain answered at generation
+          time: set the real one in domain_name in
+          ansible/group_vars/all.yml (and in the Caddyfile, which carries it
+          too), or set site_address to https://localhost to smoke-test the
+          stack against Caddy's own local certificate authority instead.
+        quiet: true
+      when: dns_skip_reason | length == 0
+
+    - name: Resolve the served name and the target host
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - -c
+          - "{{ resolve_name_py }}"
+          - "{{ item }}"
+      loop:
+        - "{{ deploy_site_name }}"
+        - "{{ deploy_target_host }}"
+      register: dns_resolved
+      changed_when: false
+      failed_when: false
+      when: dns_skip_reason | length == 0
+
+    - name: Collect what resolved
+      ansible.builtin.set_fact:
+        site_addresses: "{{ dns_resolved.results[0].stdout_lines }}"
+        target_addresses: "{{ dns_resolved.results[1].stdout_lines }}"
+      when: dns_skip_reason | length == 0
+
+    - name: Refuse to deploy a name that does not resolve
+      ansible.builtin.assert:
+        that: site_addresses | length > 0
+        fail_msg: >-
+          {{ deploy_site_name }} does not resolve from this machine
+          ({{ dns_resolved.results[0].stderr | default('no answer') | trim }}).
+          Point its A and AAAA records at {{ deploy_target_host }} and wait for
+          the record to propagate before deploying: Caddy asks for a
+          certificate as it starts, and the certificate authority rate-limits
+          failed challenges, so deploying now can cost hours of issuance rather
+          than one failed attempt. `-e dns_check=false` deploys anyway.
+        quiet: true
+      when: dns_skip_reason | length == 0
+
+    - name: Refuse to deploy when the target host itself does not resolve
+      ansible.builtin.assert:
+        that: target_addresses | length > 0
+        fail_msg: >-
+          {{ deploy_target_host }}, the host in ansible/inventory.ini, does not
+          resolve from this machine, so there is nothing to compare
+          {{ deploy_site_name }}'s record against. Put the server's address in
+          the inventory, or `-e dns_check=false` to deploy without the check.
+        quiet: true
+      when: dns_skip_reason | length == 0
+
+    - name: Refuse to deploy a name that resolves somewhere other than the target
+      # Deliberately not phrased as "your DNS is wrong". A record that resolves
+      # elsewhere on purpose is a real configuration — a CDN or a proxy in
+      # front of the origin, where the answer is the proxy's address and never
+      # the host's. This check cannot tell that apart from a record that was
+      # never updated, so it says what it saw and stops, rather than claiming
+      # to have verified something it did not.
+      ansible.builtin.assert:
+        that: site_addresses | intersect(target_addresses) | length > 0
+        fail_msg: >-
+          {{ deploy_site_name }} resolves to
+          {{ site_addresses | join(', ') }}, but the host this deploy targets
+          ({{ deploy_target_host }}) is {{ target_addresses | join(', ') }}.
+          Nothing has been built or shipped.
+          If the record has not been updated yet, point its A and AAAA records
+          at {{ target_addresses | join(', ') }} and wait for it to propagate:
+          Caddy asks for a certificate as it starts, and the certificate
+          authority rate-limits failed challenges, so deploying now can cost
+          hours of issuance rather than one failed attempt.
+          If the answer is deliberately not this host — a record proxied
+          through a CDN, say — then this check cannot verify anything and
+          `-e dns_check=false` skips it. Make sure the proxy passes
+          /.well-known/acme-challenge/ through to this host, or give Caddy a
+          DNS challenge instead.
+        quiet: true
+      when: dns_skip_reason | length == 0
+
+    - name: Report the record checked
+      ansible.builtin.debug:
+        msg: >-
+          {{ deploy_site_name }} resolves to {{ site_addresses | join(', ') }},
+          which includes {{ deploy_target_host }} — the host this deploy
+          targets. Caddy can be issued a certificate for it.
+      when: dns_skip_reason | length == 0
+
+# ── The deploy itself ───────────────────────────────────────────────────────
+- name: Deploy the stack
+  hosts: all
+  gather_facts: false
+  # Deploying needs a provisioned host, and on one of those root cannot log in
+  # at all. There is nothing to probe for, unlike provision.yml.
+  remote_user: "{{ deploy_user }}"
+
+  vars_files:
+    # Encrypted, and checked to be encrypted by the play above. Ansible
+    # decrypts it here on the control machine; it is never copied to the host.
+    - vault.yml
+
+  vars:
+    project_root: "{{ playbook_dir | dirname }}"
+    # The compose project name, passed explicitly so that the network names the
+    # migrations and the health probe attach to are predictable rather than
+    # derived from whatever directory compose was invoked in.
+    compose_project: "{{ project_slug }}"
+    compose_file: docker-compose.prod.yml
+    env_file: "{{ app_dir }}/.env-production"
+
+    # How each image is built. This mirrors the Dockerfiles rather than being a
+    # decision anybody tunes per host, which is why it is here and not in
+    # group_vars/all.yml. `target` is absent where the Dockerfile has one stage.
+    deploy_images:
+      app:
+        dockerfile: Dockerfile
+        context: .
+        target: runner
+      worker:
+        dockerfile: workers/Dockerfile.worker
+        context: workers
+      db-writer:
+        dockerfile: workers/db-writer/Dockerfile.writer
+        context: .
+      migrator:
+        dockerfile: Dockerfile
+        context: .
+        target: migrator
+      ops:
+        dockerfile: Dockerfile
+        context: .
+        target: ops
+
+    # What the operator asked to ship. `none` and an empty value both mean "no
+    # images", which is how .env-production is re-rendered on its own.
+    deploy_requested: >-
+      {{ deploy_targets | split(',') | map('trim') | difference(['', 'none']) | sort }}
+
+    # migrator joins any non-empty set, because the migrator image already on
+    # the host belongs to the *previous* release: shipping app code and running
+    # the previous release's migrations against it is exactly the failure the
+    # ordering below exists to prevent. `-e run_migrations=false` opts out of
+    # running them; nothing opts out of shipping the right image.
+    deploy_shipped: >-
+      {{ (deploy_requested + (['migrator'] if deploy_requested | length > 0 else []))
+         | unique | sort }}
+
+    deploy_tarball: "/tmp/{{ project_slug }}-images.tar.gz"
+
+  tasks:
+    - name: Refuse an unknown deploy target
+      ansible.builtin.assert:
+        that: deploy_shipped | difference(deploy_images.keys() | list) | length == 0
+        fail_msg: >-
+          Unknown deploy target(s):
+          {{ deploy_shipped | difference(deploy_images.keys() | list) | join(', ') }}.
+          Valid targets are {{ deploy_images.keys() | sort | join(', ') }}, or
+          `none` to ship no image at all.
+        quiet: true
+
+    - name: Refuse to render an env file with a secret missing from it
+      # Names only, never values: this message is printed on failure. An empty
+      # NEXTAUTH_SECRET makes every session cookie forgeable and an empty
+      # database password is refused by Postgres, and both fail far from here.
+      ansible.builtin.assert:
+        that:
+          - vault_nextauth_secret | default('') | length > 0
+          - vault_postgres_password | default('') | length > 0
+        fail_msg: >-
+          vault_nextauth_secret and vault_postgres_password must both be set in
+          ansible/vault.yml (`ansible-vault edit ansible/vault.yml`). See
+          ansible/vault.yml.example for what each one is.
+        quiet: true
+
+    - name: Look for the directory deploys land in
+      ansible.builtin.stat:
+        path: "{{ app_dir }}"
+      register: app_dir_stat
+
+    - name: Refuse to deploy to a host that has not been provisioned
+      ansible.builtin.assert:
+        that: app_dir_stat.stat.isdir | default(false)
+        fail_msg: >-
+          {{ app_dir }} does not exist on this host, so it has not been
+          provisioned. Run `ansible-playbook -i ansible/inventory.ini
+          ansible/provision.yml` first: it creates the deploy account, the
+          firewall, Docker and this directory.
+        quiet: true
+
+    # ── Build, on the control machine ───────────────────────────────────────
+    - name: Build the images this release ships
+      # Built here rather than on the host on purpose: a $5 VPS running the
+      # database has no business also running `next build`, and the host never
+      # needs the source. What crosses the wire is an image.
+      #
+      # The image id is read either side of the build. A build whose every
+      # layer came from cache produces the same id, and reporting that as a
+      # change would make re-running an unchanged deploy look like work.
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          before="$(docker images --no-trunc --quiet "$IMAGE")"
+          docker build --platform "$PLATFORM" ${TARGET:+--target "$TARGET"} \
+            --tag "$IMAGE" --file "$DOCKERFILE" "$CONTEXT"
+          after="$(docker images --no-trunc --quiet "$IMAGE")"
+          if [ "$before" = "$after" ]; then echo IMAGE-UNCHANGED; else echo IMAGE-REBUILT; fi
+        chdir: "{{ project_root }}"
+      environment:
+        # Passed as environment rather than interpolated into the script, so a
+        # value with a space or a quote in it cannot become shell syntax.
+        IMAGE: "{{ project_slug }}-{{ item }}:latest"
+        PLATFORM: "{{ deploy_platform }}"
+        TARGET: "{{ deploy_images[item].target | default('') }}"
+        DOCKERFILE: "{{ deploy_images[item].dockerfile }}"
+        CONTEXT: "{{ deploy_images[item].context }}"
+      loop: "{{ deploy_shipped }}"
+      delegate_to: localhost
+      register: deploy_build
+      changed_when: "'IMAGE-REBUILT' in deploy_build.stdout"
+
+    - name: Read the id of each image just built
+      ansible.builtin.command:
+        argv: [docker, images, --no-trunc, --quiet, "{{ project_slug }}-{{ item }}:latest"]
+      loop: "{{ deploy_shipped }}"
+      delegate_to: localhost
+      changed_when: false
+      register: deploy_local_ids
+
+    - name: Index the built image ids by target
+      ansible.builtin.set_fact:
+        deploy_local_id: >-
+          {{ dict(deploy_shipped | zip(deploy_local_ids.results | map(attribute='stdout') | list)) }}
+
+    - name: Name the release after the images in it
+      # A digest of the image ids rather than a timestamp, so that deploying
+      # unchanged code twice produces the same release name instead of shipping
+      # byte-identical images under a new one — which is what lets a re-run
+      # transfer nothing and report no changes. `-e deploy_release=v1.4.0`
+      # overrides it for a release you want to be able to name out loud.
+      ansible.builtin.set_fact:
+        deploy_release: "{{ (deploy_manifest | hash('sha256'))[:12] }}"
+      vars:
+        deploy_manifest: >-
+          {{ deploy_shipped
+             | zip(deploy_local_ids.results | map(attribute='stdout') | list)
+             | map('join', '=') | join(' ') }}
+      when:
+        - deploy_release is not defined
+        - deploy_shipped | length > 0
+
+    - name: Look for the release tag on the images already built
+      ansible.builtin.command:
+        argv: [docker, images, --no-trunc, --quiet, "{{ project_slug }}-{{ item }}:{{ deploy_release }}"]
+      loop: "{{ deploy_shipped }}"
+      delegate_to: localhost
+      changed_when: false
+      register: deploy_release_tags
+      when: deploy_shipped | length > 0
+
+    - name: Tag the built images with the release name
+      # Skipped when the tag is already there, which it is on a re-run: the
+      # release name is derived from the ids, so the tag existing means it
+      # points at these images.
+      ansible.builtin.command:
+        argv:
+          - docker
+          - tag
+          - "{{ project_slug }}-{{ item.0 }}:latest"
+          - "{{ project_slug }}-{{ item.0 }}:{{ deploy_release }}"
+      loop: >-
+        {{ deploy_shipped | zip(deploy_release_tags.results | default([]) | map(attribute='stdout') | list) | list }}
+      loop_control:
+        label: "{{ item.0 }}"
+      delegate_to: localhost
+      changed_when: true
+      when:
+        - deploy_shipped | length > 0
+        - item.1 | length == 0
+
+    # ── Ship, without touching what is serving ──────────────────────────────
+    - name: Ship the compose file and the proxy configuration
+      # These two and the env file are everything the host needs. The old
+      # deploy script rsynced the whole working tree, which put the application
+      # source on a production box that only ever runs images.
+      ansible.builtin.copy:
+        src: "{{ project_root }}/{{ item }}"
+        dest: "{{ app_dir }}/{{ item }}"
+        owner: "{{ deploy_user }}"
+        mode: "0644"
+      loop:
+        - "{{ compose_file }}"
+        - Caddyfile
+
+    - name: Render .env-production on the host
+      # The secrets are decrypted on the control machine and written straight
+      # to their destination: 0600, owned by the account compose runs as. This
+      # file is the one place any of them exists in plaintext.
+      #
+      # no_log because a template task reports its diff, and the diff of this
+      # file is every secret in the project.
+      #
+      # Writing it before the switch is safe: `template` replaces the file by
+      # renaming a new one over it, so the containers currently running keep
+      # the copy they already read. They see this one when they are recreated,
+      # which happens below, after the migrations have passed.
+      ansible.builtin.template:
+        src: env-production.j2
+        dest: "{{ env_file }}"
+        owner: "{{ deploy_user }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Look for this release's tags on the host
+      ansible.builtin.command:
+        argv: [docker, images, --no-trunc, --quiet, "{{ project_slug }}-{{ item }}:{{ deploy_release }}"]
+      loop: "{{ deploy_shipped }}"
+      changed_when: false
+      register: host_release_tags
+      when: deploy_shipped | length > 0
+
+    - name: Look for this release's images on the host under some other tag
+      # An image the host already has under a previous release's tag is the
+      # same bytes and needs a name, not a transfer. Without this, changing one
+      # line of the app would re-ship every image in the release, because the
+      # release name — and so every tag in it — is new.
+      #
+      # The comparison is by image id, which `docker save` and `docker load`
+      # preserve: it is the digest of the image's own configuration. On a
+      # daemon that did not preserve it nothing would match and everything
+      # would be shipped — slower, never wrong.
+      ansible.builtin.command:
+        argv: [docker, image, inspect, "{{ deploy_local_id[item] }}"]
+      loop: "{{ deploy_shipped }}"
+      changed_when: false
+      # "not here" is an answer, not a failure.
+      failed_when: false
+      register: host_has_image
+      when: deploy_shipped | length > 0
+
+    - name: Work out which images have to cross the wire and which only need a name
+      ansible.builtin.set_fact:
+        deploy_retag: "{{ here | difference(tagged) }}"
+        deploy_missing: "{{ deploy_shipped | difference(tagged) | difference(here) }}"
+      vars:
+        tagged: >-
+          {{ host_release_tags.results | rejectattr('stdout', 'equalto', '')
+             | map(attribute='item') | list }}
+        here: >-
+          {{ host_has_image.results | selectattr('rc', 'equalto', 0)
+             | map(attribute='item') | list }}
+      when: deploy_shipped | length > 0
+
+    - name: Save the images the host does not have
+      # One tarball for all of them, so layers shared between images cross
+      # once. gzip -1 because the control machine's CPU, not the link, is what
+      # this waits on.
+      #
+      # The command is one line on purpose. A folded YAML scalar keeps the
+      # newlines of any line indented further than its first — so writing the
+      # image list across several lines puts a newline before the `|`, and the
+      # shell then runs `docker save` with nothing to pipe into, streaming a
+      # couple of gigabytes into Ansible's output buffer instead of a file.
+      # The list is built in `vars` below, where newlines inside a Jinja
+      # expression are harmless.
+      ansible.builtin.shell:
+        cmd: "set -o pipefail && docker save {{ images }} | gzip -1 > {{ deploy_tarball | quote }}"
+        # pipefail, so a `docker save` that dies does not leave a truncated
+        # tarball behind gzip's clean exit — and bash, because /bin/sh on
+        # Debian is dash, which has no pipefail and fails on the `set` itself.
+        executable: /bin/bash
+      vars:
+        images: >-
+          {{ deploy_missing | map('regex_replace', '^', project_slug ~ '-')
+                            | map('regex_replace', '$', ':' ~ deploy_release)
+                            | join(' ') }}
+      delegate_to: localhost
+      changed_when: true
+      when: deploy_missing | default([]) | length > 0
+
+    - name: Copy the tarball to the host
+      ansible.builtin.copy:
+        src: "{{ deploy_tarball }}"
+        dest: "{{ deploy_tarball }}"
+        mode: "0600"
+      when: deploy_missing | default([]) | length > 0
+
+    - name: Load the images on the host
+      ansible.builtin.shell:
+        cmd: "set -o pipefail && gunzip -c {{ deploy_tarball | quote }} | docker load"
+        # See the save task: /bin/sh on the host is dash, which has no pipefail.
+        executable: /bin/bash
+      changed_when: true
+      when: deploy_missing | default([]) | length > 0
+
+    - name: Remove the tarball from the host
+      ansible.builtin.file:
+        path: "{{ deploy_tarball }}"
+        state: absent
+      when: deploy_missing | default([]) | length > 0
+
+    - name: Remove the tarball from the control machine
+      ansible.builtin.file:
+        path: "{{ deploy_tarball }}"
+        state: absent
+      delegate_to: localhost
+      when: deploy_missing | default([]) | length > 0
+
+    - name: Give this release's name to images the host already had
+      ansible.builtin.command:
+        argv:
+          - docker
+          - tag
+          - "{{ deploy_local_id[item] }}"
+          - "{{ project_slug }}-{{ item }}:{{ deploy_release }}"
+      loop: "{{ deploy_retag | default([]) }}"
+      changed_when: true
+
+    - name: Confirm the host now has every image this release needs
+      # `docker load` reporting success is not the same as the tags being
+      # there, and everything below assumes they are.
+      ansible.builtin.command:
+        argv: [docker, images, --no-trunc, --quiet, "{{ project_slug }}-{{ item }}:{{ deploy_release }}"]
+      loop: "{{ deploy_shipped }}"
+      changed_when: false
+      register: host_release_tags_now
+      when: deploy_shipped | length > 0
+
+    - name: Refuse to switch to a release the host is missing
+      ansible.builtin.assert:
+        that: >-
+          host_release_tags_now.results
+          | selectattr('stdout', 'equalto', '') | list | length == 0
+        fail_msg: >-
+          These images are still not on the host after the transfer:
+          {{ host_release_tags_now.results | selectattr('stdout', 'equalto', '')
+             | map(attribute='item') | join(', ') }}.
+          Nothing has been switched over.
+        quiet: true
+      when: deploy_shipped | length > 0
+
+    - name: Note which images are serving now
+      # Read before anything moves a :latest tag. This is the rollback target,
+      # and it is why images carry a release tag as well as :latest: the
+      # previous release is still on the host, under its own name, loadable.
+      ansible.builtin.command:
+        argv: [docker, images, --no-trunc, --quiet, "{{ project_slug }}-{{ item }}:latest"]
+      loop: "{{ deploy_shipped }}"
+      changed_when: false
+      register: host_latest_ids
+      when: deploy_shipped | length > 0
+
+    - name: Remember what to roll back to
+      ansible.builtin.set_fact:
+        deploy_previous: >-
+          {{ dict(deploy_shipped | zip(host_latest_ids.results | default([])
+                                       | map(attribute='stdout') | list)) }}
+        deploy_new: >-
+          {{ dict(deploy_shipped | zip(host_release_tags_now.results | default([])
+                                       | map(attribute='stdout') | list)) }}
+      when: deploy_shipped | length > 0
+
+    # ── Migrations, before anything is switched ─────────────────────────────
+    - name: Start the database and the queue
+      # Not "the stack": Postgres and Redis are what the migrations need, and
+      # starting them changes nothing about what is being served. If they are
+      # already up — the normal case — this reports no change.
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        project_name: "{{ compose_project }}"
+        files: ["{{ compose_file }}"]
+        env_files: ["{{ env_file }}"]
+        services: [postgres, redis]
+        state: present
+        wait: true
+        wait_timeout: 180
+
+    - name: Run the database migrations
+      # This release's migrator image, so the migrations are the ones this
+      # release's code expects. It runs before the switch, so a migration that
+      # fails stops the play with the previous release still serving.
+      #
+      # changed_when: false because the thing that changes is the schema, and
+      # drizzle records what it applied; re-running against a schema that is
+      # already current is a no-op. A failure still fails the task, which is
+      # this task's entire purpose.
+      #
+      # If this ever fails with nothing but a spinner in its output, the
+      # database was not reachable: drizzle-kit exits 1 and prints no error at
+      # all in that case. The compose file's Postgres healthcheck probes TCP
+      # rather than the local socket precisely so that the task above cannot
+      # return before that is true.
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --env-file
+          - "{{ env_file }}"
+          - --network
+          - "{{ compose_project }}_default"
+          - "{{ project_slug }}-migrator:{{ deploy_release }}"
+      changed_when: false
+      when:
+        - run_migrations | bool
+        - deploy_shipped | length > 0
+
+    - name: Warn that no migrations were run
+      ansible.builtin.debug:
+        msg: >-
+          run_migrations is off, so the schema has not been touched. If this
+          release's code expects a migration, it is now running against a
+          database that has not had it applied.
+      when:
+        - not (run_migrations | bool)
+        - deploy_shipped | length > 0
+
+    # ── The switch ──────────────────────────────────────────────────────────
+    - name: Switch the stack to the new release
+      block:
+        - name: Point :latest at this release
+          # The compose file asks for :latest, so this tag *is* the switch.
+          # Skipped where it already points here, which is what makes a
+          # re-run of an unchanged deploy report nothing at all.
+          ansible.builtin.command:
+            argv:
+              - docker
+              - tag
+              - "{{ project_slug }}-{{ item }}:{{ deploy_release }}"
+              - "{{ project_slug }}-{{ item }}:latest"
+          loop: "{{ deploy_shipped }}"
+          changed_when: true
+          when:
+            - deploy_shipped | length > 0
+            - deploy_previous[item] != deploy_new[item]
+
+        - name: Bring the stack up
+          community.docker.docker_compose_v2:
+            project_src: "{{ app_dir }}"
+            project_name: "{{ compose_project }}"
+            files: ["{{ compose_file }}"]
+            env_files: ["{{ env_file }}"]
+            state: present
+
+        - name: Wait for the app to answer inside the stack
+          # The app image doubles as the client: it is already on the host, so
+          # this needs nothing pulled, and `node -e` runs whatever this release
+          # ships. Anything below 500 counts — a redirect or a 404 still means
+          # the server booted, wired up its database pool and is answering.
+          ansible.builtin.command:
+            argv:
+              - docker
+              - run
+              - --rm
+              - --network
+              - "{{ compose_project }}_caddy-net"
+              - "{{ project_slug }}-app:latest"
+              - node
+              - -e
+              - >-
+                fetch('http://app:3000/')
+                .then(r => process.exit(r.status < 500 ? 0 : 1))
+                .catch(() => process.exit(1))
+          register: app_probe
+          until: app_probe.rc == 0
+          retries: "{{ deploy_health_retries }}"
+          delay: "{{ deploy_health_delay }}"
+          changed_when: false
+
+        - name: Read which services the compose file says must stay up
+          # From the file rather than from `docker compose config`, whose
+          # output has the interpolated env file in it — every secret, in a
+          # registered variable. `restart: unless-stopped` is the compose
+          # file's own statement of what is meant to be running, so a service
+          # added to the stack is covered without anyone editing this playbook.
+          ansible.builtin.slurp:
+            src: "{{ app_dir }}/{{ compose_file }}"
+          register: compose_definition
+
+        - name: Read what is actually running
+          ansible.builtin.command:
+            argv: [docker, compose, -p, "{{ compose_project }}", -f, "{{ compose_file }}",
+                   --env-file, "{{ env_file }}", ps, --format, json]
+            chdir: "{{ app_dir }}"
+          changed_when: false
+          register: compose_ps
+
+        - name: Confirm every service meant to stay up is running
+          ansible.builtin.assert:
+            that: not_running | length == 0
+            fail_msg: >-
+              These services are not running after the switch:
+              {{ not_running | join(', ') }}.
+            quiet: true
+          vars:
+            # Compose emits one JSON object per line up to 2.20 and a single
+            # JSON array after it; both spellings are in the wild.
+            ps_entries: >-
+              {{ (compose_ps.stdout | from_json)
+                 if compose_ps.stdout | trim | first == '['
+                 else (compose_ps.stdout_lines | select | map('from_json') | list) }}
+            must_stay_up: >-
+              {{ (compose_definition.content | b64decode | from_yaml).services
+                 | dict2items
+                 | selectattr('value.restart', 'defined')
+                 | selectattr('value.restart', 'equalto', 'unless-stopped')
+                 | map(attribute='key') | list | sort }}
+            running: >-
+              {{ ps_entries | selectattr('State', 'equalto', 'running')
+                 | map(attribute='Service') | list }}
+            not_running: "{{ must_stay_up | difference(running) }}"
+
+      rescue:
+        - name: Work out what can be rolled back to
+          # Empty for an image the host had never seen before this deploy —
+          # a first deploy has no previous release, and saying so is more use
+          # than a rollback that silently does nothing.
+          ansible.builtin.set_fact:
+            deploy_rollback: >-
+              {{ deploy_previous | default({}) | dict2items
+                 | rejectattr('value', 'equalto', '')
+                 | map(attribute='key') | list | sort }}
+
+        - name: Put the previous release's images back
+          ansible.builtin.command:
+            argv:
+              - docker
+              - tag
+              - "{{ deploy_previous[item] }}"
+              - "{{ project_slug }}-{{ item }}:latest"
+          loop: "{{ deploy_rollback }}"
+          changed_when: true
+
+        - name: Bring the previous release back up
+          community.docker.docker_compose_v2:
+            project_src: "{{ app_dir }}"
+            project_name: "{{ compose_project }}"
+            files: ["{{ compose_file }}"]
+            env_files: ["{{ env_file }}"]
+            state: present
+          when: deploy_rollback | length > 0
+
+        - name: Report that the deploy failed and what is serving instead
+          ansible.builtin.fail:
+            msg: >-
+              Deploy of release {{ deploy_release | default('(no image)') }}
+              failed at the switch, after the images were shipped and the
+              migrations passed.
+              Rolled back: {{ deploy_rollback | join(', ') }} are serving the
+              previous release again. Both releases' images are still on the
+              host under their own tags, so retrying rebuilds nothing.
+              Migrations that ran are not undone: they applied to the database,
+              not to the release. Whatever failed above is what to fix.
+          when: deploy_rollback | length > 0
+
+        - name: Report that the deploy failed with nothing to fall back to
+          ansible.builtin.fail:
+            msg: >-
+              Deploy of release {{ deploy_release | default('(no image)') }}
+              failed at the switch, and there is no previous release on this
+              host to fall back to — this is a first deploy, so the stack is
+              not serving. Fix whatever failed above and run the same command
+              again; the images are already on the host.
+          when: deploy_rollback | length == 0
+
+    - name: Record what is deployed
+      # So that "what is on this host" is answerable from the host. Only
+      # written after a successful switch, so a failed deploy leaves it naming
+      # the release that is actually serving.
+      ansible.builtin.copy:
+        content: |
+          # Written by ansible/deploy.yml. The release name is a digest of the
+          # images in it, so it changes only when they do.
+          release: {{ deploy_release }}
+          shipped: {{ deploy_shipped | join(',') }}
+        dest: "{{ app_dir }}/RELEASE"
+        owner: "{{ deploy_user }}"
+        mode: "0644"
+      when: deploy_shipped | length > 0
+
+  post_tasks:
+    - name: Report what is serving
+      ansible.builtin.debug:
+        msg:
+          - "Deployed release {{ deploy_release | default('(no image shipped)') }}
+             to {{ deploy_target_host }}."
+          - "{{ deploy_shipped | join(', ') if deploy_shipped | length > 0
+                else 'No image shipped; .env-production was re-rendered and the stack restarted.' }}"
+          - "Serving https://{{ deploy_site_name }} — the certificate is Caddy's
+             to obtain, and its first attempt happens as it starts."

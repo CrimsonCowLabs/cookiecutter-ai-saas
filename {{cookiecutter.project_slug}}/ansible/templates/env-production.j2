@@ -1,0 +1,89 @@
+# .env-production for __PROJECT_NAME__, rendered on the host by
+# ansible/deploy.yml. Edits here are overwritten by the next deploy.
+#
+# Secrets come from ansible/vault.yml (encrypted in the repository); the rest
+# come from ansible/group_vars/all.yml or from the defaults written into this
+# template at generation time. A value that differs between hosts belongs in
+# group_vars; a value that must not be readable belongs in the vault. Nothing
+# belongs here.
+
+# ─── Auth ──────────────────────────────────────────────────────────────
+NEXTAUTH_URL={{ nextauth_url }}
+NEXTAUTH_SECRET={{ vault_nextauth_secret }}
+HOSTNAME=0.0.0.0
+# cc:begin google
+GOOGLE_ID={{ vault_google_id | default('') }}
+GOOGLE_SECRET={{ vault_google_secret | default('') }}
+# cc:end google
+# cc:begin microsoft
+MICROSOFT_ENTRA_ID_ID={{ vault_microsoft_entra_id_id | default('') }}
+MICROSOFT_ENTRA_ID_SECRET={{ vault_microsoft_entra_id_secret | default('') }}
+MICROSOFT_ENTRA_ID_TENANT_ID={{ vault_microsoft_entra_id_tenant_id | default('') }}
+# cc:end microsoft
+
+# ─── Database ─────────────────────────────────────────
+# postgres:5432 is the compose service, not a published port: only the stack's
+# own network reaches it.
+#
+# The password is url-encoded, because a generated one may contain characters a
+# URL would otherwise read as structure. The `replace` is not belt and braces:
+# Jinja's urlencode keeps `/` unescaped, which is fine in a path and fatal in
+# the userinfo — a password with a slash in it silently truncates the host, and
+# what you get is a connection failure a long way from here.
+POSTGRES_USER={{ postgres_user }}
+POSTGRES_PASSWORD={{ vault_postgres_password }}
+DATABASE_URL=postgresql://{{ postgres_user }}:{{ vault_postgres_password | urlencode | replace('/', '%2F') }}@postgres:5432/{{ postgres_db }}
+
+# ─── Redis (BullMQ) ──────────────────────────────────
+REDIS_URL=redis://redis:6379
+{% if site_address | length > 0 %}
+
+# ─── Proxy ────────────────────────────────────────────
+# Overrides the name Caddy serves; unset, the Caddyfile's own default applies.
+SITE_ADDRESS={{ site_address }}
+{% endif %}
+# cc:begin stripe
+
+# ─── Stripe ───────────────────────────────────────────
+STRIPE_PUBLIC_KEY={{ vault_stripe_public_key | default('') }}
+STRIPE_SECRET_KEY={{ vault_stripe_secret_key | default('') }}
+STRIPE_WEBHOOK_SECRET={{ vault_stripe_webhook_secret | default('') }}
+# cc:end stripe
+# cc:begin resend
+
+# ─── Resend (Email: magic link sign-in, contact form) ─
+RESEND_API_KEY={{ vault_resend_api_key | default('') }}
+# cc:end resend
+
+# ─── LLM Provider ──────────────────────────────────
+# Only the provider named here is read, so the other keys can stay empty in
+# the vault. The model names and base URLs are not secrets and not per-host,
+# which is why they are written here rather than in group_vars.
+LLM_PROVIDER=__LLM_PROVIDER__
+
+OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_MODEL=llama3.2
+OLLAMA_API_KEY={{ vault_ollama_api_key | default('') }}
+
+OPENAI_API_KEY={{ vault_openai_api_key | default('') }}
+
+ANTHROPIC_API_KEY={{ vault_anthropic_api_key | default('') }}
+
+OPENROUTER_API_KEY={{ vault_openrouter_api_key | default('') }}
+OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+
+# ─── AI step agent ────────────────────────────────────
+RESEARCH_MAX_TOOL_CALLS=8
+
+# ─── Tracing (LangSmith, optional) ───────────────────
+# Turning this on sends your users' prompts and the model's completions to the
+# collector below. An empty key keeps it off whatever this says.
+LANGSMITH_TRACING=false
+LANGSMITH_API_KEY={{ vault_langsmith_api_key | default('') }}
+LANGSMITH_ENDPOINT=
+LANGSMITH_PROJECT=__PROJECT_SLUG__
+
+# ─── Feature Flags ───────────────────────────────────
+FEATURE_SCHEDULED_TASKS=false
+FEATURE_EMAIL_NOTIFICATIONS=false

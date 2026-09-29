@@ -6,7 +6,7 @@
 #
 # This is provisioning, not deployment. It installs the host's state — the
 # deploy account, SSH hardening, firewall, intrusion banning, security updates,
-# log rotation and the container runtime — and stops there. `scripts/deploy.sh`
+# log rotation and the container runtime — and stops there. `ansible/deploy.yml`
 # ships the application on top of it and runs far more often, which is exactly
 # why the two are separate: a routine deploy should not re-run apt and firewall
 # tasks.
@@ -108,7 +108,7 @@
           {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}.
         quiet: true
 
-    # ── Packages the rest of the playbook and the deploy script rely on ──────
+    # ── Packages the rest of the playbook and deploy.yml rely on ─────────────
     - name: Install base packages
       ansible.builtin.apt:
         name:
@@ -121,7 +121,6 @@
           # Ubuntu (see the jail below), which needs these bindings. Without
           # them the sshd jail starts and quietly watches nothing.
           - python3-systemd
-          - rsync          # scripts/deploy.sh ships the stack with it
           - sudo
           - ufw
           - unattended-upgrades
@@ -231,7 +230,7 @@
           # No MaxAuthTries below sshd's default of 6. With passwords off there
           # is nothing to guess, and a lower limit locks out the operator whose
           # agent offers several keys before it reaches the right one — which
-          # scripts/deploy.sh would hit too. Repeat offenders are fail2ban's job.
+          # every deploy would hit too. Repeat offenders are fail2ban's job.
           LoginGraceTime 30
           ClientAliveInterval 300
           ClientAliveCountMax 2
@@ -461,8 +460,8 @@
 
     - name: Install Docker Engine and the compose plugin
       # From Docker's own repository rather than the distribution's: the
-      # packaged docker.io ships no `docker compose`, which the deploy script
-      # and docker-compose.prod.yml both need.
+      # packaged docker.io ships no `docker compose`, which deploy.yml and
+      # docker-compose.prod.yml both need.
       ansible.builtin.apt:
         name:
           - docker-ce
@@ -498,8 +497,8 @@
         state: started
 
     - name: Let the deploy user drive Docker
-      # Membership in this group is equivalent to root — it is what lets the
-      # deploy script load images and bring the stack up without sudo.
+      # Membership in this group is equivalent to root — it is what lets
+      # deploy.yml load images and bring the stack up without sudo.
       ansible.builtin.user:
         name: "{{ deploy_user }}"
         groups: docker
@@ -507,8 +506,9 @@
 
     # ── Where deploys land ───────────────────────────────────────────────────
     - name: Create the application directory
-      # scripts/deploy.sh rsyncs into this path as the deploy user, so it has to
-      # exist and be writable before the first deploy rather than after it fails.
+      # deploy.yml writes the compose file, the Caddyfile and .env-production
+      # into this path as the deploy user, so it has to exist and be writable
+      # before the first deploy rather than after it fails.
       ansible.builtin.file:
         path: "{{ app_dir }}"
         state: directory
@@ -543,6 +543,7 @@
         msg:
           - "Host provisioned. From here:"
           - "  1. Point __DOMAIN_NAME__'s A/AAAA record at this host, if you have not."
-          - "  2. Set VPS_HOST in scripts/deploy.sh to this host."
-          - "  3. ./scripts/deploy.sh full"
+          - "  2. cp ansible/vault.yml.example ansible/vault.yml, fill it in,"
+          - "     then ansible-vault encrypt ansible/vault.yml"
+          - "  3. ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass"
           - "SSH is key-only and root cannot log in; deploys go as {{ deploy_user }}."

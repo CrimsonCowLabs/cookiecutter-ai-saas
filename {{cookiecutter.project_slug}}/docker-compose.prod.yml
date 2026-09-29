@@ -30,6 +30,12 @@ services:
   app:
     image: {{ cookiecutter.project_slug }}-app:latest
     # No `ports`: the app is reachable only through caddy on caddy-net.
+    #
+    # env_file and nothing else: compose reads the file itself, as the deploy
+    # account, and injects the values as environment variables. Mounting it
+    # into the container as well would need it readable by the container's own
+    # uid, and ansible/deploy.yml writes it 0600 to the deploy account. Nothing
+    # in the app reads a file — every setting is read from the environment.
     env_file: .env-production
     depends_on:
       postgres:
@@ -37,8 +43,6 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    volumes:
-      - .env-production:/app/.env:ro
     networks:
       - caddy-net
       - default
@@ -52,8 +56,6 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    volumes:
-      - .env-production:/app/.env:ro
     deploy:
       replicas: 1
 
@@ -65,8 +67,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - .env-production:/app/.env:ro
     restart: unless-stopped
 
   ops:
@@ -75,9 +75,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Not a service: it exits as soon as it starts, and exists so that
+    # `docker compose run ops ...` has an image with the dev dependencies in
+    # it. `restart: unless-stopped` is what deploy.yml's health gate reads as
+    # "meant to stay up", so this must not have it.
     restart: "no"
-    volumes:
-      - .env-production:/app/.env:ro
+    # And a profile, so `up` leaves it alone entirely. Without one, every `up`
+    # starts a container that immediately exits — which makes a deploy of
+    # unchanged code report a change forever, and makes "did anything change?"
+    # useless as a signal. `docker compose run ops ...` enables the profile by
+    # naming the service, so nothing about using it changes.
+    profiles: ["tools"]
 
   postgres:
 {% if cookiecutter.database_extensions == 'pgvector' %}
@@ -94,7 +102,15 @@ services:
       # refuse to start against a volume mounted at .../data. Mount the parent.
       - pgdata:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      # Over TCP (-h), not the local socket. While Postgres initialises a new
+      # data directory it runs a temporary server on the socket only, so a
+      # socket probe reports "healthy" several seconds before anything outside
+      # the container can connect. Everything that waits on this — the app, the
+      # worker, and the migrations ansible/deploy.yml runs before switching
+      # over — would otherwise be let through too early on a first deploy, and
+      # drizzle-kit in particular exits 1 with no message at all when it cannot
+      # reach the database.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
