@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!-- THE INDEXING SWITCH. This one tag is the whole reason the page is not in
+         search results. Deleting this line launches it (issue #40) and nothing
+         else needs to change: there is no second copy, no robots.txt and no
+         header doing the same job, and scripts/check_site.py stays green either
+         way. Until billing (#27) and the guides (#28) are finished, search
+         traffic would land on a dead end, so the page stays public but
+         unlisted. -->
+    <meta name="robots" content="noindex, nofollow" />
+
+    <title>cookiecutter-ai-saas — a production-shaped AI SaaS in one command</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+
+  <body>
+    <main>
+      <header class="hero">
+        <p class="eyebrow">CrimsonCow Labs · open source template</p>
+        <h1>cookiecutter-ai-saas</h1>
+        <p class="tagline">
+          For builders and vibecoders who want a production-shaped AI SaaS without spending a
+          month assembling one.
+        </p>
+
+        <p class="install-label">Generate your project:</p>
+        <pre><code>pip install cookiecutter
+cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></pre>
+
+        <p class="actions">
+          <a class="button" href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas"
+            >Read the code on GitHub</a
+          >
+        </p>
+      </header>
+
+      <aside class="prerelease">
+        <h2>Pre-release</h2>
+        <p>
+          The template generates and builds today, and it is being hardened ahead of its first
+          tagged release. Billing does not yet work end to end and the guides are unwritten, so
+          this page is deliberately kept out of search until they do. Track the work in the
+          <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues">open issues</a>.
+        </p>
+      </aside>
+    </main>
+
+    <footer>
+      <p>
+        <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">CrimsonCowLabs/cookiecutter-ai-saas</a>
+        · MIT licensed
+      </p>
+    </footer>
+  </body>
+</html>

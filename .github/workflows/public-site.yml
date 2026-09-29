@@ -1,0 +1,67 @@
+name: Public site
+
+# The landing page in site/ is deployed to GitHub Pages, whose build source is
+# set to "GitHub Actions" (see docs/public-site.md). Only the page source can
+# change the page, so the rest of the repo does not trigger this workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "scripts/check_site.py"
+      - ".github/workflows/public-site.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - "scripts/check_site.py"
+      - ".github/workflows/public-site.yml"
+  # Redeploying an unchanged page, e.g. after changing the Pages settings.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Pages keeps one live version, so overlapping deploys would race. Queue instead
+# of cancelling: a cancelled deploy can leave the site on the older commit.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # Runs on pull requests too, so a page that has stopped being static or has
+  # lost its noindex tag fails review rather than reaching the live URL.
+  check:
+    name: Page is static and not indexable
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python scripts/check_site.py
+
+  deploy:
+    name: Deploy to Pages
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Job-level permissions replace the workflow-level block rather than adding
+    # to it, so contents: read has to be repeated here or checkout gets none.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      # No build step: site/ is uploaded exactly as it is committed.
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
