@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Fail if {{ app_dir | basename }} has not had a successful backup recently.
+#
+# Installed by ansible/backup.yml — edits here are overwritten by the next run.
+# Run by {{ backup_name }}-watch.service, on the schedule
+# {{ backup_name }}-watch.timer keeps ({{ backup_watch_schedule }}).
+#
+# This is the half of "backup failure is visible" that the backup unit cannot
+# cover. A run that fails is loud, because it exits non-zero and systemd starts
+# its OnFailure= unit. A timer that stopped firing fails nothing, and so says
+# nothing — masked by an upgrade, disabled by a well-meaning hand, on a host
+# whose clock walked, or pointed at a stack that was renamed. A backup that
+# quietly stopped a month ago otherwise looks exactly like one that never
+# failed, which is the state this exists to make impossible.
+#
+# It is a dead-man's switch, so its failure is the signal: this unit carries the
+# same OnFailure= as the backup itself, and being stale alerts on every run
+# until somebody fixes it.
+
+set -euo pipefail
+
+STAMP={{ backup_state_dir | quote }}/last-success
+MAX_HOURS={{ backup_max_age_hours | int }}
+
+if [ ! -f "$STAMP" ]; then
+  # Also the state immediately after installation, and correctly so: a schedule
+  # that has never produced a backup is not yet a backup system. The README says
+  # to run the unit once by hand after installing it, which clears this.
+  echo "no successful backup has ever been recorded in $STAMP" >&2
+  exit 1
+fi
+
+# The stamp's mtime, not the timestamp inside it: the backup script rewrites the
+# file on every success and never touches it on a failure, so the mtime is the
+# time of the last success by construction and needs no parsing to be trusted.
+age_hours=$(( ( $(date +%s) - $(stat -c %Y "$STAMP") ) / 3600 ))
+
+if [ "$age_hours" -gt "$MAX_HOURS" ]; then
+  echo "the last successful backup was ${age_hours}h ago, past the ${MAX_HOURS}h limit" >&2
+  echo "last success: $(cat "$STAMP")" >&2
+  exit 1
+fi
+
+echo "last successful backup ${age_hours}h ago (limit ${MAX_HOURS}h): $(cat "$STAMP")"

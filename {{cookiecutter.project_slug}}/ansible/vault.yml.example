@@ -1,10 +1,11 @@
 ---
 # Every secret __PROJECT_NAME__ needs in production, and nothing else.
 #
-# ansible/deploy.yml renders these into .env-production on the host. They are
-# the only values in the repository that must not be readable, which is why
-# they live in one file that is committed encrypted rather than scattered
-# through a script's arguments or an operator's shell history.
+# ansible/deploy.yml renders most of them into .env-production on the host,
+# and ansible/backup.yml reads the rest. They are the only values in the
+# repository that must not be readable, which is why they live in one file
+# that is committed encrypted rather than scattered through a script's
+# arguments or an operator's shell history.
 #
 # Set it up once:
 #
@@ -86,3 +87,63 @@ vault_openrouter_api_key: ""
 # it empty is what keeps tracing off: the worker treats a missing key as "not
 # configured" rather than failing a job over it.
 vault_langsmith_api_key: ""
+
+# ─── Backups ───────────────────────────────────────────────────────────────
+# Read by ansible/backup.yml. Nothing about the schedule or the retention policy
+# is here — those are decisions, not secrets, and they live in
+# ansible/group_vars/all.yml.
+
+# Where the dumps go. This is written verbatim into an rclone remote definition,
+# so the keys are rclone's own config keys for whichever backend you pick
+# (`rclone config` walks you through one interactively if you would rather see
+# the options; `rclone config show` then prints the stanza to copy in here).
+#
+# The example is an S3-compatible bucket, which is what most object storage
+# speaks — Backblaze B2, Cloudflare R2, Wasabi, DigitalOcean Spaces, Hetzner,
+# MinIO, AWS itself. Any other rclone backend works without touching the
+# playbook: swap the keys for that backend's (`type: b2` with `account` and
+# `key`, `type: sftp` with `host`, `user` and `key_file`, and so on).
+#
+# Use a credential scoped to this one bucket. It is stored on the application
+# host, so if the host is compromised so is the credential — and a credential
+# that can only write and list one bucket cannot be used to empty the rest of
+# your account. If your provider supports object lock or versioning, turn it on:
+# the prune step below is the one thing in this design that deletes, and a
+# write-only credential plus a locked bucket is what stops a compromised host
+# from destroying the history it has been uploading.
+#
+# Values are written into the config file exactly as given. rclone stores some
+# fields obscured rather than plain (an sftp `pass`, for one); for those, put
+# the output of `rclone obscure <value>` here rather than the value itself.
+vault_backup_remote:
+  type: s3
+  # "Other" works for most S3-compatible services. AWS, Minio, Wasabi,
+  # Cloudflare, Alibaba, Ceph and others have their own value — `rclone help
+  # backend s3` lists them, and naming yours turns on its quirks.
+  provider: Other
+  endpoint: ""
+  region: ""
+  access_key_id: ""
+  secret_access_key: ""
+
+# The bucket, and a prefix inside it, that dumps are written to. One prefix per
+# application: the prune step deletes the oldest objects it finds under this
+# path, so two stacks sharing a path would prune each other's backups.
+vault_backup_remote_path: ""
+
+# Where a failed backup is reported. Required: without it the only record of a
+# failure is a journal entry on the host that failed, which nobody reads
+# unprompted — so a backup that stopped working would look exactly like one that
+# never did. Anything that accepts a POST will do; an incoming webhook from
+# Slack, Discord, Mattermost or Google Chat, or an ntfy.sh topic, takes a minute
+# to create. Match backup_alert_payload in group_vars/all.yml to whichever you
+# pick. Treat the URL as a secret: it is a capability, not an address.
+vault_backup_alert_url: ""
+
+# Optional, and the only thing here that can tell you the host itself is gone.
+# A URL pinged after every successful backup, for a dead-man's-switch service
+# (healthchecks.io, Cronitor, an Uptime Kuma push monitor) that alerts when the
+# ping stops arriving. The staleness check installed on the host covers a timer
+# that stopped firing, but it cannot report a host that is powered off, out of
+# disk or destroyed — by then nothing on it runs. Leave empty to skip the ping.
+vault_backup_heartbeat_url: ""

@@ -1,0 +1,20 @@
+# Managed by ansible/backup.yml. Edits here are overwritten by the next run.
+#
+# One remote, named `backup`, built from vault_backup_remote in
+# ansible/vault.yml. The name is an internal handle that the installed scripts
+# refer to; the destination it points at is the operator's choice, and any
+# rclone backend works without this file or the playbook changing — whatever
+# keys are in vault_backup_remote are the keys written here.
+#
+# This file holds the destination's credentials in the clear, which is why it is
+# mode 0600 and owned by root. rclone's own `config` command obscures some
+# fields instead; those take the output of `rclone obscure` as their value in
+# the vault (vault.yml.example says so next to the setting).
+[backup]
+{% for key, value in vault_backup_remote | dictsort %}
+{# A key left empty in the vault is omitted rather than written blank, so the
+   backend's own default applies instead of an explicit empty string. #}
+{% if value | string | length > 0 %}
+{{ key }} = {{ value }}
+{% endif %}
+{% endfor %}

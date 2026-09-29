@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# Dump the {{ app_dir | basename }} database and copy it off this host.
+#
+# Installed by ansible/backup.yml — edits here are overwritten by the next run.
+# Started by {{ backup_name }}.service, on the schedule {{ backup_name }}.timer
+# keeps ({{ backup_schedule }}).
+#
+# A dump is not a backup; a dump that is somewhere else is. This script is
+# ordered around that: every step up to and including "the destination holds a
+# file the size of the one we sent" has to succeed, and any failure exits
+# non-zero *before* a single old backup is deleted. That is what makes a failure
+# visible ({{ backup_name }}.service carries an OnFailure= that reports it) and
+# non-destructive — a half-working backup that still prunes is how a retention
+# policy comes to eat the last good copy.
+#
+# Ansible renders this file as a Jinja template, which rules out one piece of
+# shell: an array length, written as a dollar and an opening brace followed by a
+# hash, cannot appear here. That pair of characters opens a Jinja comment, and
+# the render fails with "Missing end of comment tag". Count by listing instead.
+
+set -euo pipefail
+
+LOCAL_DIR={{ backup_local_dir | quote }}
+STATE_DIR={{ backup_state_dir | quote }}
+RCLONE_CONFIG={{ backup_rclone_config | quote }}
+REMOTE={{ backup_remote | quote }}
+KEEP_LOCAL={{ backup_keep_local | int }}
+KEEP_REMOTE={{ backup_keep_remote | int }}
+COMPOSE_PROJECT={{ backup_compose_project | quote }}
+HEARTBEAT_URL={{ vault_backup_heartbeat_url | default('') | quote }}
+
+SUCCESS_STAMP="$STATE_DIR/last-success"
+FAILURE_REASON="$STATE_DIR/last-failure-reason"
+FAILURE_MARKER="$STATE_DIR/FAILED"
+
+# Every dump this script has ever written matches this. The prune steps below
+# list by it, so a file an operator drops in the directory by hand — last
+# month's dump pulled back for a restore, say — is left alone rather than
+# counted against the retention policy and deleted.
+GLOB='db-*.dump'
+
+log() { printf '%s\n' "$*"; }
+
+# The reason is written down rather than only logged, because the thing that
+# tells the operator is a separate process: {{ backup_name }}-alert reads this
+# file so the alert says what broke instead of "a unit failed".
+die() {
+  printf '%s\n' "$*" > "$FAILURE_REASON"
+  printf 'FAILED: %s\n' "$*" >&2
+  exit 1
+}
+
+# A retention policy of zero would delete the dump this run just proved good.
+# The playbook refuses to install one, and this repeats the check because the
+# script can also be run by hand with the file edited.
+[ "$KEEP_LOCAL" -ge 1 ] || die "keep-local is $KEEP_LOCAL; it must be at least 1"
+[ "$KEEP_REMOTE" -ge 1 ] || die "keep-remote is $KEEP_REMOTE; it must be at least 1"
+
+rc() { rclone --config "$RCLONE_CONFIG" "$@"; }
+
+# ── Find the database ────────────────────────────────────────────────────────
+# By Compose's own labels, not by connecting to a port: docker-compose.prod.yml
+# publishes nothing for Postgres and keeps it on the `default` network, so
+# there is no address to reach it on from outside the stack. Looking the
+# container up also means a stack that is down is an immediate, explicit
+# failure rather than a dump of an empty database.
+container="$(docker ps --quiet --no-trunc \
+  --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
+  --filter "label=com.docker.compose.service=postgres" \
+  --filter "status=running" | head -1)"
+[ -n "$container" ] || die \
+  "no running postgres container in Compose project '$COMPOSE_PROJECT' — is the stack up?"
+
+# ── Take the dump ────────────────────────────────────────────────────────────
+# UTC, zero-padded, no separators: the names then sort lexicographically into
+# chronological order, which is the whole basis of the pruning below. Change
+# this format and pruning starts deleting the wrong files.
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+dump="$LOCAL_DIR/db-$stamp.dump"
+# Written under .part and renamed only once verified, so an interrupted run
+# never leaves behind a file that the next prune would count as a backup.
+part="$dump.part"
+rm -f "$part"
+
+# pg_dump runs *inside* the Postgres container. Two reasons: it is the only
+# place on this host with a client that cannot be older than the server (pg_dump
+# refuses to dump a server newer than itself, which is how a host-installed
+# client silently rots across a Postgres major upgrade), and the credentials are
+# already there. Taking the database name, user and password from the
+# container's own environment means there is no second copy of them to drift
+# from what docker-compose.prod.yml set.
+#
+# Custom format, not plain SQL: it is compressed, `pg_restore` can list and
+# verify it without a database to restore into (which the check below relies
+# on), and a selective restore of one table is possible later.
+log "dumping from container ${container:0:12} (Compose project $COMPOSE_PROJECT)"
+docker exec -i "$container" sh -c '
+  PGPASSWORD="$POSTGRES_PASSWORD" exec pg_dump \
+    --format=custom \
+    --username "${POSTGRES_USER:-postgres}" \
+    --dbname "$POSTGRES_DB"
+' > "$part" || die "pg_dump failed; see the journal for its output"
+
+# ── Prove the dump is a dump ─────────────────────────────────────────────────
+[ -s "$part" ] || die "pg_dump wrote an empty file"
+# Custom-format archives start with this. An error message captured into the
+# file instead of a dump would not.
+[ "$(head -c 5 "$part")" = "PGDMP" ] \
+  || die "$part is not a Postgres custom-format archive"
+# And it has to parse as an archive, not merely begin like one — this is what
+# fails when the dump was truncated part-way, which is the realistic corruption
+# on a host that ran out of disk.
+toc="$(docker exec -i "$container" pg_restore --list < "$part" 2>/dev/null)" \
+  || die "pg_restore cannot read $part; the dump is truncated or corrupt"
+# Logged rather than asserted non-zero: a project whose migrations have not run
+# yet legitimately has no objects, and refusing to back that up would fail every
+# run of a brand-new deployment. A count that drops to zero on a database that
+# had tables yesterday is visible here, in the journal, next to the run.
+objects="$(printf '%s\n' "$toc" | grep -c '^[0-9]' || true)"
+size="$(stat -c %s "$part")"
+mv "$part" "$dump"
+chmod 0600 "$dump"
+log "dumped $size bytes, $objects restorable objects, to $dump"
+
+# ── Copy it off this host ────────────────────────────────────────────────────
+# The step that turns a dump into a backup. Everything above is local and dies
+# with the machine.
+name="$(basename "$dump")"
+rc copyto "$dump" "$REMOTE/$name" \
+  || die "uploading $name to $REMOTE failed"
+
+# rclone verifies its own transfer, but that is rclone reporting on rclone. This
+# reads the destination back afterwards and compares what is there against what
+# was sent, which is the assertion the retention policy below is allowed to
+# delete on the strength of. It proves the object exists and is the right
+# length; it does not re-hash the contents, and no check from this host can
+# prove the destination will still be there next year.
+remote_size="$(rc lsl "$REMOTE/$name" 2>/dev/null | awk 'NR == 1 { print $1 }')" || true
+[ -n "$remote_size" ] \
+  || die "$REMOTE/$name is not there after what rclone reported as a successful upload"
+[ "$remote_size" = "$size" ] \
+  || die "$REMOTE/$name is $remote_size bytes at the destination, $size locally"
+log "verified $remote_size bytes at $REMOTE/$name"
+
+# ── Prune, now that there is a verified backup ───────────────────────────────
+# Nothing below can run unless every step above succeeded: `set -e` and `die`
+# have already left otherwise. So the newest backup is always a verified one,
+# and the retention policy can only ever be trimming behind it.
+prune_local() {
+  local -a all=()
+  # Newest first; see the timestamp format above for why sorting the names is
+  # sorting by time. `ls` of a glob that matches nothing is not an error here —
+  # a first run has only the dump it just took.
+  mapfile -t all < <(cd "$LOCAL_DIR" && ls -1 $GLOB 2>/dev/null | sort -r)
+  local old
+  for old in "${all[@]:$KEEP_LOCAL}"; do
+    # Belt and braces: the slice above cannot contain element 0, and this
+    # cannot delete the dump this run made. Pruning the newest copy is the one
+    # failure mode of a retention policy that is unrecoverable.
+    [ "$old" != "$name" ] || continue
+    rm -f -- "$LOCAL_DIR/$old"
+    log "pruned local $old"
+  done
+  # Re-listed rather than counted from the array, so the number logged is what
+  # survives rather than what was there when the run started.
+  log "keeping $(cd "$LOCAL_DIR" && ls -1 $GLOB 2>/dev/null | wc -l) local dumps, capped at $KEEP_LOCAL"
+}
+
+prune_remote() {
+  local -a all=()
+  local listing
+  # A destination that cannot be listed is a failure, not an empty destination:
+  # treating an unreadable remote as "nothing to prune" would be harmless today
+  # and would hide a credential that has lost its list permission for months.
+  listing="$(rc lsf --include "$GLOB" "$REMOTE")" \
+    || die "listing $REMOTE failed, so the destination's retention cannot be applied"
+  [ -n "$listing" ] || return 0
+  mapfile -t all < <(printf '%s\n' "$listing" | sort -r)
+  local old
+  for old in "${all[@]:$KEEP_REMOTE}"; do
+    [ "$old" != "$name" ] || continue
+    rc deletefile "$REMOTE/$old" || die "pruning $old at the destination failed"
+    log "pruned remote $old"
+  done
+  log "keeping $(rc lsf --include "$GLOB" "$REMOTE" | wc -l) dumps at the destination, capped at $KEEP_REMOTE"
+}
+
+prune_local
+prune_remote
+
+# ── Say so ───────────────────────────────────────────────────────────────────
+# The stamp is what {{ backup_name }}-watch reads to notice that backups have
+# stopped, and it is also the one-line answer to "are backups working?" for a
+# human with a shell. Its mtime is the time of the last *success*, deliberately
+# — a failed run must not touch it.
+printf '%s  %s  %s bytes  %s objects  -> %s\n' \
+  "$stamp" "$name" "$size" "$objects" "$REMOTE" > "$SUCCESS_STAMP"
+chmod 0644 "$SUCCESS_STAMP"
+rm -f "$FAILURE_MARKER" "$FAILURE_REASON"
+
+# A ping to something that is not this host, so that a host which stops running
+# backups altogether — powered off, out of disk, gone — is noticed by a service
+# that is still up. Failing to ping does not fail the backup: the backup is
+# already verified at the destination, and losing an alert channel must not turn
+# a good backup into a failed one. It is logged loudly instead.
+if [ -n "$HEARTBEAT_URL" ]; then
+  if curl -fsS --max-time 15 --retry 2 --retry-delay 3 -o /dev/null "$HEARTBEAT_URL"; then
+    log "pinged the heartbeat monitor"
+  else
+    log "WARNING: the backup succeeded but the heartbeat ping failed"
+  fi
+fi
+
+log "backup complete"

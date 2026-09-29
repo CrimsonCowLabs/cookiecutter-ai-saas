@@ -1,0 +1,17 @@
+# Managed by ansible/backup.yml. Edits here are overwritten by the next run.
+[Unit]
+Description=Take a {{ app_dir | basename }} database backup on a schedule
+
+[Timer]
+OnCalendar={{ backup_schedule }}
+# Spreads the start across this window, so a fleet of hosts does not arrive at
+# the same destination in the same second.
+RandomizedDelaySec={{ backup_schedule_jitter }}
+# Run a missed backup at the next boot. Without this, a host that was down at
+# the scheduled time skips that day entirely and the staleness watch is the
+# only thing that ever notices.
+Persistent=true
+Unit={{ backup_name }}.service
+
+[Install]
+WantedBy=timers.target

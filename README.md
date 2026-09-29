@@ -888,17 +888,191 @@ Edit `app/globals.css` (Tailwind 4 and DaisyUI 5 configure themes in CSS):
 
 ---
 
+## Database backups
+
+**Restore is not automated.** There is no `restore.sh` and no playbook that puts
+a dump back. What this ships is the half that has to happen unattended — dumps
+taken on a schedule, copied somewhere the host is not, pruned on a policy, and
+loud when they fail. Putting one back is a handful of commands you run
+deliberately, with the site down, having decided which dump to use:
+
+```bash
+# 1. Fetch the dump you want. `rclone lsl backup:<bucket>/<prefix>` lists them,
+#    newest last; the name is the UTC time it was taken.
+sudo rclone --config /etc/<slug>-db-backup/rclone.conf \
+  copyto backup:<bucket>/<prefix>/db-20250104T033012Z.dump /tmp/restore.dump
+
+# 2. Stop everything that writes. A restore into a live database is how you get
+#    a database that is neither the old one nor the new one.
+cd /app/<slug> && docker compose -f docker-compose.prod.yml \
+  --env-file .env-production stop app worker db-writer
+
+# 3. Restore. --clean --if-exists drops what is there first, so this is a
+#    replacement and not a merge.
+docker exec -i <slug>-postgres-1 pg_restore \
+  --clean --if-exists --no-owner -U postgres -d <slug_with_underscores> \
+  < /tmp/restore.dump
+
+# 4. Bring the stack back, and check the data before you let traffic in.
+docker compose -f docker-compose.prod.yml --env-file .env-production up -d
+```
+
+The reason that is four commands in a README rather than a script is that an
+untested restore script is worse than none: it reads as a guarantee, and the day
+you find out it does not work is the day you needed it. Run the steps above
+against a throwaway database once, before you need them.
+
+### Setting them up
+
+```bash
+cp ansible/vault.yml.example ansible/vault.yml
+$EDITOR ansible/vault.yml            # where the dumps go, and where alerts go
+ansible-vault encrypt ansible/vault.yml
+ansible-playbook -i ansible/inventory.ini ansible/backup.yml
+sudo systemctl start <slug>-db-backup.service    # on the host: take the first one now
+```
+
+Run it after the stack is up — the dump comes out of the running Postgres
+container, so a schedule installed against a stack that has never existed is a
+schedule that fails. Running it again is a no-op; CI asserts that a second run
+reports zero changes.
+
+Commit the encrypted `ansible/vault.yml`. It is ciphertext, and keeping it in
+the repository is what stops the only copy of those credentials from living on
+whichever laptop ran the playbook last. The password that opens it goes in
+`ansible/.vault-pass`, which `.gitignore` already excludes; point Ansible at it
+with `export ANSIBLE_VAULT_PASSWORD_FILE=ansible/.vault-pass`, or pass
+`--ask-vault-pass`. The playbook refuses to run against a `vault.yml` that is
+not encrypted, rather than quietly reading your storage credentials out of a
+plaintext file nobody has noticed yet.
+
+Two values are required, and the playbook refuses to install a schedule without
+either:
+
+- **`vault_backup_remote` and `vault_backup_remote_path`** — where the dumps go.
+  A dump that only ever lands on the machine being backed up is not a backup, so
+  "unconfigured" is a refusal and not a quiet fall back to local-only.
+- **`vault_backup_alert_url`** — where a failure goes. Without it the only
+  record of a broken backup is a journal entry on the broken host, which nobody
+  reads. See [When they break](#when-they-break).
+
+### What gets installed
+
+| Concern | What the playbook leaves |
+|---------|--------------------------|
+| The dump | `pg_dump --format=custom`, run **inside** the Postgres container — the only client on the host that cannot be older than the server, and the database publishes no port for anything else to connect to |
+| Schedule | `<slug>-db-backup.timer`, daily at 03:30 UTC with up to 45 minutes of jitter, `Persistent=true` so a missed run happens at the next boot |
+| Off-host copy | `rclone` to whatever `vault_backup_remote` names — any S3-compatible bucket, or any other rclone backend, without the playbook changing |
+| Verification | The archive has to parse as one (`pg_restore --list`), and the destination has to read back at the same size, before anything is pruned |
+| Retention | 7 dumps locally, 30 at the destination |
+| Failure | `OnFailure=` → a POST to `vault_backup_alert_url`, a journal entry at priority `err`, and a marker file at `/var/lib/<slug>-backup/FAILED` |
+| Staleness | `<slug>-db-backup-watch.timer`, every six hours, failing (and so alerting) when the last success is more than 30 hours old |
+| Credentials | `/etc/<slug>-db-backup/rclone.conf`, mode 0600, root-owned |
+| Dumps | `/var/backups/<slug>`, mode 0700 — a dump is the whole database, including every token in it |
+
+Everything adjustable is in `ansible/group_vars/all.yml` — the schedule, the
+retention numbers, the staleness limit, the alert payload's shape — or
+overridable for one run with `-e`.
+
+`rclone` comes from the distribution's package rather than a binary fetched at
+install time, so it receives security updates through the `unattended-upgrades`
+that [provisioning](#provisioning-the-host) already configured, and no version
+is pinned in this template to go stale. The trade is a release that lags
+upstream; if you need a backend or a flag it does not have, install a newer
+`rclone` by hand and the playbook will leave it alone.
+
+### The retention policy
+
+**7 local, 30 remote.** The local copy is a convenience — it makes a same-day
+restore fast and survives nothing — so it is deliberately shorter than the
+destination's, which is the copy that outlives the host. At a dump a day that is
+a week on the box and a month off it.
+
+Two rules make the policy safe rather than merely small:
+
+- **Nothing is pruned until a backup has been verified at the destination.** The
+  upload has to have happened and the object has to read back at the right size.
+  A run that fails deletes nothing — a half-working backup that still prunes is
+  how a retention policy comes to eat the last good copy.
+- **The newest dump can never be pruned.** Dumps are named for the UTC second
+  they were taken, so sorting the names sorts by time, and the prune only ever
+  looks past the newest *N*. The playbook additionally refuses to install a
+  policy of zero, and the script refuses to run under one.
+
+Both ends of that are asserted in CI against a real destination: an old dump is
+deleted, the newest is not, locally and remotely.
+
+### When they break
+
+A systemd timer whose service fails writes to the journal and stops there, and
+the journal is a complete record that nobody reads unprompted — which is why a
+timer that has been failing for a month looks exactly like one that has never
+failed. So a failure is reported three ways, with different failure modes:
+
+1. **A POST to `vault_backup_alert_url`**, the only one of the three that
+   reaches somebody who was not already looking. Anything that accepts a POST
+   works — a Slack, Discord or Mattermost incoming webhook, or an ntfy.sh topic.
+   `backup_alert_payload` in `group_vars/all.yml` is the body, with `%MESSAGE%`
+   substituted; the default shape is Slack's.
+2. **A journal entry at priority `err`**, so `journalctl -t <slug>-db-backup -p err`
+   finds it without your having to know which unit to ask about.
+3. **A marker file**, `/var/lib/<slug>-backup/FAILED`, removed by the next
+   successful backup — so its presence means "broken now", not "broke once".
+
+And separately, the case none of that catches: backups that simply stopped.
+Nothing failed, so nothing reported. `<slug>-db-backup-watch.timer` runs every
+six hours, fails when the last success is more than 30 hours old, and routes to
+the same alert. It is a dead-man's switch, so while backups are stale you will
+hear about it four times a day, deliberately — a nag is how an alert survives a
+busy week.
+
+To see the state by hand:
+
+```bash
+cat /var/lib/<slug>-backup/last-success      # when, which dump, how big
+systemctl list-timers '<slug>-db-backup*'    # when next, when last
+journalctl -u <slug>-db-backup.service -n 50
+```
+
+Set `vault_backup_heartbeat_url` as well if you want the one thing an on-host
+check cannot give you. It is pinged after every successful backup, for a
+dead-man's-switch service (healthchecks.io, Cronitor, an Uptime Kuma push
+monitor) that alerts when the pings stop. The staleness timer covers a schedule
+that stopped firing; it cannot report a host that is powered off, out of disk or
+destroyed, because by then nothing on it runs.
+
+### What this does not cover
+
+- **Restore, as above.** Practise it before you need it.
+- **Anything but Postgres.** Redis holds the job queue and the `caddydata`
+  volume holds certificates. Losing the queue costs in-flight jobs; losing the
+  certificates costs a re-issue, and Let's Encrypt rate-limits those.
+- **Encryption at rest beyond the destination's own.** The dump is uploaded as
+  `pg_dump` wrote it, so what protects it is the bucket's access control and the
+  provider's server-side encryption. If you need the destination unable to read
+  it, add an `rclone` crypt remote — and then keep that key somewhere other than
+  the host it encrypts, or the backup is unreadable in exactly the case it
+  exists for.
+- **A credential that cannot delete.** Pruning needs delete, so the credential
+  on the host has it, which means a compromised host can empty the bucket. Scope
+  the credential to that one bucket, and turn on object lock or versioning if
+  your provider offers it.
+
+---
+
 ## CI flag matrix
 
 CI generates, typechecks, lints and builds eight named flag combinations (the `flag-matrix` job in `.github/workflows/generate-and-build.yml`). `python scripts/check_ci_matrix.py` fails if any value of any choice in `cookiecutter.json` is missing from the matrix, so a new choice value needs a matrix entry.
 
-Three further jobs cover deployment, which no flag varies:
+Five further jobs cover the parts no flag varies — serving, provisioning, deploying and backing up:
 
 | Job | What it proves |
 |---|---|
 | `proxy-config` | The `Caddyfile` names the `domain_name` that was answered, and carries an `author_email` as the ACME account only when mail could reach it. Each case also goes through `scripts/check_caddyfile.sh`: fully rendered, `caddy fmt`-clean, and accepted by `caddy validate` |
 | `tls-stack` | Bringing up `docker-compose.prod.yml` serves the app over HTTPS with a certificate that verifies, redirects HTTP to it, and publishes no port but the proxy's. Runs `scripts/check_tls_stack.sh` |
 | `provisioning` | The playbook lints clean, then takes a throwaway host from stock image to ready state and leaves it that way: root refused over SSH, the deploy user logging in with a key, only the expected ports open, upgrades and rotation active — and a second run that changes nothing. Runs `scripts/check_provisioning.sh` |
+| `deploy` | The deploy playbook lints clean, the template ships a vault example and no vault, and every name in that example is prefixed `vault_`. Then a throwaway host is deployed to for real: secrets reaching it only as a `0600` file rendered from the encrypted vault and printed nowhere, even under `--diff`; the DNS pre-flight aborting when the served name resolves somewhere other than the target; migrations applied before the new containers serve; a deliberately broken release leaving the previous one still answering — and a second run that changes nothing. Runs `scripts/check_deploy.sh` |
+| `backups` | The backup playbook lints clean, refuses an unencrypted vault and a retention policy of zero, then installs itself on a provisioned throwaway host and is held to every criterion as behaviour: a dump taken from a live Postgres that still contains its rows, that same dump byte-for-byte at a separate destination, the timer firing on its own, pruning that deletes the oldest and never the newest, a broken destination surfacing as an alert delivered off the host while deleting nothing — and a second run that changes nothing. Runs `scripts/check_backups.sh` |
 
 ---
 

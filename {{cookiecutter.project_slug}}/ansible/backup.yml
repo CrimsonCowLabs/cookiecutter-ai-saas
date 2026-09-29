@@ -1,0 +1,327 @@
+---
+# Install scheduled, off-host database backups for __PROJECT_NAME__:
+#
+#     ansible-playbook -i ansible/inventory.ini ansible/backup.yml
+#
+# Nothing in this template used to back the database up, which for a product
+# with paying users is the difference between a bad day and the end of the
+# company. This playbook installs the part that a host cannot be trusted to do
+# for itself: a nightly `pg_dump` out of the running Postgres container, a
+# verified copy at a destination that is not this machine, a retention policy
+# that trims behind the newest verified backup and never into it, and two ways
+# for a failure to reach a human.
+#
+# It is not provisioning and it is not deploying. Provisioning
+# (ansible/provision.yml) ends at a ready host and runs once; deploying ships
+# the application and runs constantly. This runs when the backup arrangement
+# itself changes — a new destination, a different retention policy — and is a
+# no-op in between. Run it after the stack is up: it looks the database
+# container up by its Compose labels, and installing a schedule that points at
+# a stack that has never existed would be installing a schedule that fails.
+#
+# Running it twice changes nothing; CI asserts that a second run reports zero
+# changes.
+#
+# Restore is deliberately not automated here. See the README's backups section
+# for what a restore actually involves; it is a handful of commands, and the
+# reason it is not a script is that an untested restore script is worse than
+# none.
+
+# ── Before anything is touched ──────────────────────────────────────────────
+# The destination's credentials are secrets, so they live in an Ansible vault.
+# A vault that has been filled in and not encrypted is the failure worth
+# catching loudly: the run would succeed, and the credentials for the one copy
+# of the database that outlives this host would be sitting in plaintext in the
+# repository, committed by whoever next ran `git add -A`.
+- name: Refuse to run unless the vault is encrypted
+  hosts: all
+  gather_facts: false
+  connection: local
+  vars:
+    # This play runs on the control machine, so hand it the Python already
+    # running Ansible. Left to discover one, Ansible caches what it found as
+    # *this host's* interpreter, and the next play then tries to run the
+    # control machine's Python path on the VPS. provision.yml does the same,
+    # for the same reason.
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    vault_file: "{{ playbook_dir }}/vault.yml"
+  tasks:
+    - name: Look for the vault
+      ansible.builtin.stat:
+        path: "{{ vault_file }}"
+      register: vault_stat
+
+    - name: Fail if there is no vault at all
+      ansible.builtin.assert:
+        that: vault_stat.stat.exists
+        fail_msg: >-
+          {{ vault_file }} does not exist. Copy ansible/vault.yml.example to
+          ansible/vault.yml, fill in where the backups go, then run
+          `ansible-vault encrypt ansible/vault.yml`.
+        quiet: true
+
+    - name: Read the vault's first bytes without decrypting it
+      # slurp, not the file lookup: `lookup('file', ...)` transparently decrypts
+      # a vault, which would make this check pass for both an encrypted file and
+      # a plaintext one. slurp returns what is on disk.
+      ansible.builtin.slurp:
+        src: "{{ vault_file }}"
+      register: vault_raw
+
+    - name: Refuse to run against an unencrypted vault
+      ansible.builtin.assert:
+        that: (vault_raw.content | b64decode).startswith('$ANSIBLE_VAULT')
+        fail_msg: >-
+          {{ vault_file }} is not encrypted — its first line does not begin
+          with $ANSIBLE_VAULT. Encrypt it before running this playbook:
+          `ansible-vault encrypt ansible/vault.yml`. The encrypted file is
+          meant to be committed; the password that opens it belongs in
+          ansible/.vault-pass, which .gitignore excludes.
+        quiet: true
+
+# ── The backups themselves ──────────────────────────────────────────────────
+- name: Install scheduled database backups
+  hosts: all
+  # No account probe here, unlike provision.yml: this playbook runs against a
+  # host that provisioning has already hardened, so root cannot log in and the
+  # deploy account is the only way in.
+  remote_user: "{{ deploy_user }}"
+  become: true
+
+  vars_files:
+    # Where the destination lives and how to authenticate to it — secrets, and
+    # the only things this playbook needs that are not in group_vars/all.yml.
+    - vault.yml
+
+  vars:
+    # Derived, not decisions, which is why they are here rather than in
+    # group_vars/all.yml. `backup` is an internal handle for the rclone remote;
+    # what it points at is vault_backup_remote_path.
+    backup_rclone_config: /etc/{{ backup_name }}/rclone.conf
+    backup_remote: "backup:{{ vault_backup_remote_path }}"
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+  pre_tasks:
+    # Nothing above this point has modified the host, so a refusal here leaves
+    # it exactly as it was.
+    - name: Refuse to install backups with nowhere to put them
+      # The criterion is that dumps leave this host. A destination that has not
+      # been configured therefore has to be a refusal and not a fallback: a
+      # schedule that quietly wrote dumps to the local disk and nowhere else
+      # would look like a working backup system, report success every night, and
+      # be worth nothing the day the host dies.
+      ansible.builtin.assert:
+        that:
+          - vault_backup_remote is defined
+          - vault_backup_remote.type | default('') | length > 0
+          - vault_backup_remote_path | default('') | length > 0
+        fail_msg: >-
+          vault_backup_remote.type and vault_backup_remote_path have to name a
+          destination that is not this host. See the Backups section of
+          ansible/vault.yml.example; `rclone config` will produce the settings
+          interactively if you would rather not write them by hand.
+        quiet: true
+
+    - name: Refuse to install backups whose failures reach nobody
+      # A failing systemd timer writes to the journal and stops there, and the
+      # journal is a complete record nobody reads unprompted. Without somewhere
+      # for an alert to go, "backup failure is visible" is true on paper and
+      # false in practice — so this is required rather than optional.
+      ansible.builtin.assert:
+        that: vault_backup_alert_url | default('') | length > 0
+        fail_msg: >-
+          vault_backup_alert_url is empty, so a failed backup would only ever
+          be recorded on the host that failed. Point it at anything that
+          accepts a POST — a Slack, Discord or Mattermost incoming webhook, or
+          an ntfy.sh topic — and match backup_alert_payload in
+          group_vars/all.yml to its shape.
+        quiet: true
+
+    - name: Refuse a retention policy that could delete the newest backup
+      # Pruning runs only after a backup has been verified at the destination,
+      # so "keep zero" would mean deleting the copy just proved good. There is
+      # no recovering from a retention policy that eats the last backup, which
+      # is why this is a refusal to install rather than a runtime surprise.
+      ansible.builtin.assert:
+        that:
+          - backup_keep_local | int >= 1
+          - backup_keep_remote | int >= 1
+        fail_msg: >-
+          backup_keep_local is {{ backup_keep_local }} and backup_keep_remote
+          is {{ backup_keep_remote }}; both have to be at least 1.
+        quiet: true
+
+  tasks:
+    - name: Refuse to run against a distribution this playbook does not manage
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == 'Debian'
+        fail_msg: >-
+          This playbook installs backups on Debian-family hosts (Ubuntu LTS is
+          what it is tested against); this host reports
+          {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}.
+        quiet: true
+
+    # ── What the dump needs ──────────────────────────────────────────────────
+    - name: Install rclone and curl
+      # rclone from the distribution rather than a binary fetched from
+      # rclone.org: it then receives security updates through the
+      # unattended-upgrades that provision.yml already configured, there is no
+      # version pinned in this template to go stale, and there is no download
+      # step to fail on a host with restricted egress. The trade is a release
+      # that lags upstream by a while — if you need a backend or a flag it does
+      # not have, install a newer rclone by hand and this playbook will leave it
+      # alone except to keep the packaged one present.
+      #
+      # curl is what carries the alert off the host, and is already here from
+      # provisioning; naming it makes this playbook independently correct.
+      ansible.builtin.apt:
+        name:
+          - curl
+          - rclone
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the directory dumps land in
+      # 0700: a dump is the entire database, including every user record and
+      # every token in it. It is the most sensitive file on the host.
+      ansible.builtin.file:
+        path: "{{ backup_local_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Create the directory the backup's state lives in
+      # 0755, unlike the dumps: what is in here is a timestamp and a filename,
+      # and "when did a backup last work" should be answerable by anybody with a
+      # shell on the box rather than needing sudo.
+      ansible.builtin.file:
+        path: "{{ backup_state_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create the directory the destination's credentials live in
+      ansible.builtin.file:
+        path: "{{ backup_rclone_config | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Write the destination's rclone configuration
+      ansible.builtin.template:
+        src: rclone.conf.j2
+        dest: "{{ backup_rclone_config }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    # ── Prove the destination is real before trusting a schedule to it ───────
+    # Otherwise a mistyped key is discovered at 03:30 by an alert, or — worse —
+    # on the day somebody goes looking for a backup. Both of these are also
+    # exactly what the nightly run does, so a pass here means the credential has
+    # the permissions the backup and its pruning need.
+    - name: Confirm the destination answers and accepts writes
+      # `rclone mkdir` on an existing path does nothing and reports nothing,
+      # hence changed_when: false. The one change it can make is creating the
+      # bucket on the very first run, which is the desired behaviour and not
+      # worth a separate task to detect.
+      ansible.builtin.command:
+        argv:
+          - rclone
+          - --config
+          - "{{ backup_rclone_config }}"
+          - mkdir
+          - "{{ backup_remote }}"
+      changed_when: false
+
+    - name: Confirm the destination can be listed
+      # A separate permission from writing, and the retention policy needs it:
+      # a write-only credential would upload happily and never prune, growing
+      # the bill in silence.
+      ansible.builtin.command:
+        argv:
+          - rclone
+          - --config
+          - "{{ backup_rclone_config }}"
+          - lsf
+          - "{{ backup_remote }}"
+      changed_when: false
+
+    # ── The scripts ──────────────────────────────────────────────────────────
+    # Templates rather than files: they carry the retention numbers, the
+    # destination and the paths, so there is one place those are written down.
+    # 0700 because the alert script embeds the alert URL, which is a capability
+    # rather than an address.
+    - name: Install the backup, staleness-check and alert scripts
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: "/usr/local/bin/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - { src: db-backup.sh.j2, dest: "{{ backup_name }}" }
+        - { src: db-backup-watch.sh.j2, dest: "{{ backup_name }}-watch" }
+        - { src: db-backup-alert.sh.j2, dest: "{{ backup_name }}-alert" }
+      loop_control:
+        label: "{{ item.dest }}"
+
+    # ── The units ────────────────────────────────────────────────────────────
+    # A systemd timer rather than a crontab entry, and not only because the host
+    # already runs systemd. cron's failure handling is a mail to a local user
+    # that nothing on a stock VPS delivers; a timer has OnFailure=, which is how
+    # a failed backup reaches somebody. The journal that carries the output is
+    # also already capped and rotated by provision.yml, so a backup that logs
+    # every night cannot fill the disk the database is on.
+    - name: Install the systemd units
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: /etc/systemd/system/{{ item.dest }}
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - { src: db-backup.service.j2, dest: "{{ backup_name }}.service" }
+        - { src: db-backup.timer.j2, dest: "{{ backup_name }}.timer" }
+        - { src: db-backup-watch.service.j2, dest: "{{ backup_name }}-watch.service" }
+        - { src: db-backup-watch.timer.j2, dest: "{{ backup_name }}-watch.timer" }
+        - { src: "db-backup-alert@.service.j2", dest: "{{ backup_name }}-alert@.service" }
+      loop_control:
+        label: "{{ item.dest }}"
+      notify: Reload systemd
+
+    - name: Let systemd read the units before they are enabled
+      # Enabling a unit systemd has not loaded yet fails, and the handler would
+      # otherwise not have run until the end of the play.
+      ansible.builtin.meta: flush_handlers
+
+    - name: Run the backup and its staleness check on schedule
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - "{{ backup_name }}.timer"
+        - "{{ backup_name }}-watch.timer"
+
+  post_tasks:
+    - name: Report what is installed
+      ansible.builtin.debug:
+        msg:
+          - "Backups installed. Dumps go to {{ backup_remote }}."
+          - "Retention: {{ backup_keep_local }} local, {{ backup_keep_remote }} at the destination."
+          - "Take the first one now, rather than waiting for {{ backup_schedule }}:"
+          - "  sudo systemctl start {{ backup_name }}.service"
+          - "Then check it worked:"
+          - "  cat {{ backup_state_dir }}/last-success"
+          - "  systemctl list-timers '{{ backup_name }}*'"
+          - "Until a backup has succeeded once, the staleness check fails and alerts."
+          - "Restore is not automated — see the README's backups section for the steps."

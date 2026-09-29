@@ -1,0 +1,13 @@
+# Managed by ansible/backup.yml. Edits here are overwritten by the next run.
+[Unit]
+Description=Check that {{ app_dir | basename }} database backups are still running
+Documentation=file://{{ app_dir }}/ansible/backup.yml
+# The same alert path as the backup itself. This unit failing is the dead-man's
+# switch tripping: it means no backup has succeeded recently, whether or not
+# anything reported a failure — and a timer that stopped firing reports nothing.
+OnFailure={{ backup_name }}-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/{{ backup_name }}-watch
+User=root
