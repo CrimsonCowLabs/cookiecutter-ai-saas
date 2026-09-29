@@ -14,5 +14,7 @@ Single-context: one root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`
 
 ## Public site
 
-The landing page is served from GitHub Pages on this repo, at
-`https://crimsoncowlabs.github.io/cookiecutter-ai-saas/`. See `docs/public-site.md`.
+The landing page is hand-written static HTML in `site/`, served from GitHub Pages
+at `https://crimsoncowlabs.github.io/cookiecutter-ai-saas/`. It has no build step
+and is held out of search by one tag. Run `python scripts/check_site.py` after
+touching it. See `docs/public-site.md`.

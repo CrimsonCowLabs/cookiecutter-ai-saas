@@ -1,0 +1,150 @@
+/* Hand-written, no build step, no webfonts: everything here is either a system
+   font or a colour. Sizes are fluid rather than breakpoint-switched, so there is
+   one layout to reason about between 320px and a wide desktop. */
+
+:root {
+  --bg: #100d0c;
+  --surface: #1a1514;
+  --border: #2f2523;
+  --text: #f6f1ee;
+  --muted: #a89e99;
+  --accent: #f2703a;
+  --accent-ink: #1a0d07;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: clamp(1.5rem, 5vw, 4rem) clamp(1.25rem, 5vw, 2rem);
+  background: var(--bg);
+  color: var(--text);
+  font: 1rem/1.65 var(--sans);
+  /* A long unbroken token — a package name, a URL — must wrap rather than push
+     the page sideways on a phone. */
+  overflow-wrap: break-word;
+}
+
+main,
+footer {
+  max-width: 44rem;
+  margin: 0 auto;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* Hero */
+
+.eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font: 0.8125rem/1.4 var(--mono);
+  letter-spacing: 0.02em;
+}
+
+h1 {
+  margin: 0.4em 0 0;
+  font: 700 clamp(2rem, 9vw, 3.25rem) / 1.05 var(--mono);
+  letter-spacing: -0.02em;
+}
+
+.tagline {
+  margin: 0.75em 0 0;
+  max-width: 34rem;
+  color: var(--muted);
+  font-size: clamp(1.0625rem, 3.5vw, 1.25rem);
+}
+
+.install-label {
+  margin: 2.25em 0 0.5em;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+pre {
+  margin: 0;
+  padding: 1rem 1.125rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  /* Belt and braces: if anything in here ever does refuse to wrap, it scrolls
+     inside this box rather than pushing the document sideways. */
+  overflow-x: auto;
+}
+
+code {
+  font: 0.875rem/1.7 var(--mono);
+  /* The command is wider than a phone. Wrapping it keeps the whole thing on
+     screen, and wrapping is only visual — a copy still yields the one line the
+     shell expects, with no inserted newline. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  margin: 1.75em 0 0;
+}
+
+.button {
+  display: inline-block;
+  padding: 0.6rem 1.1rem;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.button:hover,
+.button:focus-visible {
+  background: #ff8351;
+}
+
+/* Sections */
+
+h2 {
+  margin: 0 0 0.75em;
+  font-size: 1.0625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.prerelease {
+  margin-top: clamp(3rem, 9vw, 4.5rem);
+  padding: 1.25rem 1.25rem 1.375rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.prerelease h2 {
+  margin-bottom: 0.4em;
+  font-size: 0.8125rem;
+}
+
+.prerelease p {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+footer {
+  margin-top: clamp(3rem, 9vw, 4.5rem);
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+footer p {
+  margin: 0;
+}
