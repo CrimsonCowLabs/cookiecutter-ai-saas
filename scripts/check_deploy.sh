@@ -18,9 +18,12 @@
 #   * the DNS pre-flight aborts  — against a name resolving elsewhere, and
 #                                  proceeds against one resolving here
 #   * migrations run             — asserted against the database afterwards
-#   * a failure leaves the       — a deliberately broken release is deployed on
-#     previous version serving     top of a working one, and the working one
-#                                  has to still answer when it is over
+#   * a failure leaves the       — a deliberately broken release, carrying a
+#     previous version serving     configuration change as well as an app that
+#                                  cannot start, is deployed over a working one;
+#                                  the working one has to still answer when it is
+#                                  over, on its own images *and* its own
+#                                  compose file
 #
 # This rewrites ansible/vault.yml, generates migrations and edits the
 # Dockerfile, so it refuses to run against a tree that already has a vault:
@@ -78,9 +81,13 @@ PG_PASSWORD="p@ss/word:$RANDOM_TAG"
 PG_PASSWORD_ENCODED="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$PG_PASSWORD")"
 
 cleanup() {
-  # The Dockerfile is edited below to build a deliberately broken release.
+  # The Dockerfile and the compose file are both edited below, to build a
+  # deliberately broken release that also carries a configuration change.
   if [[ -f Dockerfile.check-backup ]]; then
     mv Dockerfile.check-backup Dockerfile
+  fi
+  if [[ -f docker-compose.prod.yml.check-backup ]]; then
+    mv docker-compose.prod.yml.check-backup docker-compose.prod.yml
   fi
   rm -f ansible/vault.yml
   # Images this check built, so a check does not quietly fill the disk. The
@@ -350,6 +357,16 @@ old, new = 'CMD ["node", "server.js"]', 'CMD ["node", "there-is-no-such-file.js"
 assert text.count(old) == 1, "the runner stage's CMD is not what this expects"
 open(path, "w").write(text.replace(old, new))
 PY
+# The release also carries a configuration change, because the images are only
+# half of what a rollback has to put back. Without this the good and the broken
+# release ship a byte-identical compose file, so a rollback that restored images
+# and left configuration alone would pass unnoticed — the check would be
+# structurally unable to see the bug. A comment is enough: it cannot break
+# compose's parsing, so what fails is still the app, and it is unambiguously
+# observable on the host.
+cp docker-compose.prod.yml docker-compose.prod.yml.check-backup
+COMPOSE_SENTINEL="# check_deploy sentinel $RANDOM_TAG"
+printf '%s\n' "$COMPOSE_SENTINEL" >> docker-compose.prod.yml
 # Cut the health gate's patience: the criterion is what happens after it gives
 # up, not how long it waits, and the default is sized for a real Next.js boot.
 if deploy -e site_address=https://localhost \
@@ -358,9 +375,22 @@ if deploy -e site_address=https://localhost \
   fail "a release whose app cannot start was deployed successfully"
 fi
 mv Dockerfile.check-backup Dockerfile
+mv docker-compose.prod.yml.check-backup docker-compose.prod.yml
 grep -q "Rolled back:" "$TH_WORK/deploy-broken.log" \
   || fail "the failed deploy did not report a rollback: $(tail -30 "$TH_WORK/deploy-broken.log")"
 pass "the broken release failed the deploy and said it rolled back"
+
+# Two assertions, because either alone could pass for the wrong reason. The
+# sentinel being gone proves the host is back on the previous release's compose
+# file; the restore task having reported a change proves the sentinel reached
+# the host at all — without which the first assertion would be true of a check
+# that tested nothing.
+grep -qE "changed: .*item=$APP_DIR/docker-compose.prod.yml" "$TH_WORK/deploy-broken.log" \
+  || fail "the rollback never restored $APP_DIR/docker-compose.prod.yml: no task reported changing it, so the rescue put the images back and left this release's configuration in place. Tail of the failed deploy: $(tail -20 "$TH_WORK/deploy-broken.log")"
+if th_ssh "$DEPLOY_USER" "grep -qF '$COMPOSE_SENTINEL' $APP_DIR/docker-compose.prod.yml"; then
+  fail "the broken release's compose file is still on the host after the rollback"
+fi
+pass "the rollback put back the previous release's compose file, not only its images"
 
 now_app_image="$(th_exec "docker images --no-trunc -q $SLUG-app:latest" | tr -d '\r')"
 [[ "$now_app_image" == "$GOOD_APP_IMAGE" ]] \

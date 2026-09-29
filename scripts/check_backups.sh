@@ -336,6 +336,36 @@ grep -q "have to be at least 1" "$WORK/keep-zero.log" \
   || fail "keeping zero backups was not refused by name: $(tail -5 "$WORK/keep-zero.log")"
 pass "a retention policy that could delete the newest backup is refused"
 
+# ── Criterion: the dumps have to leave this host ─────────────────────────────
+# "Configured" is not the same claim as "off the host", so the obviously-local
+# backends are refused outright. This is a floor and not a guarantee — an
+# endpoint naming a host that resolves back here still passes, which the
+# playbook's own comment says — but it catches the version of the mistake that
+# looks like a working backup.
+echo "==> Refusing a destination that is this host"
+if run_backup -e '{"vault_backup_remote": {"type": "local"}}' \
+     > "$WORK/local-remote.log" 2>&1; then
+  fail "the playbook installed a schedule writing its only copy to this host"
+fi
+grep -q "dies with the machine" "$WORK/local-remote.log" \
+  || fail "a same-host destination was not refused by name: $(tail -5 "$WORK/local-remote.log")"
+pass "a destination that cannot outlive this host is refused"
+
+# ── Criterion: there has to be something to dump ─────────────────────────────
+# The nightly script finds Postgres by its Compose labels, and a label matching
+# nothing fails identically whether the stack is down or the project name is
+# simply wrong. Unrefused, all of those arrive as an alert at 03:30 and then
+# every night after, so the playbook turns them into a refusal while the
+# operator is still watching.
+echo "==> Refusing to schedule dumps of a database that is not there"
+if run_backup -e backup_compose_project=no-such-stack \
+     > "$WORK/no-source.log" 2>&1; then
+  fail "the playbook installed a schedule for a database it never found"
+fi
+grep -q "No running postgres container" "$WORK/no-source.log" \
+  || fail "a missing database was not refused by name: $(tail -5 "$WORK/no-source.log")"
+pass "a schedule with no database to dump is refused at install time"
+
 # ── Install the backups ──────────────────────────────────────────────────────
 echo "==> Run 1: installing backups"
 run_backup > "$WORK/run1.log" 2>&1 \

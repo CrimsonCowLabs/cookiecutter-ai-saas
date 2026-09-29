@@ -66,10 +66,3 @@ coverage/
 
 # Drizzle
 drizzle/meta/
-
-# Ansible vault
-# ansible/vault.yml itself is committed, encrypted — that is the point of it, and
-# ignoring it would quietly leave the one copy of those credentials on whichever
-# laptop ran the playbook last. The password that opens it is never committed.
-.vault-pass
-ansible/.vault-pass

@@ -271,19 +271,31 @@ serving: everything that can fail happens before anything changes what serves.
 4. **Migrate**, using this release's migrator image, with Postgres up and the
    app not yet switched. A migration that fails stops the deploy here.
 5. **Switch**: move the `:latest` tags and bring the stack up. If the
-   switched-over stack does not answer, the previous release's images are put
-   back, the stack is restarted on them, and the deploy fails loudly.
+   switched-over stack does not answer, the previous release's images *and* its
+   compose file and `Caddyfile` are put back, the stack is restarted on them,
+   and the deploy fails loudly. The configuration matters as much as the images:
+   old images under a new compose file is not the release you were running.
 
 The release name is a digest of the images in it, so re-running an unchanged
 deploy ships nothing and changes nothing. `/app/{{ cookiecutter.project_slug }}/RELEASE`
 on the host records which release is serving.
 
-Two honest limits. `ansible-vault` decrypts on *your* machine and the rendered
-env file lands on the host — so nothing is at rest in plaintext anywhere except
-that one `0600` file, but the machine running the deploy does see the values.
-And the switch is `docker compose up -d`, which stops a container before
-starting its replacement: a broken release costs the seconds until the
-rollback, not zero.
+Four honest limits:
+
+- **`ansible-vault` decrypts on *your* machine**, and the rendered env file
+  lands on the host. So nothing is at rest in plaintext anywhere except that one
+  `0600` file — but the machine running the deploy does see the values.
+- **The switch is `docker compose up -d`**, which stops a container before
+  starting its replacement. A broken release costs the seconds until the
+  rollback, not zero.
+- **The rollback covers a deploy that *fails*, not one that is interrupted.** It
+  runs when a task fails. Ctrl-C, a dropped SSH connection or a killed
+  `ansible-playbook` between the tag move and the health check leaves the new
+  release serving and nothing rolled back. Re-running the previous release's
+  deploy is the way back from that.
+- **`.env-production` does not roll back.** It is rendered from the vault and
+  `group_vars` — your current values, not the release's content — so a value you
+  changed deliberately stays changed. Only release content rolls back.
 
 ### Provisioning the host
 
@@ -388,6 +400,136 @@ curl -k https://localhost/
 The redirect, TLS termination and the proxy hop are the production path; only
 the issuer differs.
 
+## Database backups
+
+**Restore is not automated.** Nothing here puts a dump back — there is no script
+and no playbook for it. What `ansible/backup.yml` installs is the half that has
+to happen unattended: dumps on a schedule, copied somewhere this host is not,
+pruned on a policy, and loud when they fail. Putting one back is four commands
+you run deliberately, with the site down, having chosen which dump to use:
+
+```bash
+# 1. Fetch it. `rclone lsl backup:<bucket>/<prefix>` lists them, newest last;
+#    the name is the UTC second the dump was taken.
+sudo rclone --config /etc/{{ cookiecutter.project_slug }}-db-backup/rclone.conf \
+  copyto backup:<bucket>/<prefix>/db-20250104T033012Z.dump /tmp/restore.dump
+
+# 2. Stop everything that writes. Restoring into a live database gets you a
+#    database that is neither the old one nor the new one.
+cd /app/{{ cookiecutter.project_slug }} && docker compose -f docker-compose.prod.yml \
+  --env-file .env-production stop app worker db-writer
+
+# 3. Restore. --clean --if-exists drops what is there first, so this replaces
+#    rather than merges.
+docker exec -i {{ cookiecutter.project_slug }}-postgres-1 pg_restore \
+  --clean --if-exists --no-owner -U postgres \
+  -d {{ cookiecutter.project_slug | replace('-', '_') }} < /tmp/restore.dump
+
+# 4. Bring it back, and check the data before you let traffic in.
+docker compose -f docker-compose.prod.yml --env-file .env-production up -d
+```
+
+Those are steps in a README rather than a script because an untested restore
+script is worse than none: it reads as a guarantee, and the day you discover it
+does not work is the day you needed it. Run them against a throwaway database
+once, before you need them.
+
+### Setting them up
+
+Run this after the stack is up — the dump comes out of the running Postgres
+container, so a schedule installed against a stack that has never existed is a
+schedule that fails.
+
+```bash
+cp ansible/vault.yml.example ansible/vault.yml
+$EDITOR ansible/vault.yml            # where the dumps go, and where alerts go
+ansible-vault encrypt ansible/vault.yml
+ansible-playbook -i ansible/inventory.ini ansible/backup.yml
+# then, on the host, take the first one now rather than waiting for 03:30:
+sudo systemctl start {{ cookiecutter.project_slug }}-db-backup.service
+```
+
+Running it again changes nothing. Three values are required, and the playbook
+refuses to install a schedule without them rather than installing one that
+quietly does less than it looks like:
+
+- **`vault_backup_remote`** and **`vault_backup_remote_path`** — where dumps go.
+  A dump that only ever lands on the machine being backed up is not a backup, so
+  "unconfigured" is a refusal, not a fall back to local-only.
+- **`vault_backup_alert_url`** — where a failure goes. Without it the only record
+  of a broken backup is a journal entry on the broken host.
+
+### What gets installed
+
+| Concern | What the playbook leaves |
+|---------|--------------------------|
+| The dump | `pg_dump --format=custom`, run **inside** the Postgres container — the one client that cannot be older than the server, and the database publishes no port for anything else to reach |
+| Schedule | `{{ cookiecutter.project_slug }}-db-backup.timer`, 03:30 UTC daily with up to 45 minutes of jitter, `Persistent=true` so a missed run happens at the next boot |
+| Off-host copy | `rclone` to whatever `vault_backup_remote` names — any S3-compatible bucket, or any other rclone backend, without the playbook changing |
+| Verification | The archive has to parse (`pg_restore --list`) and read back from the destination at the same size, before anything is pruned |
+| Retention | 7 dumps here, 30 at the destination |
+| Failure | `OnFailure=` → a POST to `vault_backup_alert_url`, a journal entry at priority `err`, and `/var/lib/{{ cookiecutter.project_slug }}-backup/FAILED` |
+| Staleness | `{{ cookiecutter.project_slug }}-db-backup-watch.timer`, six-hourly, failing when the last success is over 30 hours old |
+| Dumps | `/var/backups/{{ cookiecutter.project_slug }}`, mode 0700 — a dump is the whole database, every token in it included |
+
+Everything adjustable is in `ansible/group_vars/all.yml` — the schedule, the
+retention numbers, the staleness limit, the alert payload's shape — or
+overridable for one run with `-e`.
+
+### Why nothing prunes the last good copy
+
+Two rules, both asserted in CI against a real destination:
+
+- **Nothing is pruned until the dump has been verified at the destination.** A
+  run that fails deletes nothing. A half-working backup that still prunes is how
+  a retention policy comes to eat the last good copy.
+- **The newest dump is never pruned.** Dumps are named for the UTC second they
+  were taken, so sorting names sorts by time and the prune only looks past the
+  newest *N*. A retention policy of zero is refused outright.
+
+### When they break
+
+A failing timer writes to the journal and stops there, and the journal is a
+complete record nobody reads unprompted — so a timer failing for a month looks
+exactly like one that never failed. Hence three channels with different failure
+modes: the **POST** to `vault_backup_alert_url` (the only one that reaches
+somebody who was not already looking), a **journal entry** at `err`, and a
+**marker file** the next success removes, so its presence means "broken now"
+rather than "broke once".
+
+And the case none of those catch — backups that simply stopped, where nothing
+failed so nothing reported. The `-watch` timer fails when the last success is
+over 30 hours old and routes to the same alert. While backups are stale you hear
+about it four times a day, deliberately: a nag is how an alert survives a busy
+week.
+
+```bash
+cat /var/lib/{{ cookiecutter.project_slug }}-backup/last-success   # when, which dump, how big
+systemctl list-timers '{{ cookiecutter.project_slug }}-db-backup*' # when next, when last
+journalctl -u {{ cookiecutter.project_slug }}-db-backup.service -n 50
+```
+
+Set `vault_backup_heartbeat_url` too if you want the one thing an on-host check
+cannot give you: it is pinged after every success, for a service
+(healthchecks.io, Cronitor, an Uptime Kuma push monitor) that alerts when the
+pings stop. The staleness timer catches a schedule that stopped firing; it
+cannot report a host that is powered off, out of disk or destroyed, because by
+then nothing on it runs.
+
+### What backups do not cover
+
+- **Restore, as above.** Practise it before you need it.
+- **Anything but Postgres.** Redis holds the job queue and the `caddydata`
+  volume holds certificates. Losing the queue costs in-flight jobs; losing the
+  certificates costs a re-issue, which Let's Encrypt rate-limits.
+- **Encryption beyond the destination's own.** The dump is uploaded as `pg_dump`
+  wrote it, so what protects it is the bucket's access control. If you need the
+  destination unable to read it, add an `rclone` crypt remote — and keep that key
+  somewhere other than the host it encrypts.
+- **A credential that cannot delete.** Pruning needs delete, so the credential on
+  this host has it, and a compromised host can empty the bucket. Scope it to the
+  one bucket and turn on object lock or versioning if your provider offers them.
+
 ## Project Structure
 
 ```
@@ -415,10 +557,11 @@ scripts/
 ansible/
   provision.yml         # Takes a fresh VPS to a ready state
   deploy.yml            # Builds, ships, migrates and switches over
-  inventory.ini         # The host both playbooks act on
-  group_vars/all.yml    # Deploy account, open ports, log caps, deploy settings
+  backup.yml            # Installs scheduled, off-host database backups
+  inventory.ini         # The host all three playbooks act on
+  group_vars/all.yml    # Deploy account, ports, log caps, deploy and backup settings
   vault.yml.example     # Every production secret, to fill in and encrypt
-  templates/            # .env-production, rendered on the host
+  templates/            # .env-production and the backup units, rendered on the host
 Caddyfile               # TLS and HTTP->HTTPS for {{ cookiecutter.domain_name }}
 ```
 

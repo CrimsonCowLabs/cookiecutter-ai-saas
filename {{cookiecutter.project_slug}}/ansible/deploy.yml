@@ -469,14 +469,24 @@
       # These two and the env file are everything the host needs. The old
       # deploy script rsynced the whole working tree, which put the application
       # source on a production box that only ever runs images.
+      #
+      # backup: true keeps what was there, and only when this task actually
+      # replaces it — so an unchanged deploy still reports no change, while a
+      # deploy that alters either file leaves the rescue below something to put
+      # back. Without that, the previous release's images would come up under
+      # this release's compose file, which is not a rollback: a release that
+      # adds a service, moves a port or rewrites a proxy rule would leave the
+      # old images running under configuration written for the new ones.
       ansible.builtin.copy:
         src: "{{ project_root }}/{{ item }}"
         dest: "{{ app_dir }}/{{ item }}"
         owner: "{{ deploy_user }}"
         mode: "0644"
+        backup: true
       loop:
         - "{{ compose_file }}"
         - Caddyfile
+      register: shipped_config
 
     - name: Render .env-production on the host
       # The secrets are decrypted on the control machine and written straight
@@ -817,6 +827,27 @@
           loop: "{{ deploy_rollback }}"
           changed_when: true
 
+        - name: Put the previous release's configuration back
+          # Only files this deploy actually replaced have a backup, so a deploy
+          # that changed neither restores neither.
+          #
+          # .env-production is deliberately not in this list. It is rendered
+          # from the vault and group_vars — the operator's current values, not
+          # this release's content — so a value they deliberately changed is
+          # theirs to keep, and restoring it would only be undone by the next
+          # deploy. What rolls back here is release content.
+          ansible.builtin.copy:
+            src: "{{ item.backup_file }}"
+            dest: "{{ item.dest }}"
+            remote_src: true
+            owner: "{{ deploy_user }}"
+            mode: "0644"
+          loop: >-
+            {{ shipped_config.results | default([])
+               | selectattr('backup_file', 'defined') | list }}
+          loop_control:
+            label: "{{ item.dest }}"
+
         - name: Bring the previous release back up
           community.docker.docker_compose_v2:
             project_src: "{{ app_dir }}"
@@ -848,6 +879,19 @@
               not serving. Fix whatever failed above and run the same command
               again; the images are already on the host.
           when: deploy_rollback | length == 0
+
+    - name: Remove the superseded configuration backups
+      # The switch held, so what these hold is the configuration of a release
+      # nothing is running any more. A failed deploy leaves them: the rescue has
+      # already restored from them, and they are then what was rolled back to.
+      ansible.builtin.file:
+        path: "{{ item.backup_file }}"
+        state: absent
+      loop: >-
+        {{ shipped_config.results | default([])
+           | selectattr('backup_file', 'defined') | list }}
+      loop_control:
+        label: "{{ item.backup_file }}"
 
     - name: Record what is deployed
       # So that "what is on this host" is answerable from the host. Only

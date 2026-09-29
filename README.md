@@ -956,6 +956,16 @@ either:
   record of a broken backup is a journal entry on the broken host, which nobody
   reads. See [When they break](#when-they-break).
 
+Two more refusals happen before the host is touched, because both failures
+otherwise present as a nightly alert rather than as a mistake to fix now. A
+destination that cannot outlive the host — rclone's `local`, `alias` or `memory`
+backends, or an endpoint on the loopback — is rejected, which is a floor rather
+than a guarantee: an endpoint naming a host that happens to resolve back is
+indistinguishable from a real one at install time, and the playbook says so. And
+the *source* is verified as well as the destination: if no running Postgres
+container carries the stack's Compose label, the playbook refuses rather than
+installing a schedule that fails every night from the first one.
+
 ### What gets installed
 
 | Concern | What the playbook leaves |

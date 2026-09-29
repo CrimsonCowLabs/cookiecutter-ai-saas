@@ -88,8 +88,8 @@ nextauth_url: "https://__DOMAIN_NAME__"
 #
 # migrator joins the set whenever anything ships, because the migrator image on
 # the host is otherwise the previous release's and would apply the previous
-# release's migrations. `--tags env` re-renders .env-production and restarts,
-# shipping no image at all.
+# release's migrations. `-e deploy_targets=none` re-renders .env-production and
+# restarts, shipping no image at all.
 deploy_targets: "app,worker,db-writer,migrator,ops"
 
 # The platform the images are built for. It is the host's architecture, not the
@@ -121,13 +121,18 @@ deploy_health_delay: 5
 # mechanism. The destination's credentials are not here: they are secrets, so
 # they live in ansible/vault.yml — see ansible/vault.yml.example.
 
-# Docker Compose names its project after the directory it runs in, and deploys
-# run `docker compose` from app_dir, so this is the label every container in the
-# stack carries. The backup finds Postgres by that label rather than by
-# connecting to it: docker-compose.prod.yml publishes no port for the database
-# and keeps it on the compose `default` network, which nothing outside the stack
-# joins. Override this only if you run compose with an explicit -p.
-backup_compose_project: "{{ app_dir | basename }}"
+# The compose project every container in the stack is labelled with, which is
+# how the backup finds Postgres: docker-compose.prod.yml publishes no port for
+# the database and keeps it on the compose `default` network, so there is
+# nothing to connect to from outside the stack.
+#
+# It follows project_slug because that is the name deploy.yml passes compose
+# explicitly (`-p`), not the one compose would infer from the directory. Those
+# two agree only for as long as app_dir ends in the slug — derive this from the
+# directory instead and moving app_dir would leave the backup looking for a
+# label no container carries, which fails as "no postgres container" rather
+# than as anything about app_dir.
+backup_compose_project: "{{ project_slug }}"
 
 # Where dumps land on this host on their way to the destination, and where the
 # "when did a backup last work" stamp lives. Split because they have different

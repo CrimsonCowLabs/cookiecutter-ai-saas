@@ -60,17 +60,35 @@
           `ansible-vault encrypt ansible/vault.yml`.
         quiet: true
 
-    - name: Read the vault's first bytes without decrypting it
-      # slurp, not the file lookup: `lookup('file', ...)` transparently decrypts
-      # a vault, which would make this check pass for both an encrypted file and
-      # a plaintext one. slurp returns what is on disk.
-      ansible.builtin.slurp:
-        src: "{{ vault_file }}"
-      register: vault_raw
+    - name: Check whether the vault is encrypted
+      # Two things this deliberately is not, and deploy.yml's equivalent check
+      # makes the same two choices:
+      #
+      #   * Not `lookup('file', ...)`, which transparently decrypts a vault and
+      #     would therefore pass for a plaintext file exactly as it does for an
+      #     encrypted one — the check would assert nothing.
+      #   * Not slurp into a registered variable. In the case this exists to
+      #     catch, an unencrypted vault, that variable holds every production
+      #     secret, and Ansible prints full task results at -vvv and hands them
+      #     to any callback plugin that logs. The likely resting place is a CI
+      #     log: a second copy of the leak, somewhere nobody rotates.
+      #
+      # grep reads the file on disk, prints nothing, and answers in its exit
+      # status.
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -q
+          - -e
+          - '^$ANSIBLE_VAULT'
+          - "{{ vault_file }}"
+      register: vault_encrypted
+      changed_when: false
+      failed_when: false
 
     - name: Refuse to run against an unencrypted vault
       ansible.builtin.assert:
-        that: (vault_raw.content | b64decode).startswith('$ANSIBLE_VAULT')
+        that: vault_encrypted.rc == 0
         fail_msg: >-
           {{ vault_file }} is not encrypted — its first line does not begin
           with $ANSIBLE_VAULT. Encrypt it before running this playbook:
@@ -124,6 +142,30 @@
           destination that is not this host. See the Backups section of
           ansible/vault.yml.example; `rclone config` will produce the settings
           interactively if you would rather not write them by hand.
+        quiet: true
+
+    - name: Refuse a destination that is this host wearing a different name
+      # The criterion is that dumps leave the machine, and "configured" is not
+      # the same claim. These are the backends that cannot leave it however they
+      # are pointed, plus an endpoint on the loopback, which is the S3-shaped
+      # way to make the same mistake.
+      #
+      # What this cannot check is the honest limit: an endpoint naming a host
+      # that happens to resolve back here, or a network filesystem mounted from
+      # the same failure domain, both pass. Nothing available at install time
+      # distinguishes those from a real remote, so they are the operator's to
+      # get right — which is what makes this a floor and not a guarantee.
+      ansible.builtin.assert:
+        that:
+          - vault_backup_remote.type not in ['local', 'alias', 'memory']
+          - >-
+            vault_backup_remote.endpoint | default('')
+            is not search('(?i)://(localhost|127\.|\[::1\]|0\.0\.0\.0)')
+        fail_msg: >-
+          vault_backup_remote names this host ({{ vault_backup_remote.type }}
+          {{ vault_backup_remote.endpoint | default('') }}), so a dump written
+          to it dies with the machine. The point of the copy is that it outlives
+          this host — give it object storage, or another machine.
         quiet: true
 
     - name: Refuse to install backups whose failures reach nobody
@@ -222,6 +264,41 @@
         owner: root
         group: root
         mode: "0600"
+
+    # ── Prove there is something to back up ──────────────────────────────────
+    # The destination is verified below; the *source* deserves the same, because
+    # the nightly script finds Postgres by its Compose labels and a label that
+    # matches nothing fails identically whether the stack is down, the stack was
+    # never deployed, or backup_compose_project simply does not name it. Left to
+    # the schedule, all three arrive as an alert at 03:30 and then every night
+    # after. This turns them into a refusal at install time, while the operator
+    # is still looking.
+    - name: Find the database the dumps will come from
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - --quiet
+          - --filter
+          - "label=com.docker.compose.project={{ backup_compose_project }}"
+          - --filter
+          - label=com.docker.compose.service=postgres
+          - --filter
+          - status=running
+      register: postgres_container
+      changed_when: false
+
+    - name: Refuse to schedule dumps of a database that is not there
+      ansible.builtin.assert:
+        that: postgres_container.stdout | trim | length > 0
+        fail_msg: >-
+          No running postgres container in Compose project
+          '{{ backup_compose_project }}'. Bring the stack up first
+          (ansible/deploy.yml), since the dump is taken from inside that
+          container. If the stack is up under a different Compose project than
+          this, that is what backup_compose_project has to name — it follows
+          project_slug, which is the name deploy.yml passes compose with -p.
+        quiet: true
 
     # ── Prove the destination is real before trusting a schedule to it ───────
     # Otherwise a mistyped key is discovered at 03:30 by an alert, or — worse —

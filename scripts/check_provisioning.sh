@@ -191,8 +191,25 @@ echo "==> Hammering SSH until fail2ban bans this machine"
 ssh-keygen -q -t ed25519 -N "" -f "$TH_WORK/id_wrong" -C provision-check-wrong
 WRONG_OPTS=("${TH_SSH_BASE[@]}" -i "$TH_WORK/id_wrong")
 banned=""
+
+# The attempt that trips the ban is the one that hangs. fail2ban's DROP rule
+# lands while that connection is already past the TCP handshake and waiting on
+# authentication, and -o ConnectTimeout governs only the connect — so ssh sits
+# there with nothing to time it out, on the very attempt that proves the jail
+# works. Bound the attempt itself rather than the connect. `timeout(1)` would be
+# the obvious tool and is not on a stock macOS, where this check is also run by
+# hand.
+attempt_login() {
+  ssh "${WRONG_OPTS[@]}" "not-a-user@127.0.0.1" true >/dev/null 2>&1 &
+  local ssh_pid=$!
+  (sleep 8 && kill -9 "$ssh_pid") >/dev/null 2>&1 &
+  local killer_pid=$!
+  wait "$ssh_pid" 2>/dev/null || true
+  kill "$killer_pid" >/dev/null 2>&1 || true
+}
+
 for _ in $(seq 12); do
-  ssh "${WRONG_OPTS[@]}" "not-a-user@127.0.0.1" true >/dev/null 2>&1 || true
+  attempt_login
   if [[ -n "$(th_exec "fail2ban-client status sshd" | sed -n 's/.*Banned IP list:[[:space:]]*//p')" ]]; then
     banned=yes
     break
