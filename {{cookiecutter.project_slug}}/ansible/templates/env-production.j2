@@ -56,22 +56,31 @@ RESEND_API_KEY={{ vault_resend_api_key | default('') }}
 # cc:end resend
 
 # ─── LLM Provider ──────────────────────────────────
-# Only the provider named here is read, so the other keys can stay empty in
-# the vault. The model names and base URLs are not secrets and not per-host,
-# which is why they are written here rather than in group_vars.
+# Only the provider answered at generation time is rendered here, matching the
+# vault, which carries only that provider's key. The model names and base URLs
+# are not secrets and not per-host, which is why they are written here rather
+# than in group_vars.
 LLM_PROVIDER=__LLM_PROVIDER__
+# cc:begin llm-ollama
 
 OLLAMA_BASE_URL=http://localhost:11434/v1
 OLLAMA_MODEL=llama3.2
 OLLAMA_API_KEY={{ vault_ollama_api_key | default('') }}
+# cc:end llm-ollama
+# cc:begin llm-openai
 
 OPENAI_API_KEY={{ vault_openai_api_key | default('') }}
+# cc:end llm-openai
+# cc:begin llm-anthropic
 
 ANTHROPIC_API_KEY={{ vault_anthropic_api_key | default('') }}
+# cc:end llm-anthropic
+# cc:begin llm-openrouter
 
 OPENROUTER_API_KEY={{ vault_openrouter_api_key | default('') }}
 OPENROUTER_MODEL=openai/gpt-4o-mini
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+# cc:end llm-openrouter
 
 # ─── AI step agent ────────────────────────────────────
 RESEARCH_MAX_TOOL_CALLS=8

@@ -152,11 +152,27 @@ jobs:
           test -f "$G/ansible/deploy.yml" && test -f "$G/ansible/vault.yml.example"
           ! grep -rqE '__[A-Z_]+__' "$G/ansible"
           grep -q '^LLM_PROVIDER=${{ matrix.llm_provider }}' "$G/.env.example"
-          if [ "${{ matrix.llm_provider }}" = openrouter ]; then
-            grep -q '^OPENROUTER_API_KEY=' "$G/.env.example"
-          else
-            ! grep -q '^OPENROUTER_API_KEY=' "$G/.env.example"
-          fi
+          # The answer decides which credentials a project is asked for, so the
+          # chosen provider's key is there and the other three are not — in the
+          # example env file, in the vault example and in the template the
+          # deploy renders on the host, since a key absent from one and present
+          # in another is the drift this asserts against. Checked for every
+          # provider rather than just the one that regressed: it is the same
+          # promise four times.
+          for f in .env.example ansible/vault.yml.example ansible/templates/env-production.j2; do
+            case "$f" in .env.example) p=''; ;; *) p='vault_'; ;; esac
+            for provider in ollama openai anthropic openrouter; do
+              key="$(echo "$provider" | tr '[:lower:]' '[:upper:]')_API_KEY"
+              [ -z "$p" ] || key="vault_${provider}_api_key"
+              if [ "$provider" = "${{ matrix.llm_provider }}" ]; then
+                grep -q "^$key" "$G/$f" || { echo "$f: missing $key"; exit 1; }
+              else
+                ! grep -q "^$key" "$G/$f" || { echo "$f: $key ships for ${{ matrix.llm_provider }}"; exit 1; }
+              fi
+            done
+          done
+          # No marker comment survives into a generated project.
+          ! grep -rq 'cc:begin\|cc:end' "$G/.env.example" "$G/ansible"
           # Magic link is independent of the OAuth choice: off drops its files, provider, UI and env vars.
           if [ "${{ matrix.include_magic_link }}" = no ]; then
             test ! -e "$G/app/(main)/(auth)/magic-link" && test ! -e "$G/components/auth/magic-link-form.tsx"

@@ -75,12 +75,20 @@ vault_resend_api_key: ""
 # cc:end resend
 
 # ─── Model provider ────────────────────────────────────────────────────────
-# Only the one LLM_PROVIDER names is read; the rest can stay empty. Ollama
-# needs no key unless something in front of it asks for one.
+# The provider answered at generation time, and only that one. Ollama needs no
+# key unless something in front of it asks for one, so its entry can stay empty.
+# cc:begin llm-ollama
 vault_ollama_api_key: ""
+# cc:end llm-ollama
+# cc:begin llm-openai
 vault_openai_api_key: ""
+# cc:end llm-openai
+# cc:begin llm-anthropic
 vault_anthropic_api_key: ""
+# cc:end llm-anthropic
+# cc:begin llm-openrouter
 vault_openrouter_api_key: ""
+# cc:end llm-openrouter
 
 # ─── Tracing ───────────────────────────────────────────────────────────────
 # Only read when langsmith_tracing is turned on in group_vars/all.yml. Leaving

@@ -112,7 +112,7 @@ Every generated project is a complete distributed system with **115 files**:
 | `include_marketing_extras` | yes | yes, no | Static JSON blog and contact form (with its API route) |
 | `auth_providers` | google_microsoft | google_microsoft, google_only, microsoft_only | OAuth providers |
 | `include_magic_link` | yes | yes, no | Email magic-link sign-in via Resend, independent of the OAuth choice. `no` drops its form, `/magic-link` page and provider; `RESEND_API_KEY` stays only if the contact form is kept |
-| `llm_provider` | ollama | ollama, openai, anthropic, openrouter | AI model provider |
+| `llm_provider` | ollama | ollama, openai, anthropic, openrouter | AI model provider. Sets `LLM_PROVIDER` and ships only that provider's credentials, in `.env.example`, the vault example and the env file a deploy renders. The worker's `settings.py` reads all four with defaults, so switching later means adding that provider's variables back, not changing code |
 | `python_version` | 3.14 | any version | Python for worker Dockerfile. `poetry.lock` is resolved for 3.14; any other value drops it and you must run `poetry lock` in `workers/app` once |
 | `node_version` | 20 | any version | Node.js for Dockerfiles |
 | `redis_port` | 6379 | any port | Local Redis port mapping |

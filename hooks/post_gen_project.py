@@ -238,6 +238,13 @@ def marker_decisions():
         "magic-link": magic_link,
         # RESEND_API_KEY serves both magic link and the contact form.
         "resend": magic_link or extras,
+        # One provider is answered and only that one's variables ship. The
+        # worker's settings.py still reads all four, with defaults, the way
+        # lib/plans.ts survives include_stripe=no: it is provider-agnostic code,
+        # and what the answer decides is which credentials a project is asked
+        # for — not which code it carries.
+        **{f"llm-{name}": LLM_PROVIDER == name
+           for name in ("ollama", "openai", "anthropic", "openrouter")},
     }
 
 
