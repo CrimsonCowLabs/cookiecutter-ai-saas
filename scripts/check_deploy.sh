@@ -234,7 +234,10 @@ docker build -q -t deploy-check-drizzle --platform "$PLATFORM" -f - . >/dev/null
 FROM node:$NODE_TAG
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --include=dev
+# --ignore-scripts: package.json's own \`prepare\` script (tsc -p cli) fires on
+# every npm ci, but cli/ isn't copied into this build context — same reason
+# the Dockerfile's own builder/ops/migrator stages carry it.
+RUN npm ci --include=dev --ignore-scripts
 DOCKERFILE
 mkdir -p lib/db/migrations
 docker run --rm --platform "$PLATFORM" \
