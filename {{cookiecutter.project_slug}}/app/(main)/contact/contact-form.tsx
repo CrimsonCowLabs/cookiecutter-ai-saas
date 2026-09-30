@@ -125,12 +125,12 @@ export function ContactForm() {
       </label>
 
       {status && (
-        <div className={`rounded-md border px-3 py-2 text-sm ${status.type === "success" ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-red-400/30 bg-red-500/10 text-red-200"}`}>
-          {status.message}
+        <div className={`alert ${status.type === "success" ? "alert-success" : "alert-error"} text-sm`}>
+          <span>{status.message}</span>
         </div>
       )}
 
-      <button type="submit" className="btn btn-primary btn-wide" disabled={isSubmitting}>
+      <button type="submit" className="btn btn-primary btn-wide min-h-11" disabled={isSubmitting}>
         {isSubmitting ? <span className="loading loading-spinner loading-sm" /> : "Send message"}
       </button>
     </form>
