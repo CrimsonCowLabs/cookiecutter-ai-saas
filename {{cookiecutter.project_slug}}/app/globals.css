@@ -82,6 +82,24 @@ body {
   font-family: var(--font-inter), system-ui, sans-serif;
 }
 
+/* DaisyUI's default `.btn` (~2.5rem) and `.btn-sm` (~2rem) fall short of the
+ * ~2.75rem (44px) minimum touch target (WCAG 2.5.5 / Apple HIG). Bumping it
+ * once here, rather than adding min-h-11 at every call site, means a new
+ * button anywhere in the template is tappable by default (see issue #25 —
+ * the utility framework "provides the tools and guarantees nothing", so the
+ * guarantee has to live here). min-height (not height) so it only raises a
+ * floor and never shrinks .btn-lg/.btn-xl, which already clear it.
+ * .btn-xs is deliberately left alone: it's for icon-dense contexts like
+ * packed table rows, which already scroll within their own container
+ * instead of relying on a large tap target.
+ */
+.btn, .btn-sm {
+  min-height: 2.75rem;
+}
+.btn-square, .btn-circle {
+  min-width: 2.75rem;
+}
+
 code, pre, .font-mono {
   font-family: var(--font-mono), ui-monospace, monospace;
 }

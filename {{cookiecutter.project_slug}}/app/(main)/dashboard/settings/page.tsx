@@ -65,11 +65,11 @@ export default async function SettingsPage() {
               </p>
             </div>
             {user.plan === "free" ? (
-              <Link href="/sign-up?plan_id=pro" className="btn btn-primary min-h-11">
+              <Link href="/sign-up?plan_id=pro" className="btn btn-primary">
                 Upgrade
               </Link>
             ) : (
-              <a href="/api/billing/portal" className="btn btn-outline min-h-11">
+              <a href="/api/billing/portal" className="btn btn-outline">
                 Manage billing
               </a>
             )}
@@ -155,7 +155,7 @@ export default async function SettingsPage() {
                   </ul>
                   <Link
                     href={`/sign-up?plan_id=${plan.tier}`}
-                    className="btn btn-primary min-h-11 w-full"
+                    className="btn btn-primary w-full"
                   >
                     Upgrade to {plan.name}
                   </Link>

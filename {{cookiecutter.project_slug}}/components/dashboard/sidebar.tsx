@@ -72,7 +72,7 @@ export function Sidebar({
           </div>
         </div>
         <form action={signOutAction} className="mt-3">
-          <button type="submit" className="btn btn-outline min-h-11 w-full">
+          <button type="submit" className="btn btn-outline w-full">
             Sign out
           </button>
         </form>

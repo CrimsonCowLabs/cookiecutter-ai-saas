@@ -74,7 +74,7 @@ export function MagicLinkForm({ planId, callbackUrl, onSuccess }: MagicLinkFormP
         />
       </label>
 
-      <button type="submit" className="btn btn-primary min-h-11 w-full" disabled={isLoading}>
+      <button type="submit" className="btn btn-primary w-full" disabled={isLoading}>
         {isLoading && <span className="loading loading-spinner" />}
         Send magic link
       </button>

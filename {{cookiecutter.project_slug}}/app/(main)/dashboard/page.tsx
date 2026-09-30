@@ -68,7 +68,7 @@ export default async function DashboardPage() {
             <p className="text-base-content/60 mb-4">
               No jobs yet. Paste a URL above to generate your first report.
             </p>
-            <a href="#new-report" className="btn btn-primary min-h-11">
+            <a href="#new-report" className="btn btn-primary">
               Create your first report
             </a>
           </div>

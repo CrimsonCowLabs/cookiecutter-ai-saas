@@ -130,7 +130,7 @@ export function ContactForm() {
         </div>
       )}
 
-      <button type="submit" className="btn btn-primary btn-wide min-h-11" disabled={isSubmitting}>
+      <button type="submit" className="btn btn-primary btn-wide" disabled={isSubmitting}>
         {isSubmitting ? <span className="loading loading-spinner loading-sm" /> : "Send message"}
       </button>
     </form>

@@ -6,17 +6,11 @@ import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { Sidebar } from "@/components/dashboard/sidebar";
+import { DrawerAutoClose } from "@/components/dashboard/drawer-auto-close";
+import { MenuIcon } from "@/components/ui/icons";
 import config from "@/config";
 
 const DRAWER_ID = "dashboard-drawer";
-
-function MenuIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 6h16M4 12h16M4 18h16" />
-    </svg>
-  );
-}
 
 const baseNavItems = [
   { href: "/dashboard", label: "Overview", icon: "M2.25 12l8.954-8.955a1.125 1.125 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" },
@@ -64,6 +58,7 @@ export default async function DashboardLayout({
           same approach as the public navbar's mobile menu), and pinned open
           as a static sidebar at `md` and up via `md:drawer-open`. */}
       <input id={DRAWER_ID} type="checkbox" className="drawer-toggle" />
+      <DrawerAutoClose drawerId={DRAWER_ID} />
 
       <div className="drawer-content flex flex-col">
         {/* Mobile topbar: the sidebar itself is off-canvas below `md`, so
@@ -72,7 +67,7 @@ export default async function DashboardLayout({
           <label
             htmlFor={DRAWER_ID}
             aria-label="Open menu"
-            className="btn btn-square btn-ghost min-h-11 min-w-11"
+            className="btn btn-square btn-ghost"
           >
             <MenuIcon className="w-5 h-5" />
           </label>
