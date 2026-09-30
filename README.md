@@ -385,9 +385,11 @@ Provisioning and deploying are playbooks, not scripts — see
 | `ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass` | Build, ship, migrate and switch |
 | `... ansible/deploy.yml -e deploy_targets=app` | Deploy one image |
 | `... ansible/deploy.yml --tags preflight` | Check the vault and DNS, deploy nothing |
+| `ansible-playbook -i ansible/inventory.ini ansible/backup.yml` | Install or update the backup schedule |
 
-Operating a deployed instance is `opsctl`, not a `docker compose` invocation
-remembered over SSH — see [Operating a deployed instance](#operating-a-deployed-instance):
+Operating a deployed instance is `opsctl`, not a `docker compose` invocation or
+an `ansible-playbook` command remembered over SSH — see
+[Operating a deployed instance](#operating-a-deployed-instance):
 
 | Command | Description |
 |---------|-------------|
@@ -396,6 +398,12 @@ remembered over SSH — see [Operating a deployed instance](#operating-a-deploye
 | `opsctl status` | Container status on the host |
 | `opsctl logs <service>` | Logs from the host (`-f` to follow) |
 | `opsctl shell <service>` | An interactive shell in a running service |
+| `opsctl provision` | Provision the host |
+| `opsctl deploy [targets...]` | Build, ship, migrate and switch |
+| `opsctl migrate` | Run pending migrations, shipping nothing else |
+| `opsctl secrets edit` | Edit `ansible/vault.yml` without decrypting it to disk |
+| `opsctl backup` | Take a backup right now |
+| `opsctl preflight` | Check the vault, DNS, host reachability and configuration; deploy nothing |
 
 ---
 
@@ -1136,12 +1144,35 @@ opsctl        # no arguments: lists every command
 | `opsctl logs <service>` | Logs from the host; arguments pass straight through, so `-f` follows |
 | `opsctl shell <service>` | An interactive shell in a running service (`docker compose exec -it`) |
 
-These four are read-only, by design. Full usage docs live in the generated
-project's own README (under "The CLI"), since that is where the CLI actually
-runs — this is the template's side of the same feature. The verbs that change
-the host — provisioning, deploying, editing secrets, taking a backup — wrap
-the same playbooks documented above, as further entries in the same command
-list.
+Those four are read-only, by design. The rest change the host, by wrapping the
+same playbooks documented above rather than reimplementing them — there is
+still exactly one deployment code path, whether a human types the
+`ansible-playbook` command or `opsctl` does:
+
+| Command | What it does |
+|---------|--------------|
+| `opsctl provision [-- ansible args]` | [Provisions](#provisioning-the-host) the host (`ansible-playbook ansible/provision.yml`); everything after `--` passes through, e.g. `-e deploy_public_key_file=...` |
+| `opsctl deploy [targets...] [--no-migrate]` | [Deploys](#deploying) (`ansible-playbook ansible/deploy.yml`); `opsctl deploy` ships everything, `opsctl deploy app worker` ships a subset, `--no-migrate` is `-e run_migrations=false` |
+| `opsctl migrate` | Runs pending migrations and ships nothing else (`-e deploy_targets=migrator`) — deploy.yml's own way to ship one image, aimed at the one that runs migrations |
+| `opsctl secrets edit` | `ansible-vault edit ansible/vault.yml`, interactively, in your own `$EDITOR` — never decrypted to disk |
+| `opsctl backup` | Takes a backup right now: `systemctl start <slug>-db-backup.service` on the host, the schedule [already installed](#database-backups) |
+| `opsctl preflight` | `opsctl config`'s checks, then `ansible-playbook ansible/deploy.yml --tags preflight` — catches unresolved DNS, an unreachable host and missing configuration before a deploy does |
+
+`opsctl provision`, `deploy`, `migrate` and `preflight` all run on the control
+machine, exactly like typing the `ansible-playbook` command by hand — only
+`backup` connects over SSH, because it starts something the playbooks already
+put on the host rather than running a playbook itself. Extra `ansible-playbook`
+arguments to `deploy` or `migrate` go after a literal `--` (`opsctl deploy app
+-- -e dns_check=false`), so a flag's own value can never be mistaken for a
+deploy target.
+
+There is no `restore` command, deliberately: `opsctl restore` says so and
+points at [Database backups](#database-backups)'s restore steps, which are a
+manual procedure and stay one — see that section for why.
+
+Full usage docs live in the generated project's own README (under "The CLI"),
+since that is where the CLI actually runs — this is the template's side of the
+same feature.
 
 ---
 
@@ -1158,7 +1189,7 @@ Six further jobs cover the parts no flag varies — serving, provisioning, deplo
 | `provisioning` | The playbook lints clean, then takes a throwaway host from stock image to ready state and leaves it that way: root refused over SSH, the deploy user logging in with a key, only the expected ports open, upgrades and rotation active — and a second run that changes nothing. Runs `scripts/check_provisioning.sh` |
 | `deploy` | The deploy playbook lints clean, the template ships a vault example and no vault, and every name in that example is prefixed `vault_`. Then a throwaway host is deployed to for real: secrets reaching it only as a `0600` file rendered from the encrypted vault and printed nowhere, even under `--diff`; the DNS pre-flight aborting when the served name resolves somewhere other than the target; migrations applied before the new containers serve; a deliberately broken release leaving the previous one still answering — and a second run that changes nothing. Runs `scripts/check_deploy.sh` |
 | `backups` | The backup playbook lints clean, refuses an unencrypted vault and a retention policy of zero, then installs itself on a provisioned throwaway host and is held to every criterion as behaviour: a dump taken from a live Postgres that still contains its rows, that same dump byte-for-byte at a separate destination, the timer firing on its own, pruning that deletes the oldest and never the newest, a broken destination surfacing as an alert delivered off the host while deleting nothing — and a second run that changes nothing. Runs `scripts/check_backups.sh` |
-| `cli` | `opsctl`'s own TypeScript type-checks and lints clean, its unit tests pass, and it installs from an npm `bin` entry (`npm link`) under a name that does not depend on `project_slug`. Then, against a throwaway host, it authenticates through nothing but a temporary block in the runner's own `~/.ssh/config`: `config` reports the placeholder host and missing vault before either exists, then reports all three checks ok once they do; `status` and `logs` reflect a real Postgres and Redis; `shell` opens a real interactive `exec` session, allocated a pty the way a terminal would. Runs `scripts/check_cli.sh` |
+| `cli` | `opsctl`'s own TypeScript type-checks and lints clean, its unit tests pass, and it installs from an npm `bin` entry (`npm link`) under a name that does not depend on `project_slug`. Then, against a throwaway host: `config` reports the placeholder host and missing vault before either exists; `provision` really runs `ansible/provision.yml` (and a second run changes nothing); `deploy` and `migrate` are refused by the real playbook's own checks (no vault, then an unknown target, then a nonsense platform that proves `migrate` builds only the migrator image); `preflight` fails on an unreachable host — the one thing `deploy.yml --tags preflight` cannot check itself — then passes once the host is reachable; `secrets edit` round-trips a change through a real `ansible-vault edit`; `backup` takes a real dump that reaches a stand-in destination; `status` and `logs` reflect a real Postgres and Redis, authenticating through nothing but a temporary block in the runner's own `~/.ssh/config`; `shell` opens a real interactive `exec` session, allocated a pty the way a terminal would; and `restore` explains itself rather than looking unknown. Runs `scripts/check_cli.sh` |
 
 ---
 

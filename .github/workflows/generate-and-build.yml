@@ -472,22 +472,28 @@ jobs:
       - name: Install backups on a throwaway host and check what they do
         run: scripts/check_backups.sh .generated-backups/backup-app
 
-  # Acceptance criteria for issue #21: the CLI installs from within a
-  # generated project, running it with no arguments lists the commands,
-  # container status and logs from a remote host are viewable locally, an
-  # interactive shell can be opened against any service, and authentication
-  # uses the operator's own SSH configuration rather than a key or agent the
-  # CLI manages itself.
+  # Acceptance criteria for issue #21 (the read-only verbs): the CLI installs
+  # from within a generated project, running it with no arguments lists the
+  # commands, container status and logs from a remote host are viewable
+  # locally, an interactive shell can be opened against any service, and
+  # authentication uses the operator's own SSH configuration rather than a
+  # key or agent the CLI manages itself.
   #
-  # scripts/check_cli.sh does the end-to-end run against a throwaway host,
-  # authenticating through a temporary block in the runner's own
-  # ~/.ssh/config rather than anything opsctl supplies; this job adds what is
-  # true of the generated files, and that the CLI's own TypeScript type-checks
-  # and lints clean, before anything is run against a host.
+  # Acceptance criteria for issue #22 (the write verbs): provision and deploy
+  # invoke the real playbooks rather than duplicating them, encrypted secrets
+  # can be edited without manual tooling, an on-demand backup can be taken,
+  # the preflight check catches unresolved DNS, an unreachable host and
+  # missing configuration, and restore is documented as not yet available
+  # rather than silently absent.
+  #
+  # scripts/check_cli.sh does the end-to-end run against a throwaway host; this
+  # job adds what is true of the generated files, and that the CLI's own
+  # TypeScript type-checks and lints clean, before anything is run against a
+  # host.
   cli:
-    name: opsctl installs and the read-only verbs work over real SSH
+    name: opsctl installs and every verb works for real
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       # The control machine's Python, not the generated project's, for the
@@ -535,5 +541,5 @@ jobs:
           opsctl | grep -q 'usage: opsctl'
           npm uninstall -g cli-app >/dev/null
 
-      - name: Run the read-only verbs against a throwaway host
+      - name: Run every verb against a throwaway host
         run: scripts/check_cli.sh .generated-cli/cli-app

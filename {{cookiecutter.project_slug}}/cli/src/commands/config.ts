@@ -104,6 +104,16 @@ export async function runConfigChecks(projectRoot: string, deps: ConfigCheckDeps
   return checks;
 }
 
+/** Prints one line per check and returns how many failed — shared with
+ * `preflight`, which runs these same checks before adding deploy.yml's own
+ * vault/DNS preflight, rather than forking a second copy of this logic. */
+export function printConfigChecks(checks: ConfigCheck[]): number {
+  for (const check of checks) {
+    console.log(`[${check.status}]`.padEnd(7), `${check.name}:`, check.detail);
+  }
+  return checks.filter((c) => c.status === "fail").length;
+}
+
 export const configCommand: CliCommand = {
   name: "config",
   summary: "Check first-run configuration: inventory, vault, SSH reachability",
@@ -117,10 +127,7 @@ export const configCommand: CliCommand = {
     }
 
     const checks = await runConfigChecks(projectRoot);
-    for (const check of checks) {
-      console.log(`[${check.status}]`.padEnd(7), `${check.name}:`, check.detail);
-    }
-    const failures = checks.filter((c) => c.status === "fail").length;
+    const failures = printConfigChecks(checks);
     if (failures > 0) {
       console.log(`\n${failures} problem${failures === 1 ? "" : "s"} found.`);
       return 1;

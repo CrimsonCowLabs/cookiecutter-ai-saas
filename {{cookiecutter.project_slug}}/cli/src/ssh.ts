@@ -63,14 +63,18 @@ export function buildSshArgv(config: HostConfig, remoteCommand: string, options:
   return argv;
 }
 
-/** Runs `docker compose <composeArgs>` on the host, with the local terminal's
- * stdio wired straight through — the same thing typing the ssh command by
- * hand would give you, including a real interactive session when `tty` is
- * set. Resolves to the child's exit code (or 130 if it died to a signal, the
- * usual shell convention) rather than throwing, since a non-zero compose exit
- * is an ordinary outcome here, not a bug in this CLI. */
-export function runCompose(config: HostConfig, composeArgs: string[], options: SshOptions = {}): Promise<number> {
-  const remoteCommand = buildRemoteCommand(config, composeArgs);
+/** Runs one already-built remote command string on the host, with the local
+ * terminal's stdio wired straight through — the same thing typing the ssh
+ * command by hand would give you, including a real interactive session when
+ * `tty` is set. Resolves to the child's exit code (or 128+signal if it died
+ * to one, the usual shell convention) rather than throwing, since a non-zero
+ * remote exit is an ordinary outcome here, not a bug in this CLI.
+ *
+ * The one command this CLI runs over ssh that is not `docker compose` — see
+ * `backup` in commands/backup.ts, which starts a systemd unit rather than a
+ * container. `runCompose` below is this function plus the compose-specific
+ * command shape. */
+export function runSsh(config: HostConfig, remoteCommand: string, options: SshOptions = {}): Promise<number> {
   const argv = buildSshArgv(config, remoteCommand, options);
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0], argv.slice(1), { stdio: "inherit" });
@@ -79,6 +83,13 @@ export function runCompose(config: HostConfig, composeArgs: string[], options: S
       resolve(code ?? (signal ? 128 : 1));
     });
   });
+}
+
+/** Runs `docker compose <composeArgs>` on the host — `runSsh` plus the
+ * `cd <app_dir> && docker compose ...` command shape every read-only verb
+ * uses. */
+export function runCompose(config: HostConfig, composeArgs: string[], options: SshOptions = {}): Promise<number> {
+  return runSsh(config, buildRemoteCommand(config, composeArgs), options);
 }
 
 /** A quiet, bounded reachability probe: `ssh -o BatchMode=yes -o

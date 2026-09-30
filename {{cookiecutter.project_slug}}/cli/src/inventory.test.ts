@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   buildHostConfig,
   findProjectRoot,
+  findProjectRootFromCwd,
+  InventoryError,
   parseGroupVars,
   parseInventory,
   UNSET_HOST_PLACEHOLDER,
@@ -108,4 +110,11 @@ test("findProjectRoot walks upward until it finds ansible/inventory.ini", () => 
 
 test("findProjectRoot returns null when nothing is found up to the root", () => {
   assert.equal(findProjectRoot("/home/ada/elsewhere", () => false), null);
+});
+
+test("findProjectRootFromCwd throws an InventoryError naming the problem when nothing is found", () => {
+  assert.throws(
+    () => findProjectRootFromCwd("/no/such/directory/at/all/opsctl-test"),
+    (error: unknown) => error instanceof InventoryError && /run this from inside a generated project/.test(error.message),
+  );
 });
