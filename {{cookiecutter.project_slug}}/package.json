@@ -20,7 +20,8 @@
     "prepare": "tsc -p cli",
     "cli:build": "tsc -p cli",
     "cli": "tsc -p cli && node cli/dist/index.js",
-    "test:cli": "tsc -p cli && cd cli/dist && node --test"
+    "test:cli": "tsc -p cli && cd cli/dist && node --test",
+    "test:auth": "node --test tests/auth/auth.test.mjs"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.4",
