@@ -11,7 +11,7 @@ import type { CliCommand } from "../types";
 
 export const secretsCommand: CliCommand = {
   name: "secrets",
-  summary: "secrets edit — edit ansible/vault.yml (ansible-vault edit), never decrypted to disk",
+  summary: "edit — ansible-vault edit ansible/vault.yml; the only subcommand, never decrypted to disk",
   async run(args) {
     if (args.length !== 1 || args[0] !== "edit") {
       console.error("usage: secrets edit");
