@@ -14,20 +14,21 @@
 #     exactly ansible/backup.yml's contract, and running the real playbook is
 #     less code here than reimplementing a deploy account and a container
 #     runtime — as well as proof that the two compose.
-#   * the destination — a MinIO server standing in for S3-compatible object
-#     storage, in its own container with its own filesystem and network
-#     namespace. Every assertion about what arrived there is made from a *third*
-#     container (MinIO's own `mc` client), never from the host being backed up,
-#     so "the dump left the host" is read from the far side of a network hop.
+#   * the destination — adobe/s3mock, an in-memory S3-compatible server
+#     standing in for object storage, in its own container with its own
+#     filesystem and network namespace. Every assertion about what arrived
+#     there is made from a *third* container (amazon/aws-cli, talking to the
+#     mock's --endpoint-url), never from the host being backed up, so "the
+#     dump left the host" is read from the far side of a network hop.
 #   * the alert endpoint — a small HTTP sink that records what is POSTed to it,
 #     so "the failure reached somebody" is an assertion about a request that
 #     left the host rather than about a log line on it.
 #
-# What the stand-in does not prove: durability. MinIO here shares a kernel and a
-# disk with the host it is backing up, so this shows a dump crossing a network
-# to somewhere the backup host cannot reach through its own filesystem — not
-# that the copy survives the machine. It also does not exercise a real
-# provider's credentials, its rate limits, or object lock.
+# What the stand-in does not prove: durability. The mock here shares a kernel
+# and a disk with the host it is backing up, so this shows a dump crossing a
+# network to somewhere the backup host cannot reach through its own
+# filesystem — not that the copy survives the machine. It also does not
+# exercise a real provider's credentials, its rate limits, or object lock.
 #
 # All three containers sit on Docker's default bridge and are addressed by IP,
 # not by name. A user-defined network would give them DNS, but the application
@@ -51,7 +52,7 @@ PROJECT_DIR="$PWD"
 throwaway_host_require_tools
 
 # Longer than the harness's default minute, because what this waits for includes
-# pulling the Postgres and MinIO images over the network.
+# pulling the Postgres and s3mock images over the network.
 TH_AWAIT_TRIES=120
 
 # An `x && fail` one-liner would be wrong: under `set -e` an AND-list whose left
@@ -66,7 +67,7 @@ fi
 # a translation would lock this check out of its own host.
 SSH_PORT=2223
 HOST="backup-check-host-$$"
-MINIO="backup-check-minio-$$"
+S3MOCK="backup-check-s3mock-$$"
 SINK="backup-check-sink-$$"
 
 # Credentials for the stand-in destination. Not secret — nothing outside this
@@ -79,7 +80,7 @@ BUCKET=backups
 cleanup() {
   # The two stand-ins are this script's; the application host, its image and the
   # temp directory are the harness's.
-  docker rm -f -v "$MINIO" "$SINK" >/dev/null 2>&1 || true
+  docker rm -f -v "$S3MOCK" "$SINK" >/dev/null 2>&1 || true
   rm -f "$PROJECT_DIR/$VAULT"
   throwaway_host_stop
 }
@@ -136,9 +137,12 @@ throwaway_host_start "$HOST" "$SSH_PORT"
 
 # ── The destination, and somewhere for alerts to land ────────────────────────
 echo "==> Starting the stand-in destination and the alert sink"
-docker run -d --name "$MINIO" \
-  -e "MINIO_ROOT_USER=$AK" -e "MINIO_ROOT_PASSWORD=$SK" \
-  minio/minio server /data >/dev/null
+# adobe/s3mock, with the bucket created at boot via its
+# COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS setting — nothing else needs
+# to create it afterward. Port 9090 is its plain-HTTP listener.
+docker run -d --name "$S3MOCK" \
+  -e "COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS=$BUCKET" \
+  adobe/s3mock >/dev/null
 
 # Records every request, so an alert is asserted as a request that arrived
 # somewhere else rather than as a log line on the host that sent it. 204 with no
@@ -179,23 +183,24 @@ docker run -d --name "$SINK" -v "$TH_WORK/sink.py:/sink.py:ro" \
 container_ip() {
   docker inspect -f '{{ .NetworkSettings.Networks.bridge.IPAddress }}' "$1"
 }
-MINIO_IP="$(container_ip "$MINIO")"
+S3_IP="$(container_ip "$S3MOCK")"
 SINK_IP="$(container_ip "$SINK")"
-[[ -n $MINIO_IP && -n $SINK_IP ]] || fail "the destination or the sink has no address on the bridge"
+[[ -n $S3_IP && -n $SINK_IP ]] || fail "the destination or the sink has no address on the bridge"
 
-# Every read of the destination goes through this: MinIO's own client, in its own
+# Every read of the destination goes through this: amazon/aws-cli, in its own
 # throwaway container, which has never had access to the backup host's
-# filesystem. MC_HOST_<alias> configures the alias from the environment, so
-# nothing has to be written into the container.
-mc() {
-  docker run --rm -e "MC_HOST_d=http://$AK:$SK@$MINIO_IP:9000" \
-    --entrypoint /usr/bin/mc minio/mc --quiet "$@"
+# filesystem. s3mock does not validate credentials, so any non-empty
+# access key/secret works.
+s3cli() {
+  docker run --rm -e AWS_ACCESS_KEY_ID="$AK" -e AWS_SECRET_ACCESS_KEY="$SK" \
+    -e AWS_DEFAULT_REGION=us-east-1 amazon/aws-cli \
+    --endpoint-url "http://$S3_IP:9090" s3 "$@"
 }
-await "the destination to accept connections" mc mb --ignore-existing "d/$BUCKET"
+await "the destination to accept connections" s3cli ls "s3://$BUCKET"
 
-# Dump names at the destination, oldest first. `mc ls` prints the name last.
+# Dump names at the destination, oldest first. `aws s3 ls` prints the name last.
 remote_dumps() {
-  mc ls "d/$REMOTE_PATH/" 2>/dev/null | awk '{ print $NF }' \
+  s3cli ls "s3://$REMOTE_PATH/" 2>/dev/null | awk '{ print $NF }' \
     | grep -E '^db-.*\.dump$' | sort || true
 }
 remote_count() { remote_dumps | wc -l | tr -d ' '; }
@@ -203,7 +208,7 @@ remote_count() { remote_dumps | wc -l | tr -d ' '; }
 sink_log() { docker exec "$SINK" cat /tmp/received.log; }
 sink_lines() { sink_log | wc -l | tr -d ' '; }
 
-pass "the destination and the alert sink are up, on $MINIO_IP and $SINK_IP"
+pass "the destination and the alert sink are up, on $S3_IP and $SINK_IP"
 
 printf 'backup-check-vault-password\n' > "$TH_WORK/vault-pass"
 run_backup() {
@@ -229,8 +234,8 @@ cat > "$VAULT" <<VAULTFILE
 ---
 vault_backup_remote:
   type: s3
-  provider: Minio
-  endpoint: http://$MINIO_IP:9000
+  provider: Other
+  endpoint: http://$S3_IP:9090
   region: us-east-1
   access_key_id: $AK
   secret_access_key: $SK
@@ -370,14 +375,14 @@ th_exec "cid=\$(docker ps -q --filter label=com.docker.compose.service=postgres 
 pass "the dump is a readable archive containing the database's rows"
 
 # Criterion: the dump is at storage that is not the application host. Read
-# through MinIO's client in a third container, so this is the far side of a
-# network hop rather than the backup host reporting on itself.
+# through the aws-cli client in a third container, so this is the far side of
+# a network hop rather than the backup host reporting on itself.
 remote_dumps | grep -qx "$DUMP1" || fail "$DUMP1 is not at the destination"
 # Byte-for-byte, so that together with the pg_restore check above it is the
 # *remote* copy that is known to contain the rows — without ever reading the
 # remote copy back through the host being backed up.
 sha256() { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi | awk '{ print $1 }'; }
-remote_sha="$(mc cat "d/$REMOTE_PATH/$DUMP1" | sha256)"
+remote_sha="$(s3cli cp "s3://$REMOTE_PATH/$DUMP1" - | sha256)"
 local_sha="$(th_exec "sha256sum $LOCAL_DIR/$DUMP1" | awk '{ print $1 }')"
 [[ "$remote_sha" == "$local_sha" ]] \
   || fail "the copy at the destination differs from the dump ($remote_sha vs $local_sha)"
@@ -458,7 +463,7 @@ NEXT_TO_GO="$(local_dumps | grep '^db-2020-' | head -1)"
 echo "==> Making the destination unreachable from the host"
 before_remote="$(remote_count)"
 before_stamp="$(th_exec "stat -c %Y $STATE_DIR/last-success" | tr -d '\r')"
-th_exec "ufw reject out to $MINIO_IP" >/dev/null \
+th_exec "ufw reject out to $S3_IP" >/dev/null \
   || fail "could not cut the host's route to the destination"
 
 if th_exec "systemctl start $UNIT.service" 2>/dev/null; then
@@ -495,7 +500,7 @@ local_dumps | grep -qx "$NEXT_TO_GO" \
 pass "the failed run pruned nothing, locally or at the destination, and left the stamp alone"
 
 echo "==> Restoring the route to the destination"
-th_exec "ufw delete reject out to $MINIO_IP" >/dev/null \
+th_exec "ufw delete reject out to $S3_IP" >/dev/null \
   || fail "could not restore the host's route to the destination"
 th_exec "systemctl start $UNIT.service" \
   || { th_exec "journalctl -u $UNIT.service --no-pager -n 40" >&2

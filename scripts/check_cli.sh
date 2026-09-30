@@ -37,8 +37,8 @@
 # the real playbook and propagates its output/exit code, without paying for
 # what is already proven elsewhere. `backup` here does take one real dump, off
 # this host, because "an on-demand backup can be taken" is worth the modest
-# cost of a stand-in destination (a single MinIO container, no alert sink —
-# alerting itself is check_backups.sh's claim, not this script's).
+# cost of a stand-in destination (a single S3-compatible mock container, no
+# alert sink — alerting itself is check_backups.sh's claim, not this script's).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,16 +59,16 @@ if [[ -e ansible/vault.yml ]]; then
   fail "$PROJECT_DIR/ansible/vault.yml exists; this check would overwrite it. Run it against a freshly generated project."
 fi
 
-# Pulling the Postgres and MinIO images over the network is slower than
+# Pulling the Postgres and s3mock images over the network is slower than
 # anything installed on an already-built host image.
 TH_AWAIT_TRIES=120
 
 SSH_PORT=2224
 HOST_ALIAS="cli-check-host"
-MINIO="cli-check-minio-$$"
+S3MOCK="cli-check-s3mock-$$"
 
 cleanup_extra() {
-  docker rm -f -v "$MINIO" >/dev/null 2>&1 || true
+  docker rm -f -v "$S3MOCK" >/dev/null 2>&1 || true
 }
 
 # The real per-user ssh config, temporarily extended — see the header comment.
@@ -171,6 +171,23 @@ pass "deploy, migrate and preflight all surface deploy.yml's own \"vault.yml doe
 # locally, and only this file tells those binaries where the host is.
 cp "$TH_INVENTORY" ansible/inventory.ini
 
+# ansible itself trusts this host key via inventory.ini's own
+# ansible_ssh_common_args (see lib/throwaway_host.sh) — but opsctl's own ssh
+# probe (cli/src/ssh.ts, used by `config`/`preflight`) is deliberately just
+# the plain `ssh` binary with only -p/-i added, so it consults the real
+# ~/.ssh/config the same way a human typing `ssh` would. A host an operator
+# has never connected to before needs exactly this once — a real one gets it
+# from a first interactive login or `ssh-keyscan`; accept-new here is that,
+# not a relaxation of what `preflight` proves. Scoped to a temp known_hosts
+# file so nothing is written to the real one, and gone when SSH_CONFIG is
+# restored on exit.
+cat >> "$SSH_CONFIG" <<SSHCONFIG
+
+Host 127.0.0.1
+  StrictHostKeyChecking accept-new
+  UserKnownHostsFile $TH_WORK/known_hosts
+SSHCONFIG
+
 # ── provision: opsctl invoking the real playbook, not a reimplementation ────
 echo "==> opsctl provision"
 provision_output="$("${OPSCTL[@]}" provision 2>&1)" \
@@ -187,24 +204,30 @@ grep -qE 'changed=0 +unreachable=0 +failed=0' <<<"$recap" \
 pass "re-running opsctl provision changes nothing ($recap)"
 
 # ── A destination for a real, on-demand backup ───────────────────────────────
-# Only MinIO: unlike scripts/check_backups.sh this script is not proving
-# alerting, retention or staleness — those stay that script's claim — only
-# that `opsctl backup` triggers a real dump that leaves the host.
+# Only the stand-in destination: unlike scripts/check_backups.sh this script
+# is not proving alerting, retention or staleness — those stay that script's
+# claim — only that `opsctl backup` triggers a real dump that leaves the host.
 echo "==> Starting a stand-in backup destination"
 AK=clicheckkey
 SK=clicheckskeysecret
-docker run -d --name "$MINIO" \
-  -e "MINIO_ROOT_USER=$AK" -e "MINIO_ROOT_PASSWORD=$SK" \
-  minio/minio server /data >/dev/null
+# adobe/s3mock, with the bucket created at boot via its
+# COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS setting — nothing else needs
+# to create it afterward. Port 9090 is its plain-HTTP listener.
+docker run -d --name "$S3MOCK" \
+  -e "COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS=$BUCKET" \
+  adobe/s3mock >/dev/null
 container_ip() { docker inspect -f '{{ .NetworkSettings.Networks.bridge.IPAddress }}' "$1"; }
-MINIO_IP="$(container_ip "$MINIO")"
-[[ -n $MINIO_IP ]] || fail "the stand-in destination has no address on the bridge"
-mc() {
-  docker run --rm -e "MC_HOST_d=http://$AK:$SK@$MINIO_IP:9000" \
-    --entrypoint /usr/bin/mc minio/mc --quiet "$@"
+S3_IP="$(container_ip "$S3MOCK")"
+[[ -n $S3_IP ]] || fail "the stand-in destination has no address on the bridge"
+s3cli() {
+  docker run --rm -e AWS_ACCESS_KEY_ID="$AK" -e AWS_SECRET_ACCESS_KEY="$SK" \
+    -e AWS_DEFAULT_REGION=us-east-1 amazon/aws-cli \
+    --endpoint-url "http://$S3_IP:9090" s3 "$@"
 }
-await "the destination to accept connections" mc mb --ignore-existing "d/$BUCKET"
-pass "the stand-in backup destination is up on $MINIO_IP"
+# s3mock does not validate credentials; this only proves the endpoint is up
+# and the bucket created at boot is really there.
+await "the destination to accept connections" s3cli ls "s3://$BUCKET"
+pass "the stand-in backup destination is up on $S3_IP"
 
 # ── Secrets, for both deploy.yml and backup.yml ──────────────────────────────
 printf 'cli-check-vault-password\n' > "$TH_WORK/vault-pass"
@@ -214,8 +237,8 @@ vault_nextauth_secret: "cli-check-nextauth-sentinel"
 vault_postgres_password: "cli-check-postgres-sentinel"
 vault_backup_remote:
   type: s3
-  provider: Minio
-  endpoint: http://$MINIO_IP:9000
+  provider: Other
+  endpoint: http://$S3_IP:9090
   region: us-east-1
   access_key_id: $AK
   secret_access_key: $SK
@@ -225,6 +248,16 @@ VAULTFILE
 ansible-vault encrypt --vault-password-file "$TH_WORK/vault-pass" ansible/vault.yml >/dev/null
 head -c 14 ansible/vault.yml | grep -q '^\$ANSIBLE_VAULT' || fail "ansible-vault encrypt did not produce a vault header"
 pass "ansible/vault.yml is encrypted, with what deploy.yml and backup.yml both need"
+
+# Exported only now that vault.yml is encrypted, and never alongside an
+# explicit --vault-password-file (ansible-vault encrypt above needs exactly
+# one vault-id, and the two together are an ambiguous "default,default").
+# Every ansible-playbook/ansible-vault call this script makes through opsctl
+# from here on (preflight, deploy, migrate, secrets edit) needs to decrypt
+# ansible/vault.yml, and opsctl itself never adds --vault-password-file — an
+# operator sets this once in their own shell, the same standard ansible env
+# var, and every subsequent command benefits.
+export ANSIBLE_VAULT_PASSWORD_FILE="$TH_WORK/vault-pass"
 
 # ── preflight: config's own checks catch what deploy.yml's --tags preflight
 #    does not — an unreachable host ──────────────────────────────────────────
@@ -408,7 +441,7 @@ after="$(th_exec "ls -1 /var/backups/$SLUG/db-*.dump 2>/dev/null | wc -l" | tr -
 [[ "$after" -gt "$before" ]] \
   || fail "opsctl backup did not produce a new dump in /var/backups/$SLUG (before=$before, after=$after)"
 newest="$(th_exec "ls -1 /var/backups/$SLUG/db-*.dump | sort | tail -1")"
-mc ls "d/$BUCKET/$SLUG/" 2>/dev/null | grep -q "$(basename "$newest")" \
+s3cli ls "s3://$BUCKET/$SLUG/" 2>/dev/null | grep -q "$(basename "$newest")" \
   || fail "opsctl backup's dump ($newest) did not reach the stand-in destination"
 pass "opsctl backup started $UNIT.service over ssh, and a real dump reached the destination"
 
