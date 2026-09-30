@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "./args";
 import { commands, findCommand } from "./commands/registry";
-import { helpText } from "./help";
+import { helpText, RESTORE_NOTE } from "./help";
 import { InventoryError } from "./inventory";
 
 async function main(): Promise<number> {
@@ -10,6 +10,15 @@ async function main(): Promise<number> {
   if (parsed.command === null || parsed.isHelp) {
     console.log(helpText(commands));
     return 0;
+  }
+
+  // No `restore` entry in the registry, deliberately (see ansible/backup.yml
+  // and the README's "Database backups" section): an untested restore script
+  // is worse than none. Naming it here, rather than letting it fall through
+  // to "Unknown command", is what makes that an answer instead of an absence.
+  if (parsed.command === "restore") {
+    console.error(RESTORE_NOTE);
+    return 1;
   }
 
   const command = findCommand(parsed.command);

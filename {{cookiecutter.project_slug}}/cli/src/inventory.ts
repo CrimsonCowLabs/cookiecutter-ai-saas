@@ -216,14 +216,24 @@ export function loadHostConfig(projectRoot: string): HostConfig {
   return result.config;
 }
 
-/** Finds the project root from `cwd` and loads its HostConfig, for commands
- * that need a fully-configured host to do anything (status, logs, shell). */
-export function loadHostConfigFromCwd(cwd: string): HostConfig {
+/** Finds the project root from `cwd`, or throws an `InventoryError` with a
+ * message meant to be printed as-is. Every command that shells out to a
+ * playbook or to `ansible-vault` needs only this — the inventory file's own
+ * path, not a parsed `HostConfig` — since it is Ansible, not this CLI, that
+ * reads the inventory for those. */
+export function findProjectRootFromCwd(cwd: string): string {
   const root = findProjectRoot(cwd);
   if (!root) {
     throw new InventoryError(
       "no ansible/inventory.ini found in this directory or any parent — run this from inside a generated project",
     );
   }
-  return loadHostConfig(root);
+  return root;
+}
+
+/** Finds the project root from `cwd` and loads its HostConfig, for commands
+ * that need a fully-configured host to do anything (status, logs, shell,
+ * backup). */
+export function loadHostConfigFromCwd(cwd: string): HostConfig {
+  return loadHostConfig(findProjectRootFromCwd(cwd));
 }

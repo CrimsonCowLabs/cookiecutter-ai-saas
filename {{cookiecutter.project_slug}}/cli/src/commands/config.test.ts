@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runConfigChecks, type ConfigCheckDeps } from "./config";
+import { printConfigChecks, runConfigChecks, type ConfigCheck, type ConfigCheckDeps } from "./config";
 
 const INVENTORY = "[vps]\nmyapp.example.com ansible_host=203.0.113.9\n";
 const GROUP_VARS = "deploy_user: adalovelace\napp_dir: /app/myapp\nproject_slug: myapp\n";
@@ -68,6 +68,20 @@ test("no host configured skips the SSH probe rather than attempting it", async (
   const checks = await runConfigChecks("/proj", deps);
   assert.equal(probed, false);
   assert.equal(checks.find((c) => c.name === "ssh")?.status, "skip");
+});
+
+test("printConfigChecks returns the number of failing checks — preflight reuses it as-is", () => {
+  const checks: ConfigCheck[] = [
+    { name: "inventory", status: "ok", detail: "fine" },
+    { name: "vault", status: "fail", detail: "not encrypted" },
+    { name: "ssh", status: "fail", detail: "unreachable" },
+  ];
+  assert.equal(printConfigChecks(checks), 2);
+});
+
+test("printConfigChecks returns zero when every check passed", () => {
+  const checks: ConfigCheck[] = [{ name: "inventory", status: "ok", detail: "fine" }];
+  assert.equal(printConfigChecks(checks), 0);
 });
 
 test("a configured but unreachable host fails the SSH check", async () => {

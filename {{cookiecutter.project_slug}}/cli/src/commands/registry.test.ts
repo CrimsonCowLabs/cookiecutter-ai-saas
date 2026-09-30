@@ -18,6 +18,18 @@ test("the read-only verbs from issue #21 are all registered", () => {
   }
 });
 
+test("the write verbs from issue #22 are all registered", () => {
+  for (const name of ["provision", "deploy", "migrate", "secrets", "backup", "preflight"]) {
+    assert.ok(findCommand(name), `expected a "${name}" command`);
+  }
+});
+
+test("restore is deliberately not a registered command", () => {
+  // See help.ts's RESTORE_NOTE and index.ts: running `opsctl restore` still
+  // gets an answer, just not by being dispatched as an ordinary command.
+  assert.equal(findCommand("restore"), undefined);
+});
+
 test("findCommand returns undefined for an unknown name", () => {
   assert.equal(findCommand("does-not-exist"), undefined);
 });

@@ -206,8 +206,10 @@ Drizzle ORM/Kit stay on the stable 0.x line; 1.0 is still a release candidate.
 | `npm run db:migrate` | Run pending migrations |
 | `npm run db:studio` | Open Drizzle Studio |
 
-Operating a deployed instance (status, logs, an interactive shell) is
-`opsctl`, not an npm script — see [The CLI](#the-cli).
+Operating a deployed instance — status, logs, an interactive shell, and
+provisioning, deploying, editing secrets and taking a backup — is `opsctl`,
+not an npm script or an `ansible-playbook` command remembered over SSH — see
+[The CLI](#the-cli).
 
 ## Deployment
 
@@ -437,9 +439,31 @@ migrator image). Run it first on a fresh clone; a placeholder host or a
 plaintext vault is refused by name rather than surfacing as a confusing
 failure three commands later.
 
-These four are read-only. Verbs that change the host — `provision`, `deploy`,
-editing secrets, `backup`, a full preflight — wrap the same playbooks this
-README already documents, as more entries in the same command list.
+Those four are read-only. The rest change the host, and each wraps a playbook
+or tool this README already documents rather than reimplementing it — there
+is exactly one deployment code path whether a human types the
+`ansible-playbook` command or `opsctl` does:
+
+| Command | What it does |
+|---------|--------------|
+| `opsctl provision [-- ansible args]` | [Provisions](#deployment) the host (`ansible-playbook ansible/provision.yml`); everything after `--` passes through, e.g. `-e deploy_public_key_file=...` |
+| `opsctl deploy [targets...] [--no-migrate]` | [Deploys](#deployment) (`ansible-playbook ansible/deploy.yml`); `opsctl deploy` ships everything, `opsctl deploy app worker` ships a subset, `--no-migrate` is `-e run_migrations=false` |
+| `opsctl migrate` | Runs pending migrations and ships nothing else (`-e deploy_targets=migrator`) |
+| `opsctl secrets edit` | `ansible-vault edit ansible/vault.yml`, interactively, in your own `$EDITOR` — never decrypted to disk |
+| `opsctl backup` | Takes a backup right now: `systemctl start {{ cookiecutter.project_slug }}-db-backup.service` on the host, the schedule [already installed](#database-backups) |
+| `opsctl preflight` | `opsctl config`'s checks, then `ansible-playbook ansible/deploy.yml --tags preflight` — catches unresolved DNS, an unreachable host and missing configuration before a deploy does |
+
+`provision`, `deploy`, `migrate` and `preflight` all run on the control
+machine, exactly like typing the `ansible-playbook` command by hand — only
+`backup` connects over SSH, because it starts something the playbooks already
+put on the host rather than running a playbook itself. Extra
+`ansible-playbook` arguments to `deploy` or `migrate` go after a literal `--`
+(`opsctl deploy app -- -e dns_check=false`), so a flag's own value can never be
+mistaken for a deploy target.
+
+There is no `restore` command, deliberately: `opsctl restore` says so and
+points at [Database backups](#database-backups)'s restore steps, which stay a
+manual procedure — see that section for why.
 
 ## Database backups
 
