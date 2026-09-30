@@ -158,9 +158,16 @@ jobs:
           # deploy renders on the host, since a key absent from one and present
           # in another is the drift this asserts against. Checked for every
           # provider rather than just the one that regressed: it is the same
-          # promise four times.
+          # promise four times. Only vault.yml.example keys its lines as
+          # vault_<provider>_api_key; .env.example and env-production.j2 both
+          # start the line with the uppercase PROVIDER_API_KEY — the vault
+          # variable in env-production.j2 only appears mid-line, inside the
+          # Jinja default() expression on the RHS.
           for f in .env.example ansible/vault.yml.example ansible/templates/env-production.j2; do
-            case "$f" in .env.example) p=''; ;; *) p='vault_'; ;; esac
+            case "$f" in
+              ansible/vault.yml.example) p='vault_'; ;;
+              *) p=''; ;;
+            esac
             for provider in ollama openai anthropic openrouter; do
               key="$(echo "$provider" | tr '[:lower:]' '[:upper:]')_API_KEY"
               [ -z "$p" ] || key="vault_${provider}_api_key"
