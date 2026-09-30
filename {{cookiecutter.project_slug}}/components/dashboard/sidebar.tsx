@@ -24,7 +24,7 @@ export function Sidebar({
   signOutAction,
 }: SidebarProps) {
   return (
-    <aside className="w-64 bg-base-200 border-r border-base-300 flex flex-col">
+    <aside className="w-64 min-h-full bg-base-200 border-r border-base-300 flex flex-col">
       <div className="p-4 border-b border-base-300">
         <Link href="/dashboard" className="inline-flex items-center gap-2 font-bold text-xl">
           <Logo className="h-5 w-5 text-primary" />
@@ -37,7 +37,7 @@ export function Sidebar({
           <Link
             key={item.href}
             href={item.href}
-            className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-base-300 transition-colors text-sm"
+            className="flex items-center gap-3 min-h-11 px-3 py-2 rounded-lg hover:bg-base-300 transition-colors text-sm"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -72,7 +72,7 @@ export function Sidebar({
           </div>
         </div>
         <form action={signOutAction} className="mt-3">
-          <button type="submit" className="btn btn-sm btn-outline w-full">
+          <button type="submit" className="btn btn-outline min-h-11 w-full">
             Sign out
           </button>
         </form>
