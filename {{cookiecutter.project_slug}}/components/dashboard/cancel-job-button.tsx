@@ -26,7 +26,7 @@ export function CancelJobButton({ jobId }: { jobId: string }) {
       <button
         type="button"
         onClick={onCancel}
-        className="btn btn-sm btn-outline btn-error"
+        className="btn btn-outline btn-error min-h-11"
         disabled={isPending}
       >
         {isPending ? <span className="loading loading-spinner loading-xs" /> : "Cancel job"}
