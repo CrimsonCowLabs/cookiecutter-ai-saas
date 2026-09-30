@@ -15,6 +15,17 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      # Next.js standalone serves plain HTTP; wget ships in node:*-alpine
+      # already, so no extra tooling has to be installed into the image just to
+      # probe it. 127.0.0.1, not localhost: this image resolves "localhost" to
+      # ::1 first, and the server listens on 0.0.0.0 (IPv4 only) — wget would
+      # otherwise fail every probe with an immediate connection refused.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   worker:
     build:
@@ -29,6 +40,15 @@ services:
     restart: unless-stopped
     deploy:
       replicas: 1
+    healthcheck:
+      # No HTTP surface to probe, so worker.py touches /tmp/healthy every 5s —
+      # but only while it can actually reach Redis, so a lost Redis connection
+      # reports unhealthy rather than just "the process is still running".
+      test: ["CMD", "python", "-c", "import pathlib,sys,time; p = pathlib.Path('/tmp/healthy'); sys.exit(0 if p.exists() and time.time() - p.stat().st_mtime < 15 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
 
   db-writer:
     build:
@@ -41,6 +61,14 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      # Same heartbeat-file idea as worker's: no HTTP surface, and the file is
+      # only touched while worker.mjs's Redis connection is actually alive.
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/healthy');process.exit(Date.now()-s.mtimeMs<15000?0:1)}catch(e){process.exit(1)}"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
 
   postgres:
 {% if cookiecutter.database_extensions == 'pgvector' %}

@@ -1193,6 +1193,12 @@ Six further jobs cover the parts no flag varies — serving, provisioning, deplo
 
 ---
 
+## Nightly stack health check
+
+Bringing up real containers — app, worker, db-writer, postgres, redis — and running a real job through the queue and worker is too slow for every PR, and cheap once a night. `.github/workflows/nightly-stack-health.yml` generates a project, brings the full stack up, waits for every service to report Docker-healthy, and submits one job directly through Postgres and Redis to prove the queue/worker/db-writer pipeline actually runs end to end in real containers. A failure files (or comments on) a `nightly-failure`-labeled issue so it doesn't rely on anyone watching the Actions tab. Runs `scripts/check_stack_health.sh`.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

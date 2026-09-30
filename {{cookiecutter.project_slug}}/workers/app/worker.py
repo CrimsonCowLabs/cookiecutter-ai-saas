@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import pathlib
 import logging
 
 from bullmq import Worker
@@ -139,9 +140,20 @@ async def main():
 
     logger.info("Worker listening for jobs...")
 
-    # Keep the worker running
+    # Keep the worker running, and double as the container's liveness signal:
+    # docker-compose.yml's healthcheck has no HTTP surface to probe here, so it
+    # instead reads this file's mtime. Only touching it on a successful PING
+    # means a worker that is still running but has lost Redis (and so cannot
+    # pick up jobs) reports unhealthy instead of just "alive".
+    healthy_file = pathlib.Path("/tmp/healthy")
+    redis_pub = await get_redis_pub()
     while True:
-        await asyncio.sleep(1)
+        try:
+            await redis_pub.ping()
+            healthy_file.touch()
+        except Exception:
+            logger.warning("Redis ping failed; not touching %s", healthy_file)
+        await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
