@@ -313,6 +313,50 @@ jobs:
       - name: Serve HTTPS from the stack
         run: scripts/check_tls_stack.sh .generated-tls/tls-app
 
+  # Acceptance criteria for issue #23 (auth integration tests): an
+  # unauthenticated request to a dashboard route redirects to sign-in, public
+  # marketing routes remain reachable unauthenticated, a non-admin user is
+  # refused the admin area, these tests run in CI against a generated
+  # project (this job), and reintroducing prefix-matching on the root path
+  # turns them red — verified by hand (see the PR), not by CI, since that
+  # would mean shipping the bug to prove the bug is caught.
+  #
+  # scripts/check_auth.sh does the end-to-end run: it brings up postgres and
+  # redis, builds and boots the generated app for real, and runs
+  # tests/auth/auth.test.mjs — which ships inside the template itself — as a
+  # real HTTP client against it. See that test file for why a real running
+  # server is required: this is exactly the class of bug (middleware.ts
+  # matching "/" by prefix instead of exactly) that a type checker cannot
+  # catch, because the buggy middleware still compiles.
+  auth-integration:
+    name: The access rules hold against a running app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install cookiecutter
+
+      # Matches "node_version" in cookiecutter.json.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate project
+        # include_marketing_extras=yes: the default, made explicit because
+        # tests/auth/auth.test.mjs asserts /blog and /contact are public —
+        # routes that flag removes entirely (see flag-matrix's "Assert flag
+        # effects" step). Left off the flag, a future default change would
+        # silently start asserting on routes that do not exist.
+        run: |
+          cookiecutter . --no-input -o .generated-auth project_name="Auth App" \
+            include_marketing_extras=yes
+
+      - name: The access rules hold against a running app
+        run: scripts/check_auth.sh .generated-auth/auth-app
+
   # Acceptance criteria for the provisioning playbook: a fresh host reaches a
   # ready state from one command, SSH is key-only with no root login, the
   # firewall exposes only what is needed, unattended upgrades and log rotation
