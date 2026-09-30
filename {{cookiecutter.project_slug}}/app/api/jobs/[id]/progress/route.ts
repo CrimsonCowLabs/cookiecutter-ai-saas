@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 /**
  * SSE endpoint that streams job progress updates.
  * The Python worker publishes events to Redis channel `job:{jobId}:progress`.
- * Events are JSON: { status, progress?, message? }
+ * Events are JSON: { status, progress?, message?, detail? }. `detail` is present
+ * on events from inside a step (agent steps, tool calls) and is passed through.
  *
  * The stream ends when the job reaches a terminal state (completed/failed/cancelled).
  */

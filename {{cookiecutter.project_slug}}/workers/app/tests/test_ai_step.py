@@ -264,8 +264,11 @@ async def progress_of(monkeypatch, model, input_data=INPUT_DATA):
     use_model(monkeypatch, model)
     events = []
 
-    async def record(pct, step, status, message):
-        events.append((pct, step, status, message))
+    async def record(pct, step, status, message, detail=None):
+        # Step-boundary events only; the agent's own events are covered in
+        # test_agent_progress.py.
+        if detail is None:
+            events.append((pct, step, status, message))
 
     result = await run_job("job-1", "default", "user-1", input_data, progress_callback=record)
     return events, result
@@ -354,7 +357,10 @@ async def test_run_job_explains_a_fetch_failure_when_there_is_no_model(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_progress_is_identical_however_many_tool_calls_run(monkeypatch, serve_page):
+async def test_step_boundaries_are_identical_however_many_tool_calls_run(monkeypatch, serve_page):
+    # The agent's own events (model steps, tool calls) vary with how many tool
+    # calls run; `progress_of` already filters those out via `detail`, so only
+    # the step-boundary events are compared here.
     serve_page(PAGE)
     runs = {
         "zero calls": ScriptedChatModel(responses=tool_calls(0)),

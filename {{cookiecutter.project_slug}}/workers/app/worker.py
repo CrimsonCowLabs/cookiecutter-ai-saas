@@ -32,16 +32,28 @@ async def get_redis_pub():
     return _redis_pub
 
 
-async def publish_progress(job_id: str, status: str, progress: int, message: str = ""):
-    """Publish job progress to Redis channel for SSE consumers."""
+async def publish_progress(
+    job_id: str,
+    status: str,
+    progress: int,
+    message: str = "",
+    detail: dict | None = None,
+):
+    """Publish job progress to Redis channel for SSE consumers.
+
+    `detail` is set for events from inside a step (agent steps, tool calls) and
+    carries at least `kind`; step-boundary events omit it.
+    """
     r = await get_redis_pub()
     channel = f"job:{job_id}:progress"
-    payload = json.dumps({
+    event = {
         "status": status,
         "progress": progress,
         "message": message,
-    })
-    await r.publish(channel, payload)
+    }
+    if detail:
+        event["detail"] = detail
+    await r.publish(channel, json.dumps(event))
 
 
 async def publish_result(job_id: str, result: dict):
@@ -75,11 +87,12 @@ async def process_job(job, token):
         step_name: str = "",
         status: str = "running",
         message: str = "",
+        detail: dict | None = None,
     ):
         nonlocal failure_notified
         await job.updateProgress(pct)
         resolved_message = message or (f"Running {step_name}" if step_name else "")
-        await publish_progress(job_id, status, pct, resolved_message)
+        await publish_progress(job_id, status, pct, resolved_message, detail)
         if status == "failed":
             failure_notified = True
 
