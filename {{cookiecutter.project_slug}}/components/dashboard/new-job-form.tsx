@@ -94,7 +94,7 @@ export function NewJobForm() {
         </div>
       )}
 
-      <button type="submit" className="btn btn-primary" disabled={isPending}>
+      <button type="submit" className="btn btn-primary min-h-11" disabled={isPending}>
         {isPending ? (
           <>
             <span className="loading loading-spinner loading-sm" />
