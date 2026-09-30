@@ -206,6 +206,9 @@ Drizzle ORM/Kit stay on the stable 0.x line; 1.0 is still a release candidate.
 | `npm run db:migrate` | Run pending migrations |
 | `npm run db:studio` | Open Drizzle Studio |
 
+Operating a deployed instance (status, logs, an interactive shell) is
+`opsctl`, not an npm script — see [The CLI](#the-cli).
+
 ## Deployment
 
 ```bash
@@ -400,6 +403,44 @@ curl -k https://localhost/
 The redirect, TLS termination and the proxy hop are the production path; only
 the issuer differs.
 
+## The CLI
+
+Operating a deployed instance otherwise means remembering `docker compose`
+invocations over SSH. `opsctl` is that memory, and nothing more: it reads the
+host out of `ansible/inventory.ini` and `ansible/group_vars/all.yml` — the
+same files `provision.yml` and `deploy.yml` read — so there is exactly one
+place the host is configured, and it authenticates by shelling out to your own
+`ssh`, which means your `~/.ssh/config`, your agent and your `known_hosts`
+decide how the connection is made. It manages no key of its own.
+
+It ships as an npm `bin`, built from TypeScript by the `prepare` script that
+runs on `npm ci`/`npm install`, so it needs no separate build step:
+
+```bash
+npm ci                # builds cli/dist as a side effect (the "prepare" script)
+npm link              # optional: puts a bare `opsctl` on PATH
+opsctl config         # or, with no npm link: npm run cli -- config
+```
+
+Running it with no arguments lists what it can do:
+
+| Command | What it does |
+|---------|--------------|
+| `opsctl config` | First-run check: is a host configured, is `ansible/vault.yml` encrypted, does the host answer over SSH. Observes only — changes nothing |
+| `opsctl status` | `docker compose ps` on the host |
+| `opsctl logs <service>` | `docker compose logs`; every argument passes straight through, so `-f` follows and `--tail=100` limits, exactly as it would locally |
+| `opsctl shell <service> [command]` | `docker compose exec -it`; defaults to `sh` when no command is given |
+
+`opsctl config` is a smaller claim than a deploy preflight — it answers "can I
+even start", not "will a deploy succeed" (no DNS check, no disk space, no
+migrator image). Run it first on a fresh clone; a placeholder host or a
+plaintext vault is refused by name rather than surfacing as a confusing
+failure three commands later.
+
+These four are read-only. Verbs that change the host — `provision`, `deploy`,
+editing secrets, `backup`, a full preflight — wrap the same playbooks this
+README already documents, as more entries in the same command list.
+
 ## Database backups
 
 **Restore is not automated.** Nothing here puts a dump back — there is no script
@@ -554,6 +595,9 @@ workers/
   db-writer/            # Node.js DB writer
 scripts/
   migrate.sh            # Migration runner (the migrator image's command)
+cli/
+  src/                  # opsctl — status, logs and shell over your own SSH
+  tsconfig.json         # Built by `npm run cli:build` / the `prepare` script
 ansible/
   provision.yml         # Takes a fresh VPS to a ready state
   deploy.yml            # Builds, ships, migrates and switches over

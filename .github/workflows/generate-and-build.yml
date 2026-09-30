@@ -471,3 +471,69 @@ jobs:
 
       - name: Install backups on a throwaway host and check what they do
         run: scripts/check_backups.sh .generated-backups/backup-app
+
+  # Acceptance criteria for issue #21: the CLI installs from within a
+  # generated project, running it with no arguments lists the commands,
+  # container status and logs from a remote host are viewable locally, an
+  # interactive shell can be opened against any service, and authentication
+  # uses the operator's own SSH configuration rather than a key or agent the
+  # CLI manages itself.
+  #
+  # scripts/check_cli.sh does the end-to-end run against a throwaway host,
+  # authenticating through a temporary block in the runner's own
+  # ~/.ssh/config rather than anything opsctl supplies; this job adds what is
+  # true of the generated files, and that the CLI's own TypeScript type-checks
+  # and lints clean, before anything is run against a host.
+  cli:
+    name: opsctl installs and the read-only verbs work over real SSH
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # The control machine's Python, not the generated project's, for the
+      # reason the provisioning job gives.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # Matches "node_version" in cookiecutter.json.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: python -m pip install cookiecutter ansible ansible-lint
+
+      - name: Generate project
+        run: |
+          cookiecutter . --no-input -o .generated-cli project_name="CLI App" \
+            author_name="Ada Lovelace"
+
+      - name: Install dependencies (builds the CLI via the prepare script)
+        working-directory: .generated-cli/cli-app
+        run: npm ci --no-audit --no-fund
+
+      - name: The CLI's own TypeScript type-checks and lints clean
+        working-directory: .generated-cli/cli-app
+        run: |
+          npm run typecheck
+          npm run lint
+
+      - name: The CLI's unit tests pass (arg parsing, inventory parsing, command construction)
+        working-directory: .generated-cli/cli-app
+        run: npm run test:cli
+
+      - name: opsctl is on the generated project's own npm bin, not named after the slug
+        working-directory: .generated-cli/cli-app
+        # Acceptance criterion: installable from within a generated project.
+        # `npm link` is the mechanism the README documents for a bare `opsctl`
+        # on PATH; `npm run cli --` needs neither link nor a global install and
+        # is checked throughout this job already. The bin name is fixed
+        # (issue #21 asks it not depend on project_slug), so it is identical
+        # across every generated project rather than templated.
+        run: |
+          grep -q '"opsctl": *"cli/dist/index.js"' package.json
+          npm link
+          command -v opsctl
+          opsctl | grep -q 'usage: opsctl'
+          npm uninstall -g cli-app >/dev/null
+
+      - name: Run the read-only verbs against a throwaway host
+        run: scripts/check_cli.sh .generated-cli/cli-app

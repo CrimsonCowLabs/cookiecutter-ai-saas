@@ -206,6 +206,9 @@ Every generated project is a complete distributed system with **115 files**:
 ├── .env.example                   # All env vars documented
 ├── scripts/
 │   └── migrate.sh                 # Database migrations (the migrator image's command)
+├── cli/
+│   ├── src/                       # opsctl — status, logs, shell, over your own SSH
+│   └── tsconfig.json              # Built by `npm run cli:build` / the `prepare` script
 ├── ansible/
 │   ├── provision.yml              # Takes a fresh VPS to a ready state
 │   ├── deploy.yml                 # Builds, ships, migrates and switches over
@@ -382,6 +385,17 @@ Provisioning and deploying are playbooks, not scripts — see
 | `ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass` | Build, ship, migrate and switch |
 | `... ansible/deploy.yml -e deploy_targets=app` | Deploy one image |
 | `... ansible/deploy.yml --tags preflight` | Check the vault and DNS, deploy nothing |
+
+Operating a deployed instance is `opsctl`, not a `docker compose` invocation
+remembered over SSH — see [Operating a deployed instance](#operating-a-deployed-instance):
+
+| Command | Description |
+|---------|-------------|
+| `opsctl` | List every command |
+| `opsctl config` | First-run check: host configured, vault encrypted, SSH reachable |
+| `opsctl status` | Container status on the host |
+| `opsctl logs <service>` | Logs from the host (`-f` to follow) |
+| `opsctl shell <service>` | An interactive shell in a running service |
 
 ---
 
@@ -1099,11 +1113,43 @@ destroyed, because by then nothing on it runs.
 
 ---
 
+## Operating a deployed instance
+
+Every generated project ships `opsctl`, a small CLI so that running a deployed
+instance is not a matter of remembering `docker compose` invocations over SSH.
+It reads the host out of `ansible/inventory.ini` and
+`ansible/group_vars/all.yml` — the files provisioning and deploying already
+read — so there is exactly one place the host is configured, and it
+authenticates by shelling out to your own `ssh`: your `~/.ssh/config`, your
+agent and your `known_hosts`, not a key or identity the CLI manages itself.
+
+```bash
+npm ci        # builds the CLI as a side effect (the `prepare` script)
+npm link      # optional: puts `opsctl` on PATH
+opsctl        # no arguments: lists every command
+```
+
+| Command | What it does |
+|---------|--------------|
+| `opsctl config` | First-run check: is a host configured, is the vault encrypted, does it answer over SSH. Observes only |
+| `opsctl status` | Container status on the host (`docker compose ps`) |
+| `opsctl logs <service>` | Logs from the host; arguments pass straight through, so `-f` follows |
+| `opsctl shell <service>` | An interactive shell in a running service (`docker compose exec -it`) |
+
+These four are read-only, by design. Full usage docs live in the generated
+project's own README (under "The CLI"), since that is where the CLI actually
+runs — this is the template's side of the same feature. The verbs that change
+the host — provisioning, deploying, editing secrets, taking a backup — wrap
+the same playbooks documented above, as further entries in the same command
+list.
+
+---
+
 ## CI flag matrix
 
 CI generates, typechecks, lints and builds eight named flag combinations (the `flag-matrix` job in `.github/workflows/generate-and-build.yml`). `python scripts/check_ci_matrix.py` fails if any value of any choice in `cookiecutter.json` is missing from the matrix, so a new choice value needs a matrix entry.
 
-Five further jobs cover the parts no flag varies — serving, provisioning, deploying and backing up:
+Six further jobs cover the parts no flag varies — serving, provisioning, deploying, backing up and operating:
 
 | Job | What it proves |
 |---|---|
@@ -1112,6 +1158,7 @@ Five further jobs cover the parts no flag varies — serving, provisioning, depl
 | `provisioning` | The playbook lints clean, then takes a throwaway host from stock image to ready state and leaves it that way: root refused over SSH, the deploy user logging in with a key, only the expected ports open, upgrades and rotation active — and a second run that changes nothing. Runs `scripts/check_provisioning.sh` |
 | `deploy` | The deploy playbook lints clean, the template ships a vault example and no vault, and every name in that example is prefixed `vault_`. Then a throwaway host is deployed to for real: secrets reaching it only as a `0600` file rendered from the encrypted vault and printed nowhere, even under `--diff`; the DNS pre-flight aborting when the served name resolves somewhere other than the target; migrations applied before the new containers serve; a deliberately broken release leaving the previous one still answering — and a second run that changes nothing. Runs `scripts/check_deploy.sh` |
 | `backups` | The backup playbook lints clean, refuses an unencrypted vault and a retention policy of zero, then installs itself on a provisioned throwaway host and is held to every criterion as behaviour: a dump taken from a live Postgres that still contains its rows, that same dump byte-for-byte at a separate destination, the timer firing on its own, pruning that deletes the oldest and never the newest, a broken destination surfacing as an alert delivered off the host while deleting nothing — and a second run that changes nothing. Runs `scripts/check_backups.sh` |
+| `cli` | `opsctl`'s own TypeScript type-checks and lints clean, its unit tests pass, and it installs from an npm `bin` entry (`npm link`) under a name that does not depend on `project_slug`. Then, against a throwaway host, it authenticates through nothing but a temporary block in the runner's own `~/.ssh/config`: `config` reports the placeholder host and missing vault before either exists, then reports all three checks ok once they do; `status` and `logs` reflect a real Postgres and Redis; `shell` opens a real interactive `exec` session, allocated a pty the way a terminal would. Runs `scripts/check_cli.sh` |
 
 ---
 

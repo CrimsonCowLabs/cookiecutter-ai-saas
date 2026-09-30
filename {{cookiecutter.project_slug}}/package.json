@@ -3,17 +3,24 @@
   "version": "0.1.0",
   "description": "__PROJECT_DESCRIPTION__",
   "private": true,
+  "bin": {
+    "opsctl": "cli/dist/index.js"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p cli",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "worker:db-writer": "node workers/db-writer/worker.mjs"
+    "worker:db-writer": "node workers/db-writer/worker.mjs",
+    "prepare": "tsc -p cli",
+    "cli:build": "tsc -p cli",
+    "cli": "tsc -p cli && node cli/dist/index.js",
+    "test:cli": "tsc -p cli && cd cli/dist && node --test"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.4",

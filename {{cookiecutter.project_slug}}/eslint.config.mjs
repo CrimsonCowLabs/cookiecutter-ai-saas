@@ -10,6 +10,8 @@ const config = [
       // The Python worker. workers/db-writer is JavaScript and IS linted.
       "workers/app/**",
       "lib/db/migrations/**",
+      // Compiled output of cli/src — the CLI's own TypeScript IS linted.
+      "cli/dist/**",
     ],
   },
   ...next,
