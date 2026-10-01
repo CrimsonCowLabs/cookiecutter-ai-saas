@@ -89,7 +89,7 @@ export function OAuthButtons({ callbackUrl, planId }: OAuthButtonsProps) {
         <button
           key={provider.id}
           type="button"
-          className="btn btn-outline min-h-11 w-full justify-start gap-3 text-base"
+          className="btn btn-outline w-full justify-start gap-3 text-base"
           onClick={() => handleOAuthSignIn(provider.id)}
           disabled={pendingProvider !== null}
         >

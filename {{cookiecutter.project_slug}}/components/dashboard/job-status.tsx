@@ -114,10 +114,10 @@ export function JobStatus({ jobId, initialStatus, onComplete }: JobStatusProps) 
           {connectionState === "connected" && (
             <>
               <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-success" />
               </span>
-              <span className="text-xs font-medium text-emerald-400">Live</span>
+              <span className="text-xs font-medium text-success">Live</span>
             </>
           )}
           <span className="text-xs text-base-content/40 ml-1">{progress.progress}%</span>

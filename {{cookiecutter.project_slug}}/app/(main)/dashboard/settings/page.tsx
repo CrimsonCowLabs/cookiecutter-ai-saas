@@ -38,9 +38,9 @@ export default async function SettingsPage() {
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Account</h2>
         <div className="bg-base-200 rounded-lg p-5 space-y-3">
-          <div className="flex justify-between">
-            <span className="text-sm text-base-content/60">Email</span>
-            <span className="text-sm">{user.email}</span>
+          <div className="flex justify-between gap-2">
+            <span className="text-sm text-base-content/60 shrink-0">Email</span>
+            <span className="text-sm truncate min-w-0">{user.email}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-sm text-base-content/60">Member since</span>
@@ -65,11 +65,11 @@ export default async function SettingsPage() {
               </p>
             </div>
             {user.plan === "free" ? (
-              <Link href="/sign-up?plan_id=pro" className="btn btn-sm btn-primary">
+              <Link href="/sign-up?plan_id=pro" className="btn btn-primary">
                 Upgrade
               </Link>
             ) : (
-              <a href="/api/billing/portal" className="btn btn-sm btn-outline">
+              <a href="/api/billing/portal" className="btn btn-outline">
                 Manage billing
               </a>
             )}
@@ -155,7 +155,7 @@ export default async function SettingsPage() {
                   </ul>
                   <Link
                     href={`/sign-up?plan_id=${plan.tier}`}
-                    className="btn btn-primary btn-sm w-full"
+                    className="btn btn-primary w-full"
                   >
                     Upgrade to {plan.name}
                   </Link>

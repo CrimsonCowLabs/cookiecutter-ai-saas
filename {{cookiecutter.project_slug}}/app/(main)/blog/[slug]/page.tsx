@@ -104,7 +104,7 @@ export default async function BlogPostPage({ params }: Props) {
           <header className="mb-8">
             {/* Tags */}
             {post.tags && post.tags.length > 0 && (
-              <div className="flex gap-2 mb-4">
+              <div className="flex flex-wrap gap-2 mb-4">
                 {post.tags.map((tag, i) => (
                   <span
                     key={i}
@@ -134,7 +134,7 @@ export default async function BlogPostPage({ params }: Props) {
           </header>
 
           {/* Content */}
-          <div className="prose prose-lg max-w-none
+          <div className="prose prose-lg max-w-none break-words
             prose-headings:font-bold prose-headings:tracking-tight
             prose-h2:text-2xl prose-h2:mt-12 prose-h2:mb-4
             prose-h3:text-xl prose-h3:mt-8 prose-h3:mb-3

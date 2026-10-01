@@ -1,11 +1,16 @@
 import { ReactNode } from "react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { Sidebar } from "@/components/dashboard/sidebar";
+import { DrawerAutoClose } from "@/components/dashboard/drawer-auto-close";
+import { MenuIcon } from "@/components/ui/icons";
 import config from "@/config";
+
+const DRAWER_ID = "dashboard-drawer";
 
 const baseNavItems = [
   { href: "/dashboard", label: "Overview", icon: "M2.25 12l8.954-8.955a1.125 1.125 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" },
@@ -48,21 +53,46 @@ export default async function DashboardLayout({
     : baseNavItems;
 
   return (
-    <div className="min-h-screen bg-base-100 flex">
-      <Sidebar
-        navItems={navItems}
-        userName={session.user?.name}
-        userEmail={session.user?.email}
-        userImage={session.user?.image}
-        signOutAction={handleSignOut}
-      />
+    <div className="drawer md:drawer-open min-h-screen bg-base-100">
+      {/* Checkbox-driven drawer: pure CSS below `md` (no client JS needed,
+          same approach as the public navbar's mobile menu), and pinned open
+          as a static sidebar at `md` and up via `md:drawer-open`. */}
+      <input id={DRAWER_ID} type="checkbox" className="drawer-toggle" />
+      <DrawerAutoClose drawerId={DRAWER_ID} />
 
-      {/* Main content */}
-      <main className="flex-1 overflow-auto">
-        <div className="max-w-6xl mx-auto p-6">
-          {children}
+      <div className="drawer-content flex flex-col">
+        {/* Mobile topbar: the sidebar itself is off-canvas below `md`, so
+            this is the only way to reach navigation/sign-out on a phone. */}
+        <div className="sticky top-0 z-30 flex items-center gap-3 border-b border-base-300 bg-base-100 px-4 py-3 md:hidden">
+          <label
+            htmlFor={DRAWER_ID}
+            aria-label="Open menu"
+            className="btn btn-square btn-ghost"
+          >
+            <MenuIcon className="w-5 h-5" />
+          </label>
+          <Link href="/dashboard" className="font-bold">
+            __PROJECT_NAME__
+          </Link>
         </div>
-      </main>
+
+        <main className="flex-1 overflow-auto">
+          <div className="max-w-6xl mx-auto p-6">
+            {children}
+          </div>
+        </main>
+      </div>
+
+      <div className="drawer-side z-40">
+        <label htmlFor={DRAWER_ID} aria-label="Close menu" className="drawer-overlay"></label>
+        <Sidebar
+          navItems={navItems}
+          userName={session.user?.name}
+          userEmail={session.user?.email}
+          userImage={session.user?.image}
+          signOutAction={handleSignOut}
+        />
+      </div>
     </div>
   );
 }
