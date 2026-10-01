@@ -19,6 +19,16 @@ import config from "@/config";
  * this app only ever creates single-item subscriptions (see createCheckout
  * in lib/stripe.ts), so the first item's period stands in for "the"
  * subscription's period.
+ *
+ * This checks the period fields themselves, not just whether an item is
+ * present: a webhook *event's* payload shape is pinned to whatever API
+ * version the webhook endpoint itself was configured with in the Stripe
+ * Dashboard, independent of which stripe-node version this app's code calls
+ * the API with. An endpoint still pinned to a pre-basil version delivers
+ * events whose subscription items exist but lack these per-item fields, and
+ * `item.current_period_start * 1000` on an undefined field is `NaN` — this
+ * falls back the same way a genuinely missing item does, rather than writing
+ * an Invalid Date.
  */
 function getSubscriptionPeriod(sub: Stripe.Subscription): {
   start: Date;
@@ -26,8 +36,10 @@ function getSubscriptionPeriod(sub: Stripe.Subscription): {
 } {
   const item = sub.items.data[0];
   return {
-    start: item ? new Date(item.current_period_start * 1000) : new Date(),
-    end: item
+    start: item?.current_period_start
+      ? new Date(item.current_period_start * 1000)
+      : new Date(),
+    end: item?.current_period_end
       ? new Date(item.current_period_end * 1000)
       : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
   };

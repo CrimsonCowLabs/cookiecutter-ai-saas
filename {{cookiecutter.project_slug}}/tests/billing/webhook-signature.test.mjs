@@ -1,15 +1,18 @@
 // Webhook signature verification tests for the stripe-node upgrade (issue #26).
 //
 // This imports the installed "stripe" package directly as plain JS, not
-// lib/stripe.ts: no TypeScript build step, and this is deleted entirely when
-// a project is generated with include_stripe=no (see
-// hooks/post_gen_project.py::handle_stripe), while the "stripe" npm
-// dependency itself still ships either way (package.json isn't in the
-// marker-substitution file-extension list — see app/api/webhook/stripe/route.ts's
-// own comments for background). So this test has to work against the raw
-// dependency alone, which is exactly what it needs to prove: the SDK's own
-// signing/verification round-trip still works post-upgrade, independent of
-// anything this repo's own billing code does with it.
+// lib/stripe.ts: no TypeScript build step, and lib/stripe.ts is deleted
+// entirely when a project is generated with include_stripe=no (see
+// hooks/post_gen_project.py::handle_stripe). This test file itself is NOT
+// deleted either way — nothing in handle_stripe touches tests/billing — and
+// nor is the "stripe" npm dependency it imports (package.json isn't in the
+// marker-substitution file-extension list — see
+// app/api/webhook/stripe/route.ts's own comments for background), so this
+// test runs, and needs to run, the same whether billing is enabled or not.
+// Importing the raw dependency rather than lib/stripe.ts is exactly what
+// makes that possible, and is exactly what it needs to prove anyway: the
+// SDK's own signing/verification round-trip still works post-upgrade,
+// independent of anything this repo's own billing code does with it.
 //
 // No network calls, no live keys: `new Stripe()` only throws for a missing/
 // malformed-looking key when a request is actually made, and
