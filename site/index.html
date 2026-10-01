@@ -8,9 +8,9 @@
          search results. Deleting this line launches it (issue #40) and nothing
          else needs to change: there is no second copy, no robots.txt and no
          header doing the same job, and scripts/check_site.py stays green either
-         way. Until billing (#27) and the guides (#28) are finished, search
-         traffic would land on a dead end, so the page stays public but
-         unlisted. -->
+         way. The template is still pre-release, so search traffic would land
+         on an unfinished product; the page stays public but unlisted until
+         #40 decides otherwise. -->
     <meta name="robots" content="noindex, nofollow" />
 
     <title>cookiecutter-ai-saas — a production-shaped AI SaaS in one command</title>
@@ -23,8 +23,13 @@
         <p class="eyebrow">CrimsonCow Labs · open source template</p>
         <h1>cookiecutter-ai-saas</h1>
         <p class="tagline">
-          For builders and vibecoders who want a production-shaped AI SaaS without spending a
-          month assembling one.
+          For builders and vibecoders who can already ship a feature, and want the auth, billing
+          and deploy pipeline around it already built.
+        </p>
+
+        <p class="status">
+          <strong>Pre-release.</strong> It generates and runs today — read on before you run
+          anything, and know what you're trying.
         </p>
 
         <p class="install-label">Generate your project:</p>
@@ -38,12 +43,94 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></pre>
         </p>
       </header>
 
+      <section class="stall">
+        <h2>What stalls a side project</h2>
+        <p>
+          You can already build the feature — that part was never the problem. What stalls a
+          side project is everything standing between it and a stranger using it, and it's the
+          same six things every time:
+        </p>
+        <ul class="stall-list">
+          <li><strong>Signing in.</strong> Someone needs an account and a way back into it, without you hand-rolling sessions.</li>
+          <li><strong>Getting paid.</strong> A checkout, and a portal that doesn't break when someone upgrades or cancels.</li>
+          <li><strong>Background jobs.</strong> Work too slow for a web request has to run elsewhere and report back.</li>
+          <li><strong>A worker that can call an LLM safely.</strong> With a provider you chose, a budget on how much it can do, and somewhere to look when it does something odd.</li>
+          <li><strong>TLS.</strong> A certificate that renews itself instead of a reminder you'll ignore.</li>
+          <li><strong>Shipping it anywhere but your laptop.</strong> One command, not nineteen remembered in the right order.</li>
+        </ul>
+        <p>This template is those six things, already done, around the feature you're about to build.</p>
+      </section>
+
+      <section class="stack">
+        <h2>What's actually running</h2>
+        <p>Concretely, not abstractly — this is the system a generated project brings up:</p>
+        <ul class="stack-list">
+          <li>A <strong>Next.js app</strong> your users see: sign-in, dashboard, billing, settings.</li>
+          <li>A <strong>Python worker</strong> that does the AI part — pulls a job off the queue, calls the model you chose, reports progress as it goes.</li>
+          <li><strong>Postgres</strong> for everything that still has to be there tomorrow.</li>
+          <li><strong>Redis and BullMQ</strong> carrying jobs between the app and the worker.</li>
+          <li>A <strong>Docker Compose stack behind Caddy</strong> that one Ansible playbook can put on a fresh VPS, TLS included.</li>
+        </ul>
+        <p>
+          The full request path, the generated file layout, and the architecture decisions behind
+          it are in the
+          <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas#readme">README</a>.
+        </p>
+      </section>
+
+      <section class="choices">
+        <h2>What you decide, and what it changes</h2>
+        <p>Cookiecutter asks a short set of questions once, at generation time. These change what your app does:</p>
+        <dl class="choice-list">
+          <div><dt>LLM provider</dt><dd>Ollama, OpenAI, Anthropic, or OpenRouter — whichever the worker calls, and the only credentials you have to go get.</dd></div>
+          <div><dt>Stripe</dt><dd>On, with real checkout and portal wiring. Off, and it's not in the generated project at all.</dd></div>
+          <div><dt>Auth providers</dt><dd>Google, Microsoft, or both — which sign-in buttons a visitor sees.</dd></div>
+          <div><dt>Magic link</dt><dd>Passwordless email sign-in via Resend, independent of whichever OAuth providers you picked.</dd></div>
+          <div><dt>pgvector</dt><dd>On, and Postgres can do vector similarity search — embeddings, semantic search, retrieval. Off, and it's plain Postgres.</dd></div>
+          <div><dt>Marketing extras</dt><dd>A small JSON-backed blog and a contact form, for a public site around the app.</dd></div>
+        </dl>
+        <p>
+          The rest is naming and defaults: project name, slug, and description; author name and
+          email; domain; brand color and theme; Python and Node versions; and the local Postgres
+          and Redis ports. Straight answers, not decisions — with one exception. Your author email
+          doubles as the contact address on your TLS certificate, which is the kind of detail that
+          only matters once, covered in the
+          <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/docs/deployment.md#https-and-tls">deployment guide</a>.
+        </p>
+      </section>
+
+      <section class="quickstart">
+        <h2>From install to a running app</h2>
+        <p>
+          Timed on a clean checkout with Docker's images already pulled: well under a minute from
+          the first command to the app answering in a browser. The first time on a given machine,
+          most of that minute is Docker fetching Postgres, Redis, and the base images — budget a
+          few minutes for that once.
+        </p>
+        <ol class="steps">
+          <li>Install cookiecutter, once, ever: <code>pip install cookiecutter</code></li>
+          <li>Generate the project: <code>cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></li>
+          <li><code>cd</code> into it, copy <code>.env.example</code> to both <code>.env.local</code> and <code>.env.docker.local</code>, set one secret, and point the docker copy's database and Redis URLs at the container hostnames</li>
+          <li>Install dependencies: <code>npm ci</code></li>
+          <li>Build and start everything: <code>docker compose up -d --build</code></li>
+          <li>Create and run the database migrations: <code>npm run db:generate && npm run db:migrate</code></li>
+          <li>Open <code>localhost:3000</code> — it's running</li>
+        </ol>
+        <p>
+          Signing in for real needs OAuth credentials from Google or Microsoft's own dashboards,
+          which is an errand, not a command — that part, and everything past this first run, is in
+          the README's
+          <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas#post-generation-setup">post-generation setup</a>.
+        </p>
+      </section>
+
       <aside class="prerelease">
         <h2>Pre-release</h2>
         <p>
-          The template generates and builds today, and it is being hardened ahead of its first
-          tagged release. Billing does not yet work end to end and the guides are unwritten, so
-          this page is deliberately kept out of search until they do. Track the work in the
+          The template generates and builds today, and it's being hardened ahead of its first
+          tagged release — so this page stays out of search until that release ships. You're
+          seeing it because you already found the repo, and early adopters are exactly who it's
+          for right now. Track the work in the
           <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues">open issues</a>.
         </p>
       </aside>
