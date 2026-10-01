@@ -15,6 +15,25 @@ export function rememberPendingPlan(planId: string): void {
 }
 
 /**
+ * Read back the plan `rememberPendingPlan` stashed, if any. Client-only
+ * (reads `document.cookie`) for the same reason `rememberPendingPlan` writes
+ * it client-side: a Server Component can read cookies but cannot clear them,
+ * and the post-auth landing page needs to do both in one pass so a visitor
+ * is never sent to checkout twice for the same choice.
+ */
+export function getPendingPlanId(): string | null {
+  const match = document.cookie.match(
+    new RegExp(`(?:^|; )${PENDING_PLAN_COOKIE}=([^;]*)`)
+  );
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/** Clear the cookie `rememberPendingPlan` wrote, once it has been acted on. */
+export function forgetPendingPlan(): void {
+  document.cookie = `${PENDING_PLAN_COOKIE}=; path=/; max-age=0; SameSite=Lax`;
+}
+
+/**
  * Build the post-auth redirect, carrying the chosen plan through as a query
  * param and a cookie.
  */

@@ -367,6 +367,50 @@ jobs:
       - name: The access rules hold against a running app
         run: scripts/check_auth.sh .generated-auth/auth-app
 
+  # Acceptance criteria for issue #27 (make the billing flow work end to
+  # end): subscription lifecycle webhooks move users between plans correctly,
+  # and one-time purchases are recorded and granted — including staying
+  # exactly-once granted when Stripe redelivers the same event, which it
+  # does on anything but a 2xx response and sometimes even after one. Two
+  # bugs this class of test exists to catch: before the fix,
+  # customer.subscription.updated wrote the new plan to the `subscriptions`
+  # row but never to `users.plan` (the column the rest of the app actually
+  # reads), and the one-time-purchase branch logged a message and did
+  # nothing. Neither is visible to a type checker or a unit test of the
+  # handler's return value — both are database-state bugs, so only asserting
+  # on the database after a real HTTP POST against a real running app catches
+  # them.
+  #
+  # scripts/check_billing.sh does the end-to-end run: it brings up postgres,
+  # builds and boots a generated app (include_stripe=yes) for real, and runs
+  # tests/billing/integration/*.test.mjs — which ship inside the template
+  # itself — as a real HTTP client against it, signing fake Stripe events the
+  # same way tests/billing/webhook-signature.test.mjs does. See that
+  # directory for what is asserted and why.
+  billing-integration:
+    name: The billing webhooks hold against a running app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install cookiecutter
+
+      # Matches "node_version" in cookiecutter.json.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate project
+        run: |
+          cookiecutter . --no-input -o .generated-billing project_name="Billing App" \
+            include_stripe=yes
+
+      - name: The billing webhooks hold against a running app
+        run: scripts/check_billing.sh .generated-billing/billing-app
+
   # Acceptance criteria for the provisioning playbook: a fresh host reaches a
   # ready state from one command, SSH is key-only with no root login, the
   # firewall exposes only what is needed, unattended upgrades and log rotation

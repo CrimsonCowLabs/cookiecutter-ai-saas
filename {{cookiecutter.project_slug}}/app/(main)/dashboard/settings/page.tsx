@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users, subscriptions } from "@/lib/db/schema";
 import { getPlanLimits } from "@/lib/plans";
+import { createPortalAction } from "@/app/actions/billing";
 import config from "@/config";
 import Link from "next/link";
 
@@ -69,9 +70,11 @@ export default async function SettingsPage() {
                 Upgrade
               </Link>
             ) : (
-              <a href="/api/billing/portal" className="btn btn-outline">
-                Manage billing
-              </a>
+              <form action={createPortalAction}>
+                <button type="submit" className="btn btn-outline">
+                  Manage billing
+                </button>
+              </form>
             )}
           </div>
 

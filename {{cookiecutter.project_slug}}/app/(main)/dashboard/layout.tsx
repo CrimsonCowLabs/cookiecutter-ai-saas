@@ -9,6 +9,9 @@ import { Sidebar } from "@/components/dashboard/sidebar";
 import { DrawerAutoClose } from "@/components/dashboard/drawer-auto-close";
 import { MenuIcon } from "@/components/ui/icons";
 import config from "@/config";
+// cc:begin stripe
+import { ResumePendingPlan } from "@/components/dashboard/resume-pending-plan";
+// cc:end stripe
 
 const DRAWER_ID = "dashboard-drawer";
 
@@ -59,6 +62,9 @@ export default async function DashboardLayout({
           as a static sidebar at `md` and up via `md:drawer-open`. */}
       <input id={DRAWER_ID} type="checkbox" className="drawer-toggle" />
       <DrawerAutoClose drawerId={DRAWER_ID} />
+      {/* cc:begin stripe */}
+      <ResumePendingPlan />
+      {/* cc:end stripe */}
 
       <div className="drawer-content flex flex-col">
         {/* Mobile topbar: the sidebar itself is off-canvas below `md`, so

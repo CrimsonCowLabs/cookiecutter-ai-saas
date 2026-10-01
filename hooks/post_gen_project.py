@@ -177,6 +177,12 @@ def handle_stripe():
         remove_directory("app/api/webhook/stripe")
         remove_directory("app/(main)/dashboard/settings")
         remove_file("app/actions/billing.ts")
+        # Imports app/actions/billing.ts; the cc:begin/cc:end stripe markers in
+        # dashboard/layout.tsx strip the reference to it, but the file itself
+        # would otherwise survive as an orphan that still fails `tsc` (it's
+        # covered by tsconfig's **/*.tsx include regardless of whether
+        # anything imports it).
+        remove_file("components/dashboard/resume-pending-plan.tsx")
 
 
 def handle_magic_link():

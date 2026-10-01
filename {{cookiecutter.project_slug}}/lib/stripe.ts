@@ -118,7 +118,13 @@ export const createOneTimeCheckout = async ({
       customer: customerId,
       client_reference_id: clientReferenceId,
       line_items: [{ price: priceId, quantity }],
-      metadata,
+      // The webhook's checkout.session.completed handler only records and
+      // grants a one-time purchase when it sees metadata.type ===
+      // "one_time_purchase" (see app/api/webhook/stripe/route.ts). Setting it
+      // here, not leaving it to each caller's `metadata`, means this is the
+      // only function in the codebase that can create a one-time checkout
+      // session, so it's the only place that can forget to mark it as one.
+      metadata: { ...metadata, type: "one_time_purchase" },
       success_url: successUrl,
       cancel_url: cancelUrl,
     });

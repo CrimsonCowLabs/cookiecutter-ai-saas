@@ -41,6 +41,11 @@ export const users = pgTable("users", {
   image: text("image"),
   stripeCustomerId: text("stripe_customer_id"),
   plan: planEnum("plan").notNull().default("free"),
+  // What a one-time purchase grants (see the `purchases` table): a generic
+  // unit the app itself decides how to spend, the same way lib/plans.ts
+  // keeps plan limits provider-agnostic rather than assuming a specific
+  // product.
+  credits: integer("credits").notNull().default(0),
   isAdmin: boolean("is_admin").notNull().default(false),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
@@ -155,6 +160,27 @@ export const subscriptions = pgTable("subscriptions", {
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
 });
 
+// One-time (mode: "payment") Stripe checkouts, as opposed to the
+// subscription lifecycle tracked in `subscriptions`. Recorded by the
+// checkout.session.completed webhook handler so a completed payment always
+// leaves a durable record, even before anything downstream decides what to
+// do with it (see users.credits).
+export const purchases = pgTable("purchases", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  // Unique so a redelivered webhook event (Stripe retries on anything but a
+  // 2xx, and can redeliver even after one) can't record — or grant — the
+  // same purchase twice.
+  stripeCheckoutSessionId: text("stripe_checkout_session_id").notNull().unique(),
+  stripePriceId: text("stripe_price_id"),
+  quantity: integer("quantity").notNull().default(1),
+  amountTotal: integer("amount_total"),
+  currency: text("currency"),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
+});
+
 export const auditLogs = pgTable("audit_logs", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
@@ -188,6 +214,7 @@ export const contactSubmissions = pgTable(
 export const usersRelations = relations(users, ({ many }) => ({
   jobs: many(jobs),
   subscriptions: many(subscriptions),
+  purchases: many(purchases),
   auditLogs: many(auditLogs),
 }));
 
@@ -213,6 +240,13 @@ export const jobEventsRelations = relations(jobEvents, ({ one }) => ({
 export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
   user: one(users, {
     fields: [subscriptions.userId],
+    references: [users.id],
+  }),
+}));
+
+export const purchasesRelations = relations(purchases, ({ one }) => ({
+  user: one(users, {
+    fields: [purchases.userId],
     references: [users.id],
   }),
 }));

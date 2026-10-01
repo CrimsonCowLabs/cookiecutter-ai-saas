@@ -1,10 +1,11 @@
 import { NextResponse, NextRequest } from "next/server";
 import { headers } from "next/headers";
 import Stripe from "stripe";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { users, subscriptions } from "@/lib/db/schema";
+import { users, subscriptions, purchases } from "@/lib/db/schema";
 import { getStripe, findCheckoutSession } from "@/lib/stripe";
+import { audit } from "@/lib/audit";
 import config from "@/config";
 
 /**
@@ -88,9 +89,61 @@ export async function POST(req: NextRequest) {
           const userId = stripeObject.client_reference_id;
           if (!userId) break;
 
-          // TODO: Handle one-time purchase fulfillment
-          // Example: grant credits, unlock features, etc.
-          console.log(`[Webhook] One-time purchase by user ${userId}`);
+          const session = await findCheckoutSession(stripeObject.id);
+          const lineItem = session?.line_items?.data[0];
+          const quantity = lineItem?.quantity ?? 1;
+
+          // Recording the purchase and granting the credit in one
+          // transaction means a failure partway through (a dropped DB
+          // connection between the two statements, say) rolls both back
+          // rather than leaving a purchase recorded with no credit granted.
+          // That matters here specifically because of the idempotency guard
+          // below: a purchase row that exists but was never credited would
+          // make every future redelivery of this same event a silent no-op
+          // forever (onConflictDoNothing would keep skipping it), so the
+          // customer would simply never receive what they paid for.
+          const purchaseId = await db.transaction(async (tx) => {
+            // Unique on stripeCheckoutSessionId: Stripe redelivers webhook
+            // events, and this insert is what makes fulfillment idempotent —
+            // an empty `inserted` means this checkout session was already
+            // recorded, so the credit below must not run twice for it.
+            const inserted = await tx
+              .insert(purchases)
+              .values({
+                userId,
+                stripeCheckoutSessionId: stripeObject.id,
+                stripePriceId: lineItem?.price?.id ?? null,
+                quantity,
+                amountTotal: stripeObject.amount_total ?? null,
+                currency: stripeObject.currency ?? null,
+              })
+              .onConflictDoNothing({ target: purchases.stripeCheckoutSessionId })
+              .returning();
+
+            if (inserted.length === 0) return null;
+
+            // Grant what the purchase promises. "Credits" is deliberately
+            // generic — same as lib/plans.ts staying feature-agnostic — this
+            // webhook's job is only to make sure a completed payment always
+            // shows up as something the app can act on, never silently
+            // nothing (see issue #27).
+            await tx
+              .update(users)
+              .set({ credits: sql`${users.credits} + ${quantity}`, updatedAt: new Date() })
+              .where(eq(users.id, userId));
+
+            return inserted[0].id;
+          });
+
+          if (!purchaseId) break;
+
+          await audit({
+            userId,
+            action: "billing.one_time_purchase_fulfilled",
+            resourceType: "purchase",
+            resourceId: purchaseId,
+            metadata: { checkoutSessionId: stripeObject.id, quantity },
+          });
 
           break;
         }
@@ -184,16 +237,34 @@ export async function POST(req: NextRequest) {
         if (plan) {
           const period = getSubscriptionPeriod(sub);
 
-          await db
-            .update(subscriptions)
-            .set({
-              plan: plan.tier,
-              stripePriceId: priceId!,
-              status: sub.status === "active" ? "active" : "past_due",
-              currentPeriodStart: period.start,
-              currentPeriodEnd: period.end,
-            })
-            .where(eq(subscriptions.stripeSubscriptionId, sub.id));
+          // One transaction: subscriptions.plan is per-subscription history,
+          // users.plan is what the rest of the app (settings page,
+          // getPlanLimits) actually reads, and a plan change here —
+          // upgrading or downgrading through the customer portal — left the
+          // latter stale (issue #27). Writing them separately would let a
+          // failure between the two statements reintroduce that exact bug
+          // intermittently, instead of fixing it.
+          await db.transaction(async (tx) => {
+            const updated = await tx
+              .update(subscriptions)
+              .set({
+                plan: plan.tier,
+                stripePriceId: priceId!,
+                status: sub.status === "active" ? "active" : "past_due",
+                currentPeriodStart: period.start,
+                currentPeriodEnd: period.end,
+              })
+              .where(eq(subscriptions.stripeSubscriptionId, sub.id))
+              .returning();
+
+            const subRecord = updated[0];
+            if (subRecord) {
+              await tx
+                .update(users)
+                .set({ plan: plan.tier, updatedAt: new Date() })
+                .where(eq(users.id, subRecord.userId));
+            }
+          });
         }
         break;
       }
