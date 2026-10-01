@@ -7,6 +7,54 @@ import { users, subscriptions } from "@/lib/db/schema";
 import { getStripe, findCheckoutSession } from "@/lib/stripe";
 import config from "@/config";
 
+/**
+ * Stripe moved `current_period_start`/`current_period_end` off the
+ * Subscription object itself and onto each subscription item as of the
+ * 2025-03-31 "basil" API version (shipped starting in stripe-node v18): a
+ * subscription's items can each be on a different billing cycle, so the
+ * period is now tracked per item rather than per subscription. Verified
+ * against the installed stripe package's own type definitions
+ * (node_modules/stripe/cjs/resources/Subscriptions.d.ts no longer declares
+ * current_period_start/end on `Subscription`; SubscriptionItems.d.ts does) —
+ * this app only ever creates single-item subscriptions (see createCheckout
+ * in lib/stripe.ts), so the first item's period stands in for "the"
+ * subscription's period.
+ *
+ * This checks the period fields themselves, not just whether an item is
+ * present: a webhook *event's* payload shape is pinned to whatever API
+ * version the webhook endpoint itself was configured with in the Stripe
+ * Dashboard, independent of which stripe-node version this app's code calls
+ * the API with. An endpoint still pinned to a pre-basil version delivers
+ * events whose subscription items exist but lack these per-item fields, and
+ * `item.current_period_start * 1000` on an undefined field is `NaN` — this
+ * falls back the same way a genuinely missing item does, rather than writing
+ * an Invalid Date.
+ */
+function getSubscriptionPeriod(sub: Stripe.Subscription): {
+  start: Date;
+  end: Date;
+} {
+  const item = sub.items.data[0];
+  if (!item?.current_period_start || !item?.current_period_end) {
+    // Falling back silently would let billing-period drift accumulate
+    // unnoticed (see the comment above), so this is loud even though it's
+    // non-fatal: the webhook still returns 200 rather than failing the event.
+    console.error(
+      `[Webhook] subscription ${sub.id} has no usable per-item billing period` +
+        " (missing item, or the webhook endpoint is still pinned to a" +
+        ' pre-"basil" Stripe API version); falling back to a guessed period.'
+    );
+  }
+  return {
+    start: item?.current_period_start
+      ? new Date(item.current_period_start * 1000)
+      : new Date(),
+    end: item?.current_period_end
+      ? new Date(item.current_period_end * 1000)
+      : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+  };
+}
+
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
@@ -108,12 +156,7 @@ export async function POST(req: NextRequest) {
             stripeObject.subscription as string
           );
 
-          const periodStart = sub.current_period_start
-            ? new Date(sub.current_period_start * 1000)
-            : new Date();
-          const periodEnd = sub.current_period_end
-            ? new Date(sub.current_period_end * 1000)
-            : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+          const period = getSubscriptionPeriod(sub);
 
           await db.insert(subscriptions).values({
             userId: user.id,
@@ -121,8 +164,8 @@ export async function POST(req: NextRequest) {
             stripePriceId: priceId!,
             plan: plan.tier,
             status: "active",
-            currentPeriodStart: periodStart,
-            currentPeriodEnd: periodEnd,
+            currentPeriodStart: period.start,
+            currentPeriodEnd: period.end,
           });
         }
 
@@ -139,14 +182,16 @@ export async function POST(req: NextRequest) {
         const plan = config.stripe.plans.find((p) => p.priceId === priceId);
 
         if (plan) {
+          const period = getSubscriptionPeriod(sub);
+
           await db
             .update(subscriptions)
             .set({
               plan: plan.tier,
               stripePriceId: priceId!,
               status: sub.status === "active" ? "active" : "past_due",
-              currentPeriodStart: new Date(sub.current_period_start * 1000),
-              currentPeriodEnd: new Date(sub.current_period_end * 1000),
+              currentPeriodStart: period.start,
+              currentPeriodEnd: period.end,
             })
             .where(eq(subscriptions.stripeSubscriptionId, sub.id));
         }
