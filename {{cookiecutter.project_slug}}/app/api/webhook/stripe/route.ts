@@ -7,6 +7,32 @@ import { users, subscriptions } from "@/lib/db/schema";
 import { getStripe, findCheckoutSession } from "@/lib/stripe";
 import config from "@/config";
 
+/**
+ * Stripe moved `current_period_start`/`current_period_end` off the
+ * Subscription object itself and onto each subscription item as of the
+ * 2025-03-31 "basil" API version (shipped starting in stripe-node v18): a
+ * subscription's items can each be on a different billing cycle, so the
+ * period is now tracked per item rather than per subscription. Verified
+ * against the installed stripe package's own type definitions
+ * (node_modules/stripe/cjs/resources/Subscriptions.d.ts no longer declares
+ * current_period_start/end on `Subscription`; SubscriptionItems.d.ts does) —
+ * this app only ever creates single-item subscriptions (see createCheckout
+ * in lib/stripe.ts), so the first item's period stands in for "the"
+ * subscription's period.
+ */
+function getSubscriptionPeriod(sub: Stripe.Subscription): {
+  start: Date;
+  end: Date;
+} {
+  const item = sub.items.data[0];
+  return {
+    start: item ? new Date(item.current_period_start * 1000) : new Date(),
+    end: item
+      ? new Date(item.current_period_end * 1000)
+      : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+  };
+}
+
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
@@ -108,12 +134,7 @@ export async function POST(req: NextRequest) {
             stripeObject.subscription as string
           );
 
-          const periodStart = sub.current_period_start
-            ? new Date(sub.current_period_start * 1000)
-            : new Date();
-          const periodEnd = sub.current_period_end
-            ? new Date(sub.current_period_end * 1000)
-            : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+          const period = getSubscriptionPeriod(sub);
 
           await db.insert(subscriptions).values({
             userId: user.id,
@@ -121,8 +142,8 @@ export async function POST(req: NextRequest) {
             stripePriceId: priceId!,
             plan: plan.tier,
             status: "active",
-            currentPeriodStart: periodStart,
-            currentPeriodEnd: periodEnd,
+            currentPeriodStart: period.start,
+            currentPeriodEnd: period.end,
           });
         }
 
@@ -139,14 +160,16 @@ export async function POST(req: NextRequest) {
         const plan = config.stripe.plans.find((p) => p.priceId === priceId);
 
         if (plan) {
+          const period = getSubscriptionPeriod(sub);
+
           await db
             .update(subscriptions)
             .set({
               plan: plan.tier,
               stripePriceId: priceId!,
               status: sub.status === "active" ? "active" : "past_due",
-              currentPeriodStart: new Date(sub.current_period_start * 1000),
-              currentPeriodEnd: new Date(sub.current_period_end * 1000),
+              currentPeriodStart: period.start,
+              currentPeriodEnd: period.end,
             })
             .where(eq(subscriptions.stripeSubscriptionId, sub.id));
         }

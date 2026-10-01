@@ -209,6 +209,16 @@ jobs:
         working-directory: .generated/matrix-app
         run: npm run lint
 
+      # The "stripe" npm dependency ships regardless of include_stripe (see
+      # hooks/post_gen_project.py::handle_stripe — package.json isn't in the
+      # marker-substitution file-extension list), and this test only touches
+      # the raw installed package (tests/billing/webhook-signature.test.mjs),
+      # never lib/stripe.ts, so it runs unconditionally across every matrix
+      # combination, include_stripe=no included.
+      - name: Billing webhook signature tests
+        working-directory: .generated/matrix-app
+        run: npm run test:billing
+
       - name: Build
         working-directory: .generated/matrix-app
         run: npm run build
