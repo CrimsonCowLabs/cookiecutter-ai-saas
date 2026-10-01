@@ -35,6 +35,16 @@ function getSubscriptionPeriod(sub: Stripe.Subscription): {
   end: Date;
 } {
   const item = sub.items.data[0];
+  if (!item?.current_period_start || !item?.current_period_end) {
+    // Falling back silently would let billing-period drift accumulate
+    // unnoticed (see the comment above), so this is loud even though it's
+    // non-fatal: the webhook still returns 200 rather than failing the event.
+    console.error(
+      `[Webhook] subscription ${sub.id} has no usable per-item billing period` +
+        " (missing item, or the webhook endpoint is still pinned to a" +
+        ' pre-"basil" Stripe API version); falling back to a guessed period.'
+    );
+  }
   return {
     start: item?.current_period_start
       ? new Date(item.current_period_start * 1000)
