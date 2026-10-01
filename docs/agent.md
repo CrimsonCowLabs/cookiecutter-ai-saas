@@ -6,7 +6,8 @@ LangGraph agent: `workers/app/agents/research_agent.py`, invoked from
 that agent does today, the loop it runs and the bounds that keep it from
 running away, and how to give it a new tool. Everything else about the
 pipeline — adding a new step, the step/progress-weight plumbing in
-`PIPELINE_STEPS` — belongs to the pipeline guide, not this one.
+`PIPELINE_STEPS` — belongs to the [customization guide](customization.md), not
+this one.
 
 ## The shipped example
 
@@ -75,7 +76,7 @@ Bounds and exit behaviour. A runaway loop cannot run up an unbounded bill:
 - `RESEARCH_MAX_TOOL_CALLS` (default 8) is the tool-call limit, the real
   bound; the LangGraph `recursion_limit` is derived from it as a backstop. See
   the `RESEARCH_MAX_TOOL_CALLS` entry under Environment Variables in
-  README.md to change it.
+  [README.md](../README.md) to change it.
 - Whatever ends the agent, the job still completes, with the same step
   boundaries (0, 30, 30, 70, 70, 100, 100) however many tool calls ran. The AI step
   returns `{"status": "error", "reason": ..., "error": ...}` and the results
@@ -96,8 +97,8 @@ Bounds and exit behaviour. A runaway loop cannot run up an unbounded bill:
 into the invocation (`metadata`, `tags`, `run_name`, `callbacks`). The AI step
 fills it with the job's identity so traces are findable; it cannot loosen the
 bounds, because `recursion_limit` always comes from the argument. See the
-Tracing section under Environment Variables in README.md for the LangSmith
-env vars this feeds.
+Tracing section under Environment Variables in [README.md](../README.md) for
+the LangSmith env vars this feeds.
 
 ## Progress and cancellation
 

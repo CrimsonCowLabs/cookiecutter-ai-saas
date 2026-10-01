@@ -8,7 +8,7 @@ page, a new API route, a new pipeline step, a new theme.
 This guide is about the shape of each kind of change and where it lives. For
 the agent's tool-calling loop itself — the bounded research agent, its
 tool-call budget, progress events, and how to add a tool the agent can call —
-see the agent guide (`docs/agent.md`). The "Adding a pipeline step" section
+see the [agent guide](agent.md). The "Adding a pipeline step" section
 below only covers the pipeline's own step list; it links out to that guide for
 the AI step's internals.
 
@@ -181,7 +181,7 @@ The worker pipeline is `workers/app/runner.py`: a fixed, ordered list of steps
 that always run end to end, where every step returns a structured `status`
 instead of raising, so a job finishes even when a step fails to do its real
 work. This section is about adding a step to that list; see the agent guide
-(`docs/agent.md`) for what happens inside the existing "AI Processing" step.
+([agent guide](agent.md)) for what happens inside the existing "AI Processing" step.
 
 1. **Write the step function.** Add `_step_<name>` to `runner.py` (or import
    it from a tool module under `workers/app/tools/` if the logic is reusable
