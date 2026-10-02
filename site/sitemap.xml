@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Scoped to this directory and below, which is exactly where it lives: a
+     project Pages site under a subpath has no access to the host root, so
+     this sitemap lists only the one URL it can speak for. It is discoverable
+     by submission to a search console (issue #40), not by a Sitemap: line in
+     a robots.txt this repo does not own. See docs/public-site.md. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://crimsoncowlabs.github.io/cookiecutter-ai-saas/</loc>
+  </url>
+</urlset>
