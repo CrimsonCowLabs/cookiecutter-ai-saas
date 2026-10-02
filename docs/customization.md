@@ -279,3 +279,7 @@ template's own source (as opposed to a generated project) are substituted by
 `hooks/post_gen_project.py` from the `primary_color` and `daisyui_theme`
 cookiecutter prompts — by the time you have a generated project, `globals.css`
 and `config.ts` already have concrete values and nothing is templated.
+
+This is the theme system for a *generated project*. The public landing page
+at `site/` is a separate, hand-written page with its own Ember/Paper themes —
+see [`docs/design-system.md`](design-system.md) for that one.
