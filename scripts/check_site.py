@@ -6,6 +6,12 @@ step, no framework, no runtime dependency on anything but GitHub Pages. That is
 cheap to keep true only if something enforces it, because the usual way a static
 page stops being static is one innocent <script src="https://cdn...">.
 
+Issue #35 widened this on purpose, by exactly the amount its checklist needed:
+a <script> is allowed now, but only inline. One with a `src` still fails,
+local paths included — "first-party" is not an exemption from "no runtime
+dependency", it is this page choosing to depend on nothing it does not ship
+inline in its own HTML.
+
 The repo path and install command asserted here are settled in
 docs/public-site.md. Change them there and here together.
 
@@ -61,7 +67,7 @@ class Page(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.doctype = None
         self.metas = []            # attributes of every <meta>
-        self.scripts = 0
+        self.scripts = []          # True/False, has-a-src, one entry per <script>
         self.inline_handlers = []  # (tag, attr) for every on*= attribute
         self.off_origin = []       # (tag, attr, value) outside <a>
         self.links = []            # every <a href>
@@ -81,13 +87,16 @@ class Page(HTMLParser):
         elif tag == "meta":
             self.metas.append(attrs)
         elif tag == "script":
-            self.scripts += 1
+            self.scripts.append(bool(attrs.get("src")))
         elif tag == "a":
             self.links.append(attrs.get("href", ""))
         for attr, value in attrs.items():
             if attr.startswith("on"):
                 self.inline_handlers.append((tag, attr))
-            if attr in URL_ATTRS and tag != "a" and value and OFF_ORIGIN.match(value):
+            # A <script src> is rejected in full below, on-origin included, so
+            # it is excluded here rather than reported twice under a message
+            # that only makes sense for an off-origin one.
+            if attr in URL_ATTRS and tag not in ("a", "script") and value and OFF_ORIGIN.match(value):
                 self.off_origin.append((tag, attr, value))
         self._stack.append((tag, attrs.get("class", "").split()))
 
@@ -157,8 +166,10 @@ def check_html(page):
     if not page.texts("title"):
         fail("<title> is empty")
 
-    if page.scripts:
-        fail(f"{page.scripts} <script> element(s): the page is supposed to need no JavaScript")
+    with_src = sum(page.scripts)
+    if with_src:
+        fail(f"{with_src} <script src> element(s): a script may be inline but must not load "
+             "from anywhere, this origin included")
     for tag, attr in page.inline_handlers:
         fail(f"<{tag} {attr}>: inline event handler is still JavaScript")
     for tag, attr, value in page.off_origin:

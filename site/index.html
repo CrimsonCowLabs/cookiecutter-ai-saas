@@ -124,6 +124,73 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></pre>
         </p>
       </section>
 
+      <section class="checklist" id="checklist">
+        <h2>Zero to deployed</h2>
+        <p>
+          Work it top to bottom and there's no prerequisite left to discover the hard way.
+          Checking an item off is remembered if you close the tab and come back, and the whole
+          list copies as Markdown in one action &mdash; paste it into an issue tracker, or hand it
+          to an agent.
+        </p>
+        <div class="checklist-toolbar" id="checklist-toolbar"></div>
+
+        <div class="phase">
+          <h3>1. Before you touch code</h3>
+          <p>
+            Accounts and credentials to have ready before you generate anything. Skip whichever
+            don't match the choices you're about to make.
+          </p>
+          <ul>
+            <li><label><input type="checkbox" data-id="pre-vps" /><span class="check-text"><strong>A VPS</strong> <span class="tag">production only</span> &mdash; Done: you have SSH root access to a fresh Debian-family host (Ubuntu LTS) and know its IP address.</span></label></li>
+            <li><label><input type="checkbox" data-id="pre-domain" /><span class="check-text"><strong>A domain name</strong> <span class="tag">production only</span> &mdash; Done: you own a domain and can add A/AAAA records for it.</span></label></li>
+            <li><label><input type="checkbox" data-id="pre-google" /><span class="check-text"><strong>Google OAuth credentials</strong> <span class="tag">Google sign-in</span> &mdash; Done: a client ID and secret from <a href="https://console.cloud.google.com">Google Cloud Console</a> &rarr; APIs &amp; Services &rarr; Credentials.</span></label></li>
+            <li><label><input type="checkbox" data-id="pre-microsoft" /><span class="check-text"><strong>Microsoft Entra ID credentials</strong> <span class="tag">Microsoft sign-in</span> &mdash; Done: a client ID, secret, and tenant ID (blank is fine, for multi-tenant) from the <a href="https://portal.azure.com">Azure Portal</a> &rarr; App registrations.</span></label></li>
+            <li><label><input type="checkbox" data-id="pre-resend" /><span class="check-text"><strong>A Resend API key</strong> <span class="tag">magic link</span> &mdash; Done: an API key from <a href="https://resend.com">resend.com</a> &rarr; API Keys.</span></label></li>
+            <li><label><input type="checkbox" data-id="pre-stripe" /><span class="check-text"><strong>A Stripe account</strong> <span class="tag">Stripe</span> &mdash; Done: a publishable key and secret key from the Stripe Dashboard, and your plans already exist there as products and prices.</span></label></li>
+            <li><label><input type="checkbox" data-id="pre-llm" /><span class="check-text"><strong>An LLM provider credential</strong> &mdash; Done: whichever provider you'll choose at generation is ready &mdash; an API key for OpenAI, Anthropic or OpenRouter, or Ollama installed locally with a model already pulled.</span></label></li>
+          </ul>
+        </div>
+
+        <div class="phase">
+          <h3>2. Local setup</h3>
+          <p>From a generated project to the full stack answering on your own machine.</p>
+          <ul>
+            <li><label><input type="checkbox" data-id="local-prereqs" /><span class="check-text"><strong>Prerequisites installed</strong> &mdash; Done: <code>node -v</code>, <code>python3 --version</code> and <code>docker compose version</code> all run without error, matching the Node and Python versions you chose at generation.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-generate" /><span class="check-text"><strong>Project generated</strong> &mdash; Done: <code>cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code> finished, and you're inside the generated project directory.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-env-files" /><span class="check-text"><strong>Both env files created</strong> &mdash; Done: <code>cp .env.example .env.local</code> for the host (<code>npm run dev</code>, <code>npm run db:migrate</code> &mdash; these reach Postgres and Redis on <code>localhost</code>) and <code>cp .env.example .env.docker.local</code> for the containers (<code>docker compose</code> &mdash; these reach them by service name), with <code>.env.docker.local</code>'s <code>DATABASE_URL</code> pointed at <code>@postgres:5432</code> and <code>REDIS_URL</code> at <code>redis://redis:6379</code> instead of <code>localhost</code>.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-secret" /><span class="check-text"><strong><code>NEXTAUTH_SECRET</code> set</strong> &mdash; Done: the output of <code>openssl rand -hex 32</code> is pasted into both env files.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-auth-creds" /><span class="check-text"><strong>Auth credentials filled in</strong> <span class="tag">Google/Microsoft sign-in</span> &mdash; Done: <code>GOOGLE_ID</code>/<code>GOOGLE_SECRET</code> and/or the <code>MICROSOFT_ENTRA_ID_*</code> variables are set in both env files for whichever provider(s) you chose.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-magiclink-key" /><span class="check-text"><strong>Magic-link key filled in</strong> <span class="tag">magic link</span> &mdash; Done: <code>RESEND_API_KEY</code> is set in both env files.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-stripe-keys" /><span class="check-text"><strong>Stripe keys filled in</strong> <span class="tag">Stripe</span> &mdash; Done: <code>STRIPE_PUBLIC_KEY</code> and <code>STRIPE_SECRET_KEY</code> are set in both env files. (<code>STRIPE_WEBHOOK_SECRET</code> comes later, once there's a webhook endpoint to get one from.)</span></label></li>
+            <li><label><input type="checkbox" data-id="local-llm-key" /><span class="check-text"><strong>LLM provider key filled in</strong> &mdash; Done: the variables for whichever provider you chose (<code>OLLAMA_*</code>, <code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, or <code>OPENROUTER_*</code>) are set in both env files.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-deps" /><span class="check-text"><strong>Dependencies installed</strong> &mdash; Done: <code>npm ci</code> finished without error.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-infra" /><span class="check-text"><strong>Infrastructure running</strong> &mdash; Done: <code>docker compose up -d</code> is up, and <code>docker compose ps</code> shows <code>postgres</code> and <code>redis</code> healthy.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-pgvector" /><span class="check-text"><strong>Vector search confirmed</strong> <span class="tag">pgvector</span> &mdash; Done: <code>docker compose config</code> shows the <code>postgres</code> service running <code>pgvector/pgvector:pg18</code>, not plain <code>postgres</code>.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-migration-generate" /><span class="check-text"><strong>First migration generated</strong> &mdash; Done: <code>npm run db:generate</code> created a migration file. The template ships none, so this runs once before there's anything to apply.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-migration-run" /><span class="check-text"><strong>Migration applied</strong> &mdash; Done: <code>npm run db:migrate</code> ran it with no errors.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-dev-server" /><span class="check-text"><strong>Dev server running</strong> &mdash; Done: <code>npm run dev</code> is up, and <code>http://localhost:3000</code> loads in a browser.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-worker" /><span class="check-text"><strong>Worker running</strong> &mdash; Done: in <code>workers/app</code>, after <code>pip install "poetry&gt;=2.5,&lt;3" &amp;&amp; poetry install</code>, <code>python worker.py</code> is running and logs that it's connected to Redis.</span></label></li>
+            <li><label><input type="checkbox" data-id="local-db-writer" /><span class="check-text"><strong>DB writer running</strong> &mdash; Done: with <code>.env.local</code> exported into the shell (<code>set -a &amp;&amp; source .env.local &amp;&amp; set +a</code>), <code>npm run worker:db-writer</code> is running without error.</span></label></li>
+          </ul>
+        </div>
+
+        <div class="phase">
+          <h3>3. Going live</h3>
+          <p>Taking a working local stack to a real URL a stranger can reach.</p>
+          <ul>
+            <li><label><input type="checkbox" data-id="prod-dns" /><span class="check-text"><strong>DNS pointed at the host</strong> &mdash; Done: the domain's A (and AAAA, if used) record resolves to the VPS's IP &mdash; confirm with <code>dig +short &lt;your domain&gt;</code>.</span></label></li>
+            <li><label><input type="checkbox" data-id="prod-provision" /><span class="check-text"><strong>Host provisioned</strong> &mdash; Done: <code>ansible-playbook -i ansible/inventory.ini ansible/provision.yml</code> has run, and running it again reports zero changes.</span></label></li>
+            <li><label><input type="checkbox" data-id="prod-vault" /><span class="check-text"><strong>Secrets vaulted</strong> &mdash; Done: <code>ansible/vault.yml</code> holds every production secret &mdash; the NextAuth secret, the database password, OAuth, Stripe, Resend, your LLM provider, and backups &mdash; and has been encrypted with <code>ansible-vault encrypt</code>.</span></label></li>
+            <li><label><input type="checkbox" data-id="prod-deploy" /><span class="check-text"><strong>Deployed</strong> &mdash; Done: <code>ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass</code> finished &mdash; the DNS pre-flight passed, and migrations ran against the new release.</span></label></li>
+            <li><label><input type="checkbox" data-id="prod-tls" /><span class="check-text"><strong>TLS live</strong> &mdash; Done: the site answers on <code>https://&lt;your domain&gt;</code> with a valid certificate. Caddy gets this on its own, once DNS resolves.</span></label></li>
+            <li><label><input type="checkbox" data-id="prod-callbacks" /><span class="check-text"><strong>Production callback URLs registered</strong> <span class="tag">Google/Microsoft sign-in</span> &mdash; Done: each provider's console has <code>https://&lt;your domain&gt;/api/auth/callback/&lt;provider&gt;</code> registered, matching <code>NEXTAUTH_URL</code> in <code>.env-production</code>.</span></label></li>
+            <li><label><input type="checkbox" data-id="prod-stripe-webhook" /><span class="check-text"><strong>Stripe webhook registered</strong> <span class="tag">Stripe</span> &mdash; Done: a webhook endpoint pointing at <code>https://&lt;your domain&gt;/api/webhook/stripe</code> exists in the Stripe Dashboard, and its signing secret is <code>vault_stripe_webhook_secret</code> in the vault.</span></label></li>
+            <li><label><input type="checkbox" data-id="prod-backups" /><span class="check-text"><strong>Backups scheduled</strong> &mdash; Done: <code>ansible-playbook -i ansible/inventory.ini ansible/backup.yml</code> has run, and at least one dump has completed and verified at the remote destination (<code>opsctl backup</code> triggers one on demand).</span></label></li>
+            <li><label><input type="checkbox" data-id="prod-smoke-test" /><span class="check-text"><strong>Smoke test passed</strong> &mdash; Done: on the live URL you can sign in, reach the dashboard, and &mdash; if Stripe is on &mdash; complete a Stripe test-mode checkout.</span></label></li>
+          </ul>
+        </div>
+      </section>
+
       <aside class="prerelease">
         <h2>Pre-release</h2>
         <p>
@@ -142,5 +209,129 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></pre>
         · MIT licensed
       </p>
     </footer>
+
+    <!-- The one allowance issue #35 made: inline only, first-party, no src
+         anywhere (scripts/check_site.py enforces that). Everything the
+         checklist means is already in the HTML above — this only adds two
+         conveniences on top of it, and the page is still complete and usable
+         with it turned off. -->
+    <script>
+      (function () {
+        "use strict";
+
+        var LIST = document.getElementById("checklist");
+        if (!LIST) return;
+
+        var STORAGE_KEY = "cookiecutter-ai-saas-checklist";
+
+        function loadState() {
+          try {
+            return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+          } catch (err) {
+            return {};
+          }
+        }
+
+        function saveState(state) {
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          } catch (err) {
+            // Private browsing, or a full quota: the list still works, it
+            // just won't remember itself.
+          }
+        }
+
+        function restoreAndWatch() {
+          var state = loadState();
+          var boxes = LIST.querySelectorAll('input[type="checkbox"]');
+          boxes.forEach(function (box) {
+            if (state[box.dataset.id]) box.checked = true;
+            box.addEventListener("change", function () {
+              state[box.dataset.id] = box.checked;
+              saveState(state);
+            });
+          });
+        }
+
+        function toMarkdown() {
+          var lines = ["# cookiecutter-ai-saas: zero to deployed", ""];
+          LIST.querySelectorAll(".phase").forEach(function (phase) {
+            var heading = phase.querySelector("h3");
+            if (heading) lines.push("## " + heading.textContent.trim(), "");
+            phase.querySelectorAll("li").forEach(function (item) {
+              var box = item.querySelector('input[type="checkbox"]');
+              var text = item.querySelector(".check-text");
+              if (!box || !text) return;
+              var mark = box.checked ? "x" : " ";
+              // The conditional badge sits mid-sentence for the pill it
+              // renders as; moved inline it reads as plain text fine, but
+              // only once it is pulled out and appended rather than left
+              // where removing it would leave a gap.
+              var clone = text.cloneNode(true);
+              var tag = clone.querySelector(".tag");
+              var condition = tag ? tag.textContent.trim() : null;
+              if (tag) tag.remove();
+              var body = clone.textContent.trim().replace(/\s+/g, " ");
+              if (condition) body += " (" + condition + ")";
+              lines.push("- [" + mark + "] " + body);
+            });
+            lines.push("");
+          });
+          return lines.join("\n").trim() + "\n";
+        }
+
+        function showFallback(toolbar, markdown) {
+          var area = toolbar.querySelector("textarea");
+          if (!area) {
+            area = document.createElement("textarea");
+            area.className = "copy-fallback";
+            area.readOnly = true;
+            toolbar.appendChild(area);
+          }
+          area.value = markdown;
+          area.focus();
+          area.select();
+        }
+
+        function addCopyButton() {
+          var toolbar = document.getElementById("checklist-toolbar");
+          if (!toolbar) return;
+
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "button copy-markdown";
+          button.textContent = "Copy as Markdown";
+
+          var status = document.createElement("span");
+          status.className = "copy-status";
+          status.setAttribute("role", "status");
+          status.setAttribute("aria-live", "polite");
+
+          button.addEventListener("click", function () {
+            var markdown = toMarkdown();
+            if (!navigator.clipboard || !navigator.clipboard.writeText) {
+              status.textContent = "Clipboard not available — copy it from the box below.";
+              showFallback(toolbar, markdown);
+              return;
+            }
+            navigator.clipboard.writeText(markdown).then(
+              function () {
+                status.textContent = "Copied.";
+              },
+              function () {
+                status.textContent = "Could not copy — copy it from the box below.";
+                showFallback(toolbar, markdown);
+              }
+            );
+          });
+
+          toolbar.appendChild(button);
+          toolbar.appendChild(status);
+        }
+
+        restoreAndWatch();
+        addCopyButton();
+      })();
+    </script>
   </body>
 </html>
