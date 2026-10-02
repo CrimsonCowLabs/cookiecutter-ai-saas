@@ -85,8 +85,10 @@ the page's original palette) and **Paper** (light). The design project also
 explored a third, "Slate"; it was deliberately not shipped. With no
 `data-theme`, CSS alone picks Ember or Paper from `prefers-color-scheme`, so
 the page is correctly themed with its script off. The script adds an
-Ember/Paper toggle to the navbar; a visitor's pick sets `data-theme` and is
-remembered in `localStorage` under `cookiecutter-ai-saas-theme`. The Paper
+Ember/Paper toggle to the navbar. Picking the theme the system does *not*
+ask for sets `data-theme` and remembers it in `localStorage` under
+`cookiecutter-ai-saas-theme`; picking the one it does ask for clears that
+override, so there is always a way back to following the system. The Paper
 variables appear twice in `styles.css` (once in the `prefers-color-scheme:
 light` block, once under `[data-theme="paper"]`); keep the two identical.
 

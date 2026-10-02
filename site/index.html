@@ -99,15 +99,25 @@
           }
         }
 
+        function remove(key) {
+          try {
+            localStorage.removeItem(key);
+          } catch (err) {
+            // As above: nothing to forget if nothing could be stored.
+          }
+        }
+
         // ---- Theme ------------------------------------------------------
 
         var saved = load(THEME_KEY);
         if (saved === "ember" || saved === "paper") ROOT.setAttribute("data-theme", saved);
 
-        function activeTheme() {
-          var explicit = ROOT.getAttribute("data-theme");
-          if (explicit) return explicit;
+        function systemTheme() {
           return prefersLight && prefersLight.matches ? "paper" : "ember";
+        }
+
+        function activeTheme() {
+          return ROOT.getAttribute("data-theme") || systemTheme();
         }
 
         function addThemeToggle() {
@@ -124,8 +134,16 @@
             button.appendChild(swatch);
             button.appendChild(document.createTextNode(theme.name));
             button.addEventListener("click", function () {
-              ROOT.setAttribute("data-theme", theme.id);
-              save(THEME_KEY, theme.id);
+              // Picking the theme the system already asks for is the way
+              // back to following the system: it clears the override
+              // rather than pinning it, so a later OS switch still applies.
+              if (theme.id === systemTheme()) {
+                ROOT.removeAttribute("data-theme");
+                remove(THEME_KEY);
+              } else {
+                ROOT.setAttribute("data-theme", theme.id);
+                save(THEME_KEY, theme.id);
+              }
               sync();
             });
             group.appendChild(button);
@@ -137,7 +155,7 @@
               button.setAttribute("aria-pressed", String(button.dataset.theme === current));
             });
           }
-          // Until the visitor picks one, the page follows the system setting,
+          // Without an override the page follows the system setting,
           // including when it changes while the page is open.
           if (prefersLight && prefersLight.addEventListener) {
             prefersLight.addEventListener("change", sync);
@@ -280,21 +298,44 @@
           var button = document.createElement("button");
           button.type = "button";
           button.className = "btn btn-xs btn-ghost";
-          button.textContent = "copy";
-          button.setAttribute("aria-label", "Copy the install commands");
+          // The visible label is terse; the hidden hint says what it copies,
+          // and the live region announces the outcome the label change shows.
+          var label = document.createElement("span");
+          label.textContent = "copy";
+          var hint = document.createElement("span");
+          hint.className = "sr-only";
+          hint.textContent = " the install commands";
+          button.appendChild(label);
+          button.appendChild(hint);
+          var status = document.createElement("span");
+          status.className = "sr-only";
+          status.setAttribute("role", "status");
+          status.setAttribute("aria-live", "polite");
           var timer;
+          function report(text, message) {
+            label.textContent = text;
+            status.textContent = message;
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+              label.textContent = "copy";
+              status.textContent = "";
+            }, 1600);
+          }
           button.addEventListener("click", function () {
             // textContent, not the rendered text: the "$ " prompts are CSS
-            // generated content and are not part of it.
-            navigator.clipboard.writeText(pre.textContent.trim() + "\n").then(function () {
-              button.textContent = "copied";
-              clearTimeout(timer);
-              timer = setTimeout(function () {
-                button.textContent = "copy";
-              }, 1600);
-            }, function () {});
+            // generated content and are not part of it. No trailing newline,
+            // so a paste into a terminal waits for Enter instead of running.
+            navigator.clipboard.writeText(pre.textContent.trim()).then(
+              function () {
+                report("copied", "Install commands copied.");
+              },
+              function () {
+                report("copy failed", "Could not copy — select the commands below instead.");
+              }
+            );
           });
           head.appendChild(button);
+          head.appendChild(status);
         }
 
         document.addEventListener("DOMContentLoaded", function () {

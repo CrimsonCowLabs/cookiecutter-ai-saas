@@ -152,7 +152,10 @@ class Page(HTMLParser):
             ):
                 self.off_origin.append((tag, attr, value))
         classes = attrs.get("class", "").split()
-        if _is_heading(tag) and self._heading is None:
+        if _is_heading(tag):
+            # A heading cannot contain another; a browser closes the open one
+            # first, and so does this.
+            self._close_heading()
             self._heading = (tag, classes, [])
         self._stack.append((tag, classes))
 
@@ -160,12 +163,19 @@ class Page(HTMLParser):
         while self._stack:
             if self._stack.pop()[0] == tag:
                 break
-        if self._heading is not None and tag == self._heading[0]:
-            heading_tag, classes, parts = self._heading
-            self._heading = None
-            text = " ".join("".join(parts).split())
-            if text:
-                self.text.append((heading_tag, classes, text))
+        # Any </h1>-</h6> closes the open heading, as it does in a browser, so
+        # a mismatched close tag cannot swallow the rest of the page into it.
+        if _is_heading(tag):
+            self._close_heading()
+
+    def _close_heading(self):
+        if self._heading is None:
+            return
+        heading_tag, classes, parts = self._heading
+        self._heading = None
+        text = " ".join("".join(parts).split())
+        if text:
+            self.text.append((heading_tag, classes, text))
 
     def handle_data(self, data):
         if not self._stack:
