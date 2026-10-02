@@ -109,6 +109,11 @@ text in the HTML, so they are never selected or copied — and never seen by
 them into a `<span>$ </span>`: `user-select: none` does not take a text node
 out of the DOM, and the check will fail.
 
+[`docs/design-system.md`](design-system.md) has the concrete reference for
+all of this: the Ember/Paper token tables, derived tokens, typography scale
+and the component class catalog — use it instead of re-deriving values from
+`styles.css` by hand.
+
 ## Search engines and link previews (issue #36)
 
 `index.html`'s `<head>` carries a `<title>`, a `<meta name="description">`, a
