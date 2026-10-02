@@ -12,6 +12,6 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
-All five canonical labels exist in this repo's GitHub label set. If one is ever deleted, recreate it with `gh label create <name>`.
+These five labels don't exist in a freshly generated project's GitHub label set — create them once with `gh label create <name>` (or let `/setup-matt-pocock-skills` do it) before `/triage` relies on them.
 
 Edit the right-hand column to match whatever vocabulary you actually use.
