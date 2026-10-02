@@ -35,6 +35,15 @@ dependency, and that is a constraint rather than a stage the page has not
 outgrown yet. A page with no toolchain cannot have a broken toolchain, and it is
 the fastest and most crawlable thing this repo can serve.
 
+Issue #35 spent one piece of that constraint, deliberately: `index.html` may
+now carry `<script>`, but only inline, with no `src` — not to a CDN and not to
+a local file either. That is still "no third-party runtime dependency" and
+still no build step; it is the page shipping a few lines of its own
+vanilla JS rather than depending on anything that isn't committed in the file
+itself. The checklist's persistence and its Markdown copy button are built
+that way, and nothing about the page's content stops working if the script
+never runs — it only loses those two conveniences.
+
 `.github/workflows/public-site.yml` uploads `site/` to Pages exactly as
 committed, on every push to `main` that touches the page source. Pull requests
 run the checks but do not deploy. `workflow_dispatch` redeploys an unchanged
