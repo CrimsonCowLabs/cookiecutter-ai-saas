@@ -24,7 +24,9 @@ message naming the problem.
 
 import pathlib
 import re
+import struct
 import sys
+import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -33,12 +35,35 @@ TEMPLATE = ROOT / "{{cookiecutter.project_slug}}"
 REPO = "CrimsonCowLabs/cookiecutter-ai-saas"
 REPO_URL = f"https://github.com/{REPO}"
 INSTALL_COMMAND = f"cookiecutter gh:{REPO}"
+PAGE_URL = "https://crimsoncowlabs.github.io/cookiecutter-ai-saas/"
 
 # A static page needs nothing else today. Widening this is a real decision
 # rather than a formality: #36 will want .xml for a sitemap and #37 may want a
 # JSON-LD <script>, and each should be allowed deliberately, by the ticket that
 # needs it, so that "no build step" does not erode one convenience at a time.
-ALLOWED_SUFFIXES = {".html", ".css", ".svg", ".png", ".ico"}
+# #36 is that first widening: site/sitemap.xml needs .xml, and nothing else.
+ALLOWED_SUFFIXES = {".html", ".css", ".svg", ".png", ".ico", ".xml"}
+
+# SERPs truncate a <title> somewhere around 60 characters of rendered width;
+# there is no official limit, so this is a conservative character budget
+# rather than a spec. og:title/twitter:title ride along with the same text
+# and are not re-checked against this budget separately.
+MAX_TITLE_LENGTH = 60
+
+# Meta descriptions get cut off similarly, around 155-160 characters. Too
+# short is also a real failure mode: an empty or token description gets
+# replaced by whatever text Google scrapes from the page instead.
+MIN_DESCRIPTION_LENGTH = 50
+MAX_DESCRIPTION_LENGTH = 160
+
+# The standard Open Graph size, and what og-image.png actually is. This is
+# duplicated by necessity in three places that cannot share a constant: here,
+# scripts/generate_og_image.py's WIDTH/HEIGHT, and the literal
+# og:image:width/og:image:height content in site/index.html. Change all three
+# together, the same way docs/public-site.md's table has to move with
+# REPO/INSTALL_COMMAND above.
+OG_IMAGE_WIDTH = 1200
+OG_IMAGE_HEIGHT = 630
 
 # Off-origin on an <a> is a link, which is the point. Off-origin anywhere else
 # is a runtime dependency: the page stops rendering when that host does.
@@ -53,6 +78,15 @@ failures = []
 
 def fail(message):
     failures.append(message)
+
+
+def png_dimensions(path):
+    """(width, height) of a PNG, read from its IHDR chunk. None if not a PNG."""
+    with path.open("rb") as f:
+        data = f.read(24)
+    if len(data) < 24 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    return struct.unpack(">II", data[16:24])
 
 
 class Page(HTMLParser):
@@ -71,6 +105,7 @@ class Page(HTMLParser):
         self.inline_handlers = []  # (tag, attr) for every on*= attribute
         self.off_origin = []       # (tag, attr, value) outside <a>
         self.links = []            # every <a href>
+        self.link_tags = []        # attributes of every <link>
         self.html_attrs = {}
         self.pre_text = ""         # raw text inside <pre>, newlines intact
         self.text = []             # (tag, classes, normalised text)
@@ -90,13 +125,30 @@ class Page(HTMLParser):
             self.scripts.append(bool(attrs.get("src")))
         elif tag == "a":
             self.links.append(attrs.get("href", ""))
+        elif tag == "link":
+            self.link_tags.append(attrs)
         for attr, value in attrs.items():
             if attr.startswith("on"):
                 self.inline_handlers.append((tag, attr))
             # A <script src> is rejected in full below, on-origin included, so
             # it is excluded here rather than reported twice under a message
-            # that only makes sense for an off-origin one.
-            if attr in URL_ATTRS and tag not in ("a", "script") and value and OFF_ORIGIN.match(value):
+            # that only makes sense for an off-origin one. A <link rel=canonical>
+            # (or similar metadata-only rels) is never fetched by the browser at
+            # all — it is read the way an <a href> is, by whatever follows it on
+            # purpose, not loaded as part of rendering the page — so it is exempt
+            # for the same reason <a> is, and a canonical URL has to be absolute
+            # to mean anything.
+            if (
+                attr in URL_ATTRS
+                and tag not in ("a", "script")
+                # rel is an ASCII case-insensitive keyword per the HTML spec, so
+                # this has to match Page.link()'s lower-casing or a perfectly
+                # legitimate <link rel="Canonical"> would fail as a spurious
+                # off-origin runtime dependency.
+                and not (tag == "link" and attrs.get("rel", "").lower() == "canonical")
+                and value
+                and OFF_ORIGIN.match(value)
+            ):
                 self.off_origin.append((tag, attr, value))
         self._stack.append((tag, attrs.get("class", "").split()))
 
@@ -119,10 +171,26 @@ class Page(HTMLParser):
         """Every <meta name="..."> with this name, case-insensitively."""
         return [m for m in self.metas if m.get("name", "").lower() == name]
 
+    def meta_property(self, prop):
+        """Every <meta property="..."> with this property (Open Graph's spelling)."""
+        return [m for m in self.metas if m.get("property", "").lower() == prop]
+
+    def link(self, rel):
+        """Every <link rel="..."> with this rel, case-insensitively."""
+        return [l for l in self.link_tags if l.get("rel", "").lower() == rel]
+
     def texts(self, tag, css_class=None):
         return [
             text for element, classes, text in self.text
             if element == tag and (css_class is None or css_class in classes)
+        ]
+
+    def headings(self):
+        """(level, text) for every h1-h6 that has text, in document order."""
+        return [
+            (int(element[1]), text)
+            for element, _classes, text in self.text
+            if len(element) == 2 and element[0] == "h" and element[1] in "123456"
         ]
 
 
@@ -239,6 +307,178 @@ def check_hero(page):
         fail(f"no link to the repo at {REPO_URL}")
 
 
+def check_heading_outline(page):
+    """The outline is a single <h1> and no heading level is skipped.
+
+    A screen reader or a crawler builds the page's outline from heading
+    levels alone, not font size, so the sequence of levels has to behave like
+    a real outline: going deeper always deepens by exactly one level, because
+    you cannot open a subsection of a section that was never opened. Going
+    back up any number of levels is fine — that is just closing one.
+    """
+    headings = page.headings()
+    if not headings:
+        fail("no headings found")
+        return
+    if headings[0][0] != 1:
+        fail(f"the first heading is <h{headings[0][0]}>, not <h1>: the outline has to start there")
+    prev = 0
+    for level, text in headings:
+        if level > prev + 1:
+            fail(f"<h{level}> {text!r} follows nothing deeper than <h{prev}>: skips a heading level")
+        prev = level
+
+
+def _resolve_site_asset(url, site, label):
+    """Path under site/ that an absolute PAGE_URL-rooted asset URL names.
+
+    og:image and twitter:image have to be absolute URLs to mean anything to a
+    consumer that has no notion of "relative to this page" (most don't), but
+    that also means nothing stops one from quietly pointing at a path that
+    does not exist, or at a different host entirely. This turns the URL back
+    into a file so the rest of the check can look at what it actually is.
+    """
+    if not url.startswith(PAGE_URL):
+        fail(f"{label} {url!r} is not rooted at {PAGE_URL!r}: a relative or off-site "
+             "image URL is unreliable in link previews")
+        return None
+    asset = site / url[len(PAGE_URL):]
+    if not asset.is_file():
+        fail(f"{label} {url!r} names {asset}, which does not exist")
+        return None
+    return asset
+
+
+def check_link_preview(page, site):
+    """Everything a link-preview consumer (Slack, a tweet, a card validator,
+    a search result) needs is present, non-empty, and actually true.
+
+    This is deliberately redundant with a human eyeballing the page: a title
+    that is one character over budget or an og:image that 404s is invisible
+    in a browser tab and only shows up where the page is actually shared, so
+    it is checked here instead of trusted to review.
+    """
+    titles = page.texts("title")
+    page_title = titles[0] if titles else None
+    if page_title and len(page_title) > MAX_TITLE_LENGTH:
+        fail(f"<title> is {len(page_title)} characters, over the ~{MAX_TITLE_LENGTH} that search "
+             f"results truncate at: {page_title!r}")
+
+    descriptions = page.meta("description")
+    page_description = None
+    if len(descriptions) != 1:
+        fail(f"expected exactly one <meta name=description>, found {len(descriptions)}")
+    else:
+        page_description = descriptions[0].get("content", "")
+        if not (MIN_DESCRIPTION_LENGTH <= len(page_description) <= MAX_DESCRIPTION_LENGTH):
+            fail(f"<meta name=description> is {len(page_description)} characters, outside the "
+                 f"{MIN_DESCRIPTION_LENGTH}-{MAX_DESCRIPTION_LENGTH} that reads as a real "
+                 f"description rather than a stub or a truncated one: {page_description!r}")
+
+    canonical = page.link("canonical")
+    if len(canonical) != 1:
+        fail(f"expected exactly one <link rel=canonical>, found {len(canonical)}")
+    elif canonical[0].get("href") != PAGE_URL:
+        fail(f'<link rel=canonical> points at {canonical[0].get("href")!r}, not the Pages '
+             f"URL {PAGE_URL!r}")
+
+    # Every one of these has to exist, exactly once, with non-empty content —
+    # the shape check_html already gives <meta charset> etc. A tag present
+    # but empty passes a naive "is it there" grep and fails in the wild.
+    required_og = [
+        "og:type", "og:url", "og:site_name", "og:title", "og:description",
+        "og:image", "og:image:width", "og:image:height", "og:image:alt",
+    ]
+    og = {}
+    for prop in required_og:
+        tags = page.meta_property(prop)
+        if len(tags) != 1 or not tags[0].get("content", "").strip():
+            fail(f"expected exactly one non-empty <meta property=\"{prop}\">, found {len(tags)}")
+        else:
+            og[prop] = tags[0]["content"]
+
+    if og.get("og:url") not in (None, PAGE_URL):
+        fail(f'og:url is {og["og:url"]!r}, not the Pages URL {PAGE_URL!r}')
+    if "og:image:width" in og and og["og:image:width"] != str(OG_IMAGE_WIDTH):
+        fail(f'og:image:width is {og["og:image:width"]!r}, not {OG_IMAGE_WIDTH} (the image shipped)')
+    if "og:image:height" in og and og["og:image:height"] != str(OG_IMAGE_HEIGHT):
+        fail(f'og:image:height is {og["og:image:height"]!r}, not {OG_IMAGE_HEIGHT} (the image shipped)')
+
+    required_twitter = ["twitter:card", "twitter:title", "twitter:description", "twitter:image", "twitter:image:alt"]
+    twitter = {}
+    for name in required_twitter:
+        tags = page.meta(name)
+        if len(tags) != 1 or not tags[0].get("content", "").strip():
+            fail(f"expected exactly one non-empty <meta name=\"{name}\">, found {len(tags)}")
+        else:
+            twitter[name] = tags[0]["content"]
+
+    if twitter.get("twitter:card") not in (None, "summary_large_image"):
+        fail(f'twitter:card is {twitter["twitter:card"]!r}, not "summary_large_image" '
+             "(the card shape that actually shows the image large)")
+
+    # <title>/<meta description> are the only source of truth for this copy;
+    # og:title/twitter:title and og:description/twitter:description repeat it
+    # rather than writing their own, so a future copy edit cannot update the
+    # tab title and silently leave a stale version in the share card.
+    for label, value in (("og:title", og.get("og:title")), ("twitter:title", twitter.get("twitter:title"))):
+        if page_title and value and value != page_title:
+            fail(f"{label} {value!r} does not match <title> {page_title!r}")
+    for label, value in (
+        ("og:description", og.get("og:description")),
+        ("twitter:description", twitter.get("twitter:description")),
+    ):
+        if page_description and value and value != page_description:
+            fail(f"{label} {value!r} does not match <meta name=description> {page_description!r}")
+
+    # The image itself: declared once, used for both cards (a link preview
+    # consumer does not care which tag it came from), and it has to be the
+    # size it claims to be or it is cropped or stretched unpredictably.
+    image_url = og.get("og:image")
+    twitter_image_url = twitter.get("twitter:image")
+    if image_url and twitter_image_url and image_url != twitter_image_url:
+        fail(f"og:image {image_url!r} and twitter:image {twitter_image_url!r} disagree")
+    if image_url:
+        asset = _resolve_site_asset(image_url, site, "og:image")
+        if asset is not None:
+            dims = png_dimensions(asset)
+            if dims is None:
+                fail(f"{asset}: not a PNG (or too small to read a header from)")
+            elif dims != (OG_IMAGE_WIDTH, OG_IMAGE_HEIGHT):
+                fail(f"{asset} is {dims[0]}x{dims[1]}, not the {OG_IMAGE_WIDTH}x{OG_IMAGE_HEIGHT} "
+                     "declared in og:image:width/height")
+
+
+def check_sitemap(site):
+    """site/sitemap.xml exists, is well-formed, and lists the canonical URL.
+
+    A sitemap is valid at the path it is served from and below, unlike
+    robots.txt, so site/sitemap.xml is reachable where it lands even though
+    this repo does not own the host root. It is found by submitting it to a
+    search console (issue #40) rather than by a Sitemap: line in a
+    robots.txt that cannot exist here — see docs/public-site.md.
+    """
+    sitemap = site / "sitemap.xml"
+    if not sitemap.is_file():
+        fail(f"no such file: {sitemap}")
+        return
+
+    try:
+        root = ET.parse(sitemap).getroot()
+    except ET.ParseError as error:
+        fail(f"{sitemap}: not well-formed XML: {error}")
+        return
+
+    ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    if root.tag != "{http://www.sitemaps.org/schemas/sitemap/0.9}urlset":
+        fail(f"{sitemap}: root element is <{root.tag}>, expected <urlset> in the sitemap namespace")
+        return
+
+    locations = [loc.text.strip() for loc in root.findall("sm:url/sm:loc", ns) if loc.text]
+    if PAGE_URL not in locations:
+        fail(f"{sitemap} does not list the canonical URL {PAGE_URL!r}, found {locations}")
+
+
 def main():
     site = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "site"
     index = site / "index.html"
@@ -254,6 +494,9 @@ def main():
         check_html(page)
         indexing = check_indexing(page)
         check_hero(page)
+        check_heading_outline(page)
+        check_link_preview(page, site)
+        check_sitemap(site)
 
     for message in failures:
         print(f"FAIL: {message}", file=sys.stderr)

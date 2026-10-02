@@ -1,0 +1,29 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+  <!-- Source of truth for site/og-image.png. See docs/public-site.md for how
+       to regenerate the PNG from this file with scripts/generate_og_image.py.
+       Colors match site/styles.css's :root tokens so the preview card looks
+       like the page it is a preview of. -->
+  <defs>
+    <style>
+      .eyebrow { font: 600 26px/1 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; fill: #a89e99; letter-spacing: 1px; }
+      .title { font: 700 72px/1 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; fill: #f6f1ee; letter-spacing: -1px; }
+      .tagline { font: 400 34px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #a89e99; }
+      .chip-text { font: 600 26px/1 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; fill: #1a0d07; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="630" fill="#100d0c" />
+  <rect x="0" y="0" width="14" height="630" fill="#f2703a" />
+
+  <text x="90" y="150" class="eyebrow">CRIMSONCOW LABS · OPEN SOURCE TEMPLATE</text>
+
+  <text x="86" y="260" class="title">cookiecutter-ai-saas</text>
+
+  <text x="90" y="330" class="tagline">
+    <tspan x="90" dy="0">Auth, billing, and a background worker for your AI</tspan>
+    <tspan x="90" dy="46">feature — already wired. Generate it in one command.</tspan>
+  </text>
+
+  <rect x="90" y="440" width="860" height="72" rx="10" fill="#f2703a" />
+  <text x="122" y="486" class="chip-text">cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</text>
+</svg>
