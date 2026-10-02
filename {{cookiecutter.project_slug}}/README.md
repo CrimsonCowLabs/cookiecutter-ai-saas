@@ -2,6 +2,15 @@
 
 {{ cookiecutter.project_description }}
 
+## Agent Workflow
+
+This project ships with `AGENTS.md` and `docs/agents/` conventions (issue
+tracker, triage labels, domain docs) that the mattpocock-skills Claude Code
+plugin reads to drive ticket intake, TDD, code review and other agentic
+workflows against this stack. See
+[Using the Matt Pocock skills plugin](docs/matt-pocock-skills.md) for which
+skills to reach for and how each one maps to this template.
+
 ## Tech Stack
 
 - **Framework:** Next.js 16 (App Router), React 19
