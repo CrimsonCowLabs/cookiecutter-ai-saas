@@ -110,6 +110,7 @@ class Page(HTMLParser):
         self.pre_text = ""         # raw text inside <pre>, newlines intact
         self.text = []             # (tag, classes, normalised text)
         self._stack = []
+        self._heading = None       # (tag, classes, [text so far]) while inside h1-h6
 
     def handle_decl(self, decl):
         if self.doctype is None:
@@ -150,12 +151,21 @@ class Page(HTMLParser):
                 and OFF_ORIGIN.match(value)
             ):
                 self.off_origin.append((tag, attr, value))
-        self._stack.append((tag, attrs.get("class", "").split()))
+        classes = attrs.get("class", "").split()
+        if _is_heading(tag) and self._heading is None:
+            self._heading = (tag, classes, [])
+        self._stack.append((tag, classes))
 
     def handle_endtag(self, tag):
         while self._stack:
             if self._stack.pop()[0] == tag:
                 break
+        if self._heading is not None and tag == self._heading[0]:
+            heading_tag, classes, parts = self._heading
+            self._heading = None
+            text = " ".join("".join(parts).split())
+            if text:
+                self.text.append((heading_tag, classes, text))
 
     def handle_data(self, data):
         if not self._stack:
@@ -163,6 +173,18 @@ class Page(HTMLParser):
         if any(tag == "pre" for tag, _ in self._stack):
             # Kept verbatim: the line breaks are what makes it a command.
             self.pre_text += data
+        if self._heading is not None:
+            # A heading's text is everything inside it, not just the text
+            # whose immediate parent is the <h1>-<h6> itself: the hero's
+            # <h1><span>cookiecutter-</span><span class="text-gradient">ai-saas</span></h1>
+            # reads as one heading to a person, a screen reader and a crawler,
+            # and has no direct text at all. So a heading's descendants are
+            # joined into one entry, recorded once when it closes, and not
+            # also recorded piecemeal under whatever inline tag held them.
+            # Joined without a separator, exactly as adjacent inline elements
+            # render — whitespace in the source is kept and normalised.
+            self._heading[2].append(data)
+            return
         if data.strip():
             tag, classes = self._stack[-1]
             self.text.append((tag, classes, " ".join(data.split())))
@@ -190,8 +212,12 @@ class Page(HTMLParser):
         return [
             (int(element[1]), text)
             for element, _classes, text in self.text
-            if len(element) == 2 and element[0] == "h" and element[1] in "123456"
+            if _is_heading(element)
         ]
+
+
+def _is_heading(tag):
+    return len(tag) == 2 and tag[0] == "h" and tag[1] in "123456"
 
 
 def check_page_source_is_outside_the_template(site):

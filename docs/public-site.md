@@ -42,8 +42,10 @@ a local file either. That is still "no third-party runtime dependency" and
 still no build step; it is the page shipping a few lines of its own
 vanilla JS rather than depending on anything that isn't committed in the file
 itself. The checklist's persistence and its Markdown copy button are built
-that way, and nothing about the page's content stops working if the script
-never runs — it only loses those two conveniences.
+that way, as are the theme toggle, the progress counter and the install
+command's copy button (see "Look and themes" below), and nothing about the
+page's content stops working if the script never runs — it only loses those
+conveniences.
 
 `.github/workflows/public-site.yml` uploads `site/` to Pages exactly as
 committed, on every push to `main` that touches the page source. Pull requests
@@ -64,6 +66,46 @@ tested: break a copy on purpose and watch the right assertion fail.
 The page source lives at the repo root, outside `{{cookiecutter.project_slug}}/`,
 so it does not reach generated projects. Cookiecutter only copies the template
 directory; the check asserts the page has not wandered into it.
+
+## Look and themes
+
+The page's visual design comes from the AI SaaS design system (the claude.ai
+design project "Cookiecutter AI-SaaS design themes", screen "Project Page",
+which maps to `site/index.html` + `site/styles.css`). That system is built
+DaisyUI-style — every colour, radius and depth is a CSS variable, and
+components are plain classes (`btn btn-primary`, `badge`, `surface-card`,
+`navbar`, `section`, …) — so `styles.css` is a hand copy of just the tokens
+and classes this page uses, under the same names. No design-system CSS, JS
+or font is loaded at runtime. The design uses Inter and JetBrains Mono from
+Google Fonts; this page uses system-font stacks instead, because a CDN font
+is an off-origin runtime dependency.
+
+There are two themes, set by `data-theme` on `<html>`: **Ember** (warm dark,
+the page's original palette) and **Paper** (light). The design project also
+explored a third, "Slate"; it was deliberately not shipped. With no
+`data-theme`, CSS alone picks Ember or Paper from `prefers-color-scheme`, so
+the page is correctly themed with its script off. The script adds an
+Ember/Paper toggle to the navbar; a visitor's pick sets `data-theme` and is
+remembered in `localStorage` under `cookiecutter-ai-saas-theme`. The Paper
+variables appear twice in `styles.css` (once in the `prefers-color-scheme:
+light` block, once under `[data-theme="paper"]`); keep the two identical.
+
+The script lives in `<head>` rather than at the end of `<body>` so a
+remembered theme is applied before first paint, instead of flashing the
+other one; everything else in it waits for `DOMContentLoaded`. It is still
+the page's one inline script. Besides the theme toggle it restores and saves
+checklist state (`cookiecutter-ai-saas-checklist`, keyed by each checkbox's
+`data-id` — don't rename those, or returning visitors lose their progress),
+shows the done/total counter and progress bar, and adds the "Copy as
+Markdown" and install-command copy buttons. Every one of those controls is
+inserted or revealed by the script, so none sits on the page doing nothing
+when it doesn't run.
+
+The install command's `$ ` prompts are CSS `::before` generated content, not
+text in the HTML, so they are never selected or copied — and never seen by
+`check_site.py`'s prompt check, which only sees real text. Don't "simplify"
+them into a `<span>$ </span>`: `user-select: none` does not take a text node
+out of the DOM, and the check will fail.
 
 ## Search engines and link previews (issue #36)
 
