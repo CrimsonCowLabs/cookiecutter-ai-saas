@@ -58,247 +58,162 @@
     />
 
     <link rel="stylesheet" href="styles.css" />
-  </head>
-
-  <body>
-    <main>
-      <header class="hero">
-        <p class="eyebrow">CrimsonCow Labs · open source template</p>
-        <h1>cookiecutter-ai-saas</h1>
-        <p class="tagline">
-          For builders and vibecoders who can already ship a feature, and want the auth, billing
-          and deploy pipeline around it already built.
-        </p>
-
-        <p class="status">
-          <strong>Pre-release.</strong> It generates and runs today — read on before you run
-          anything, and know what you're trying.
-        </p>
-
-        <p class="install-label">Generate your project:</p>
-        <pre><code>pip install cookiecutter
-cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></pre>
-
-        <p class="actions">
-          <a class="button" href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas"
-            >Read the code on GitHub</a
-          >
-        </p>
-      </header>
-
-      <section class="stall">
-        <h2>What stalls a side project</h2>
-        <p>
-          You can already build the feature — that part was never the problem. What stalls a
-          side project is everything standing between it and a stranger using it, and it's the
-          same six things every time:
-        </p>
-        <ul class="stall-list">
-          <li><strong>Signing in.</strong> Someone needs an account and a way back into it, without you hand-rolling sessions.</li>
-          <li><strong>Getting paid.</strong> A checkout, and a portal that doesn't break when someone upgrades or cancels.</li>
-          <li><strong>Background jobs.</strong> Work too slow for a web request has to run elsewhere and report back.</li>
-          <li><strong>A worker that can call an LLM safely.</strong> With a provider you chose, a budget on how much it can do, and somewhere to look when it does something odd.</li>
-          <li><strong>TLS.</strong> A certificate that renews itself instead of a reminder you'll ignore.</li>
-          <li><strong>Shipping it anywhere but your laptop.</strong> One command, not nineteen remembered in the right order.</li>
-        </ul>
-        <p>This template is those six things, already done, around the feature you're about to build.</p>
-      </section>
-
-      <section class="stack">
-        <h2>What's actually running</h2>
-        <p>Concretely, not abstractly — this is the system a generated project brings up:</p>
-        <ul class="stack-list">
-          <li>A <strong>Next.js app</strong> your users see: sign-in, dashboard, billing, settings.</li>
-          <li>A <strong>Python worker</strong> that does the AI part — pulls a job off the queue, calls the model you chose, reports progress as it goes.</li>
-          <li><strong>Postgres</strong> for everything that still has to be there tomorrow.</li>
-          <li><strong>Redis and BullMQ</strong> carrying jobs between the app and the worker.</li>
-          <li>A <strong>Docker Compose stack behind Caddy</strong> that one Ansible playbook can put on a fresh VPS, TLS included.</li>
-        </ul>
-        <p>
-          The full request path, the generated file layout, and the architecture decisions behind
-          it are in the
-          <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas#readme">README</a>.
-        </p>
-      </section>
-
-      <section class="choices">
-        <h2>What you decide, and what it changes</h2>
-        <p>Cookiecutter asks a short set of questions once, at generation time. These change what your app does:</p>
-        <dl class="choice-list">
-          <div><dt>LLM provider</dt><dd>Ollama, OpenAI, Anthropic, or OpenRouter — whichever the worker calls, and the only credentials you have to go get.</dd></div>
-          <div><dt>Stripe</dt><dd>On, with real checkout and portal wiring. Off, and it's not in the generated project at all.</dd></div>
-          <div><dt>Auth providers</dt><dd>Google, Microsoft, or both — which sign-in buttons a visitor sees.</dd></div>
-          <div><dt>Magic link</dt><dd>Passwordless email sign-in via Resend, independent of whichever OAuth providers you picked.</dd></div>
-          <div><dt>pgvector</dt><dd>On, and Postgres can do vector similarity search — embeddings, semantic search, retrieval. Off, and it's plain Postgres.</dd></div>
-          <div><dt>Marketing extras</dt><dd>A small JSON-backed blog and a contact form, for a public site around the app.</dd></div>
-        </dl>
-        <p>
-          The rest is naming and defaults: project name, slug, and description; author name and
-          email; domain; brand color and theme; Python and Node versions; and the local Postgres
-          and Redis ports. Straight answers, not decisions — with one exception. Your author email
-          doubles as the contact address on your TLS certificate, which is the kind of detail that
-          only matters once, covered in the
-          <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/docs/deployment.md#https-and-tls">deployment guide</a>.
-        </p>
-      </section>
-
-      <section class="quickstart">
-        <h2>From install to a running app</h2>
-        <p>
-          Timed on a clean checkout with Docker's images already pulled: well under a minute from
-          the first command to the app answering in a browser. The first time on a given machine,
-          most of that minute is Docker fetching Postgres, Redis, and the base images — budget a
-          few minutes for that once.
-        </p>
-        <ol class="steps">
-          <li>Install cookiecutter, once, ever: <code>pip install cookiecutter</code></li>
-          <li>Generate the project: <code>cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></li>
-          <li><code>cd</code> into it, copy <code>.env.example</code> to both <code>.env.local</code> and <code>.env.docker.local</code>, set one secret, and point the docker copy's database and Redis URLs at the container hostnames</li>
-          <li>Install dependencies: <code>npm ci</code></li>
-          <li>Build and start everything: <code>docker compose up -d --build</code></li>
-          <li>Create and run the database migrations: <code>npm run db:generate && npm run db:migrate</code></li>
-          <li>Open <code>localhost:3000</code> — it's running</li>
-        </ol>
-        <p>
-          Signing in for real needs OAuth credentials from Google or Microsoft's own dashboards,
-          which is an errand, not a command — that part, and everything past this first run, is in
-          the README's
-          <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas#post-generation-setup">post-generation setup</a>.
-        </p>
-      </section>
-
-      <section class="checklist" id="checklist">
-        <h2>Zero to deployed</h2>
-        <p>
-          Work it top to bottom and there's no prerequisite left to discover the hard way.
-          Checking an item off is remembered if you close the tab and come back, and the whole
-          list copies as Markdown in one action &mdash; paste it into an issue tracker, or hand it
-          to an agent.
-        </p>
-        <div class="checklist-toolbar" id="checklist-toolbar"></div>
-
-        <div class="phase">
-          <h3>1. Before you touch code</h3>
-          <p>
-            Accounts and credentials to have ready before you generate anything. Skip whichever
-            don't match the choices you're about to make.
-          </p>
-          <ul>
-            <li><label><input type="checkbox" data-id="pre-vps" /><span class="check-text"><strong>A VPS</strong> <span class="tag">production only</span> &mdash; Done: you have SSH root access to a fresh Debian-family host (Ubuntu LTS) and know its IP address.</span></label></li>
-            <li><label><input type="checkbox" data-id="pre-domain" /><span class="check-text"><strong>A domain name</strong> <span class="tag">production only</span> &mdash; Done: you own a domain and can add A/AAAA records for it.</span></label></li>
-            <li><label><input type="checkbox" data-id="pre-google" /><span class="check-text"><strong>Google OAuth credentials</strong> <span class="tag">Google sign-in</span> &mdash; Done: a client ID and secret from <a href="https://console.cloud.google.com">Google Cloud Console</a> &rarr; APIs &amp; Services &rarr; Credentials.</span></label></li>
-            <li><label><input type="checkbox" data-id="pre-microsoft" /><span class="check-text"><strong>Microsoft Entra ID credentials</strong> <span class="tag">Microsoft sign-in</span> &mdash; Done: a client ID, secret, and tenant ID (blank is fine, for multi-tenant) from the <a href="https://portal.azure.com">Azure Portal</a> &rarr; App registrations.</span></label></li>
-            <li><label><input type="checkbox" data-id="pre-resend" /><span class="check-text"><strong>A Resend API key</strong> <span class="tag">magic link</span> &mdash; Done: an API key from <a href="https://resend.com">resend.com</a> &rarr; API Keys.</span></label></li>
-            <li><label><input type="checkbox" data-id="pre-stripe" /><span class="check-text"><strong>A Stripe account</strong> <span class="tag">Stripe</span> &mdash; Done: a publishable key and secret key from the Stripe Dashboard, and your plans already exist there as products and prices.</span></label></li>
-            <li><label><input type="checkbox" data-id="pre-llm" /><span class="check-text"><strong>An LLM provider credential</strong> &mdash; Done: whichever provider you'll choose at generation is ready &mdash; an API key for OpenAI, Anthropic or OpenRouter, or Ollama installed locally with a model already pulled.</span></label></li>
-          </ul>
-        </div>
-
-        <div class="phase">
-          <h3>2. Local setup</h3>
-          <p>From a generated project to the full stack answering on your own machine.</p>
-          <ul>
-            <li><label><input type="checkbox" data-id="local-prereqs" /><span class="check-text"><strong>Prerequisites installed</strong> &mdash; Done: <code>node -v</code>, <code>python3 --version</code> and <code>docker compose version</code> all run without error, matching the Node and Python versions you chose at generation.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-generate" /><span class="check-text"><strong>Project generated</strong> &mdash; Done: <code>cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code> finished, and you're inside the generated project directory.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-env-files" /><span class="check-text"><strong>Both env files created</strong> &mdash; Done: <code>cp .env.example .env.local</code> for the host (<code>npm run dev</code>, <code>npm run db:migrate</code> &mdash; these reach Postgres and Redis on <code>localhost</code>) and <code>cp .env.example .env.docker.local</code> for the containers (<code>docker compose</code> &mdash; these reach them by service name), with <code>.env.docker.local</code>'s <code>DATABASE_URL</code> pointed at <code>@postgres:5432</code> and <code>REDIS_URL</code> at <code>redis://redis:6379</code> instead of <code>localhost</code>.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-secret" /><span class="check-text"><strong><code>NEXTAUTH_SECRET</code> set</strong> &mdash; Done: the output of <code>openssl rand -hex 32</code> is pasted into both env files.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-auth-creds" /><span class="check-text"><strong>Auth credentials filled in</strong> <span class="tag">Google/Microsoft sign-in</span> &mdash; Done: <code>GOOGLE_ID</code>/<code>GOOGLE_SECRET</code> and/or the <code>MICROSOFT_ENTRA_ID_*</code> variables are set in both env files for whichever provider(s) you chose.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-magiclink-key" /><span class="check-text"><strong>Magic-link key filled in</strong> <span class="tag">magic link</span> &mdash; Done: <code>RESEND_API_KEY</code> is set in both env files.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-stripe-keys" /><span class="check-text"><strong>Stripe keys filled in</strong> <span class="tag">Stripe</span> &mdash; Done: <code>STRIPE_PUBLIC_KEY</code> and <code>STRIPE_SECRET_KEY</code> are set in both env files. (<code>STRIPE_WEBHOOK_SECRET</code> comes later, once there's a webhook endpoint to get one from.)</span></label></li>
-            <li><label><input type="checkbox" data-id="local-llm-key" /><span class="check-text"><strong>LLM provider key filled in</strong> &mdash; Done: the variables for whichever provider you chose (<code>OLLAMA_*</code>, <code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, or <code>OPENROUTER_*</code>) are set in both env files.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-deps" /><span class="check-text"><strong>Dependencies installed</strong> &mdash; Done: <code>npm ci</code> finished without error.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-infra" /><span class="check-text"><strong>Infrastructure running</strong> &mdash; Done: <code>docker compose up -d</code> is up, and <code>docker compose ps</code> shows <code>postgres</code> and <code>redis</code> healthy.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-pgvector" /><span class="check-text"><strong>Vector search confirmed</strong> <span class="tag">pgvector</span> &mdash; Done: <code>docker compose config</code> shows the <code>postgres</code> service running <code>pgvector/pgvector:pg18</code>, not plain <code>postgres</code>.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-migration-generate" /><span class="check-text"><strong>First migration generated</strong> &mdash; Done: <code>npm run db:generate</code> created a migration file. The template ships none, so this runs once before there's anything to apply.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-migration-run" /><span class="check-text"><strong>Migration applied</strong> &mdash; Done: <code>npm run db:migrate</code> ran it with no errors.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-dev-server" /><span class="check-text"><strong>Dev server running</strong> &mdash; Done: <code>npm run dev</code> is up, and <code>http://localhost:3000</code> loads in a browser.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-worker" /><span class="check-text"><strong>Worker running</strong> &mdash; Done: in <code>workers/app</code>, after <code>pip install "poetry&gt;=2.5,&lt;3" &amp;&amp; poetry install</code>, <code>python worker.py</code> is running and logs that it's connected to Redis.</span></label></li>
-            <li><label><input type="checkbox" data-id="local-db-writer" /><span class="check-text"><strong>DB writer running</strong> &mdash; Done: with <code>.env.local</code> exported into the shell (<code>set -a &amp;&amp; source .env.local &amp;&amp; set +a</code>), <code>npm run worker:db-writer</code> is running without error.</span></label></li>
-          </ul>
-        </div>
-
-        <div class="phase">
-          <h3>3. Going live</h3>
-          <p>Taking a working local stack to a real URL a stranger can reach.</p>
-          <ul>
-            <li><label><input type="checkbox" data-id="prod-dns" /><span class="check-text"><strong>DNS pointed at the host</strong> &mdash; Done: the domain's A (and AAAA, if used) record resolves to the VPS's IP &mdash; confirm with <code>dig +short &lt;your domain&gt;</code>.</span></label></li>
-            <li><label><input type="checkbox" data-id="prod-provision" /><span class="check-text"><strong>Host provisioned</strong> &mdash; Done: <code>ansible-playbook -i ansible/inventory.ini ansible/provision.yml</code> has run, and running it again reports zero changes.</span></label></li>
-            <li><label><input type="checkbox" data-id="prod-vault" /><span class="check-text"><strong>Secrets vaulted</strong> &mdash; Done: <code>ansible/vault.yml</code> holds every production secret &mdash; the NextAuth secret, the database password, OAuth, Stripe, Resend, your LLM provider, and backups &mdash; and has been encrypted with <code>ansible-vault encrypt</code>.</span></label></li>
-            <li><label><input type="checkbox" data-id="prod-deploy" /><span class="check-text"><strong>Deployed</strong> &mdash; Done: <code>ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass</code> finished &mdash; the DNS pre-flight passed, and migrations ran against the new release.</span></label></li>
-            <li><label><input type="checkbox" data-id="prod-tls" /><span class="check-text"><strong>TLS live</strong> &mdash; Done: the site answers on <code>https://&lt;your domain&gt;</code> with a valid certificate. Caddy gets this on its own, once DNS resolves.</span></label></li>
-            <li><label><input type="checkbox" data-id="prod-callbacks" /><span class="check-text"><strong>Production callback URLs registered</strong> <span class="tag">Google/Microsoft sign-in</span> &mdash; Done: each provider's console has <code>https://&lt;your domain&gt;/api/auth/callback/&lt;provider&gt;</code> registered, matching <code>NEXTAUTH_URL</code> in <code>.env-production</code>.</span></label></li>
-            <li><label><input type="checkbox" data-id="prod-stripe-webhook" /><span class="check-text"><strong>Stripe webhook registered</strong> <span class="tag">Stripe</span> &mdash; Done: a webhook endpoint pointing at <code>https://&lt;your domain&gt;/api/webhook/stripe</code> exists in the Stripe Dashboard, and its signing secret is <code>vault_stripe_webhook_secret</code> in the vault.</span></label></li>
-            <li><label><input type="checkbox" data-id="prod-backups" /><span class="check-text"><strong>Backups scheduled</strong> &mdash; Done: <code>ansible-playbook -i ansible/inventory.ini ansible/backup.yml</code> has run, and at least one dump has completed and verified at the remote destination (<code>opsctl backup</code> triggers one on demand).</span></label></li>
-            <li><label><input type="checkbox" data-id="prod-smoke-test" /><span class="check-text"><strong>Smoke test passed</strong> &mdash; Done: on the live URL you can sign in, reach the dashboard, and &mdash; if Stripe is on &mdash; complete a Stripe test-mode checkout.</span></label></li>
-          </ul>
-        </div>
-      </section>
-
-      <aside class="prerelease">
-        <h2>Pre-release</h2>
-        <p>
-          The template generates and builds today, and it's being hardened ahead of its first
-          tagged release — so this page stays out of search until that release ships. You're
-          seeing it because you already found the repo, and early adopters are exactly who it's
-          for right now. Track the work in the
-          <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues">open issues</a>.
-        </p>
-      </aside>
-    </main>
-
-    <footer>
-      <p>
-        <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">CrimsonCowLabs/cookiecutter-ai-saas</a>
-        · MIT licensed
-      </p>
-    </footer>
-
     <!-- The one allowance issue #35 made: inline only, first-party, no src
-         anywhere (scripts/check_site.py enforces that). Everything the
-         checklist means is already in the HTML above — this only adds two
-         conveniences on top of it, and the page is still complete and usable
-         with it turned off. -->
+         anywhere (scripts/check_site.py enforces that). It sits in <head>
+         rather than at the end of <body> so a remembered theme is applied
+         before the first paint instead of flashing the other one; the rest
+         waits for the document. Everything the page means is already in the
+         HTML below — this only adds conveniences on top of it (a theme
+         override, checklist persistence and progress, copy buttons), and the
+         page is still complete and usable with it turned off: the theme then
+         follows prefers-color-scheme from CSS alone. -->
     <script>
       (function () {
         "use strict";
 
-        var LIST = document.getElementById("checklist");
-        if (!LIST) return;
+        var ROOT = document.documentElement;
+        var THEME_KEY = "cookiecutter-ai-saas-theme";
+        var CHECKLIST_KEY = "cookiecutter-ai-saas-checklist";
+        var THEMES = [
+          { id: "ember", name: "Ember" },
+          { id: "paper", name: "Paper" }
+        ];
+        var prefersLight = window.matchMedia
+          ? window.matchMedia("(prefers-color-scheme: light)")
+          : null;
 
-        var STORAGE_KEY = "cookiecutter-ai-saas-checklist";
-
-        function loadState() {
+        function load(key) {
           try {
-            return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+            return localStorage.getItem(key);
+          } catch (err) {
+            return null;
+          }
+        }
+
+        function save(key, value) {
+          try {
+            localStorage.setItem(key, value);
+          } catch (err) {
+            // Private browsing, or a full quota: everything still works, it
+            // just won't remember itself.
+          }
+        }
+
+        function remove(key) {
+          try {
+            localStorage.removeItem(key);
+          } catch (err) {
+            // As above: nothing to forget if nothing could be stored.
+          }
+        }
+
+        // ---- Theme ------------------------------------------------------
+
+        var saved = load(THEME_KEY);
+        if (saved === "ember" || saved === "paper") ROOT.setAttribute("data-theme", saved);
+
+        function systemTheme() {
+          return prefersLight && prefersLight.matches ? "paper" : "ember";
+        }
+
+        function activeTheme() {
+          return ROOT.getAttribute("data-theme") || systemTheme();
+        }
+
+        function addThemeToggle() {
+          var group = document.getElementById("theme-toggle");
+          if (!group) return;
+          var buttons = THEMES.map(function (theme) {
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = "theme-option";
+            button.dataset.theme = theme.id;
+            var swatch = document.createElement("span");
+            swatch.className = "swatch swatch-" + theme.id;
+            swatch.setAttribute("aria-hidden", "true");
+            button.appendChild(swatch);
+            button.appendChild(document.createTextNode(theme.name));
+            button.addEventListener("click", function () {
+              // Picking the theme the system already asks for is the way
+              // back to following the system: it clears the override
+              // rather than pinning it, so a later OS switch still applies.
+              if (theme.id === systemTheme()) {
+                ROOT.removeAttribute("data-theme");
+                remove(THEME_KEY);
+              } else {
+                ROOT.setAttribute("data-theme", theme.id);
+                save(THEME_KEY, theme.id);
+              }
+              sync();
+            });
+            group.appendChild(button);
+            return button;
+          });
+          function sync() {
+            var current = activeTheme();
+            buttons.forEach(function (button) {
+              button.setAttribute("aria-pressed", String(button.dataset.theme === current));
+            });
+          }
+          // Without an override the page follows the system setting,
+          // including when it changes while the page is open.
+          if (prefersLight && prefersLight.addEventListener) {
+            prefersLight.addEventListener("change", sync);
+          }
+          sync();
+        }
+
+        // ---- Checklist --------------------------------------------------
+
+        function loadChecks() {
+          try {
+            return JSON.parse(load(CHECKLIST_KEY)) || {};
           } catch (err) {
             return {};
           }
         }
 
-        function saveState(state) {
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-          } catch (err) {
-            // Private browsing, or a full quota: the list still works, it
-            // just won't remember itself.
-          }
-        }
+        function setUpChecklist(list) {
+          var state = loadChecks();
+          var boxes = list.querySelectorAll('input[type="checkbox"]');
+          var panel = document.getElementById("checklist-progress");
+          var done = document.getElementById("progress-done");
+          var total = document.getElementById("progress-total");
+          var bar = document.getElementById("progress-bar");
+          var fill = bar ? bar.querySelector(".progress-fill") : null;
 
-        function restoreAndWatch() {
-          var state = loadState();
-          var boxes = LIST.querySelectorAll('input[type="checkbox"]');
+          function updateProgress() {
+            var checked = 0;
+            list.querySelectorAll(".phase").forEach(function (phase) {
+              var phaseBoxes = phase.querySelectorAll('input[type="checkbox"]');
+              var phaseChecked = phase.querySelectorAll('input[type="checkbox"]:checked').length;
+              checked += phaseChecked;
+              var count = phase.querySelector(".phase-count");
+              if (count) count.textContent = phaseChecked + " / " + phaseBoxes.length;
+            });
+            if (done) done.textContent = String(checked);
+            if (total) total.textContent = String(boxes.length);
+            if (bar) bar.setAttribute("aria-valuenow", String(checked));
+            if (bar) bar.setAttribute("aria-valuemax", String(boxes.length));
+            if (fill) fill.style.width = (boxes.length ? (checked / boxes.length) * 100 : 0) + "%";
+          }
+
           boxes.forEach(function (box) {
             if (state[box.dataset.id]) box.checked = true;
             box.addEventListener("change", function () {
               state[box.dataset.id] = box.checked;
-              saveState(state);
+              save(CHECKLIST_KEY, JSON.stringify(state));
+              updateProgress();
             });
           });
+
+          updateProgress();
+          if (panel) panel.hidden = false;
         }
 
-        function toMarkdown() {
+        function toMarkdown(list) {
           var lines = ["# cookiecutter-ai-saas: zero to deployed", ""];
-          LIST.querySelectorAll(".phase").forEach(function (phase) {
+          list.querySelectorAll(".phase").forEach(function (phase) {
             var heading = phase.querySelector("h3");
             if (heading) lines.push("## " + heading.textContent.trim(), "");
             phase.querySelectorAll("li").forEach(function (item) {
@@ -323,26 +238,27 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></pre>
           return lines.join("\n").trim() + "\n";
         }
 
-        function showFallback(toolbar, markdown) {
-          var area = toolbar.querySelector("textarea");
+        function showFallback(container, markdown) {
+          var area = container.querySelector("textarea");
           if (!area) {
             area = document.createElement("textarea");
-            area.className = "copy-fallback";
+            area.className = "textarea copy-fallback";
             area.readOnly = true;
-            toolbar.appendChild(area);
+            area.setAttribute("aria-label", "Checklist as Markdown");
+            container.appendChild(area);
           }
           area.value = markdown;
           area.focus();
           area.select();
         }
 
-        function addCopyButton() {
+        function addCopyButton(list) {
           var toolbar = document.getElementById("checklist-toolbar");
           if (!toolbar) return;
 
           var button = document.createElement("button");
           button.type = "button";
-          button.className = "button copy-markdown";
+          button.className = "btn btn-primary btn-sm copy-markdown";
           button.textContent = "Copy as Markdown";
 
           var status = document.createElement("span");
@@ -351,10 +267,11 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></pre>
           status.setAttribute("aria-live", "polite");
 
           button.addEventListener("click", function () {
-            var markdown = toMarkdown();
+            var markdown = toMarkdown(list);
+            var container = toolbar.parentNode;
             if (!navigator.clipboard || !navigator.clipboard.writeText) {
               status.textContent = "Clipboard not available — copy it from the box below.";
-              showFallback(toolbar, markdown);
+              showFallback(container, markdown);
               return;
             }
             navigator.clipboard.writeText(markdown).then(
@@ -363,7 +280,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></pre>
               },
               function () {
                 status.textContent = "Could not copy — copy it from the box below.";
-                showFallback(toolbar, markdown);
+                showFallback(container, markdown);
               }
             );
           });
@@ -372,9 +289,344 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></pre>
           toolbar.appendChild(status);
         }
 
-        restoreAndWatch();
-        addCopyButton();
+        // ---- Install command --------------------------------------------
+
+        function addInstallCopy() {
+          var head = document.getElementById("install-head");
+          var pre = document.getElementById("install-command");
+          if (!head || !pre || !navigator.clipboard || !navigator.clipboard.writeText) return;
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "btn btn-xs btn-ghost";
+          // The visible label is terse; the hidden hint says what it copies,
+          // and the live region announces the outcome the label change shows.
+          var label = document.createElement("span");
+          label.textContent = "copy";
+          var hint = document.createElement("span");
+          hint.className = "sr-only";
+          hint.textContent = " the install commands";
+          button.appendChild(label);
+          button.appendChild(hint);
+          var status = document.createElement("span");
+          status.className = "sr-only";
+          status.setAttribute("role", "status");
+          status.setAttribute("aria-live", "polite");
+          var timer;
+          function report(text, message) {
+            label.textContent = text;
+            status.textContent = message;
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+              label.textContent = "copy";
+              status.textContent = "";
+            }, 1600);
+          }
+          button.addEventListener("click", function () {
+            // textContent, not the rendered text: the "$ " prompts are CSS
+            // generated content and are not part of it. No trailing newline,
+            // so a paste into a terminal waits for Enter instead of running.
+            navigator.clipboard.writeText(pre.textContent.trim()).then(
+              function () {
+                report("copied", "Install commands copied.");
+              },
+              function () {
+                report("copy failed", "Could not copy — select the commands below instead.");
+              }
+            );
+          });
+          head.appendChild(button);
+          head.appendChild(status);
+        }
+
+        document.addEventListener("DOMContentLoaded", function () {
+          addThemeToggle();
+          addInstallCopy();
+          var list = document.getElementById("checklist");
+          if (!list) return;
+          setUpChecklist(list);
+          addCopyButton(list);
+        });
       })();
     </script>
+  </head>
+
+  <body>
+    <div class="ambient" aria-hidden="true"></div>
+
+    <header class="navbar">
+      <div class="container navbar-inner">
+        <a class="brand" href="#top">
+          <svg class="logo" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 2.5l8.23 4.75v9.5L12 21.5l-8.23-4.75v-9.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            <path d="M12 7.25l1.15 3.6 3.6 1.15-3.6 1.15L12 16.75l-1.15-3.6-3.6-1.15 3.6-1.15z" fill="currentColor" />
+            <circle cx="8.4" cy="8.4" r="0.85" fill="currentColor" />
+            <circle cx="15.6" cy="8.4" r="0.85" fill="currentColor" />
+            <circle cx="8.4" cy="15.6" r="0.85" fill="currentColor" />
+            <circle cx="15.6" cy="15.6" r="0.85" fill="currentColor" />
+          </svg>
+          <span class="brand-name">cookiecutter-ai-saas</span>
+        </a>
+        <nav class="nav-links" aria-label="Sections">
+          <a href="#stack">Stack</a>
+          <a href="#choices">Choices</a>
+          <a href="#quickstart">Quickstart</a>
+          <a href="#checklist">Checklist</a>
+        </nav>
+        <div class="navbar-actions">
+          <div class="theme-toggle" id="theme-toggle" role="group" aria-label="Colour theme"></div>
+          <a class="btn btn-sm" href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">GitHub</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="top">
+      <header class="container hero">
+        <div class="hero-copy">
+          <p class="eyebrow">// CrimsonCow Labs · open source template</p>
+          <h1 class="hero-title"><span>cookiecutter-</span><span class="text-gradient">ai-saas</span></h1>
+          <p class="tagline">
+            For builders and vibecoders who can already ship a feature, and want the auth, billing
+            and deploy pipeline around it already built.
+          </p>
+          <p class="hero-actions">
+            <a class="btn btn-primary" href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">Read the code on GitHub</a>
+            <a class="btn btn-ghost" href="#checklist">Zero to deployed checklist</a>
+          </p>
+        </div>
+
+        <div class="hero-side">
+          <p class="status">
+            <span class="badge badge-warning badge-sm">pre-release</span>
+            <span>It generates and runs today — read on before you run anything, and know what you're trying.</span>
+          </p>
+          <div class="install">
+            <div class="install-head" id="install-head">
+              <span>Generate your project:</span>
+            </div>
+            <pre id="install-command"><code><span class="cmd">pip install cookiecutter</span>
+<span class="cmd">cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</span></code></pre>
+          </div>
+        </div>
+      </header>
+
+      <section class="section section-tint">
+        <div class="container section-body">
+          <div class="section-header">
+            <p class="eyebrow">// the problem</p>
+            <h2 class="section-title">What stalls a side project</h2>
+            <p class="section-lede">
+              You can already build the feature — that part was never the problem. What stalls a
+              side project is everything standing between it and a stranger using it, and it's the
+              same six things every time:
+            </p>
+          </div>
+          <ul class="card-grid">
+            <li class="surface-card is-interactive"><span class="card-index" aria-hidden="true">01</span><h3>Signing in.</h3><p>Someone needs an account and a way back into it, without you hand-rolling sessions.</p></li>
+            <li class="surface-card is-interactive"><span class="card-index" aria-hidden="true">02</span><h3>Getting paid.</h3><p>A checkout, and a portal that doesn't break when someone upgrades or cancels.</p></li>
+            <li class="surface-card is-interactive"><span class="card-index" aria-hidden="true">03</span><h3>Background jobs.</h3><p>Work too slow for a web request has to run elsewhere and report back.</p></li>
+            <li class="surface-card is-interactive"><span class="card-index" aria-hidden="true">04</span><h3>A worker that can call an LLM safely.</h3><p>With a provider you chose, a budget on how much it can do, and somewhere to look when it does something odd.</p></li>
+            <li class="surface-card is-interactive"><span class="card-index" aria-hidden="true">05</span><h3>TLS.</h3><p>A certificate that renews itself instead of a reminder you'll ignore.</p></li>
+            <li class="surface-card is-interactive"><span class="card-index" aria-hidden="true">06</span><h3>Shipping it anywhere but your laptop.</h3><p>One command, not nineteen remembered in the right order.</p></li>
+          </ul>
+          <p class="closing-line">This template is those six things, already done, around the feature you're about to build.</p>
+        </div>
+      </section>
+
+      <section class="section" id="stack">
+        <div class="container section-body split">
+          <div class="section-header">
+            <p class="eyebrow">// the stack</p>
+            <h2 class="section-title">What's actually running</h2>
+            <p class="section-lede">Concretely, not abstractly — this is the system a generated project brings up:</p>
+            <p class="prose-note">
+              The full request path, the generated file layout, and the architecture decisions behind
+              it are in the
+              <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas#readme">README</a>.
+            </p>
+          </div>
+          <dl class="stack-list">
+            <div><dt>app</dt><dd>A <strong>Next.js app</strong> your users see: sign-in, dashboard, billing, settings.</dd></div>
+            <div><dt>worker</dt><dd>A <strong>Python worker</strong> that does the AI part — pulls a job off the queue, calls the model you chose, reports progress as it goes.</dd></div>
+            <div><dt>database</dt><dd><strong>Postgres</strong> for everything that still has to be there tomorrow.</dd></div>
+            <div><dt>queue</dt><dd><strong>Redis and BullMQ</strong> carrying jobs between the app and the worker.</dd></div>
+            <div><dt>deploy</dt><dd>A <strong>Docker Compose stack behind Caddy</strong> that one Ansible playbook can put on a fresh VPS, TLS included.</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="section section-tint" id="choices">
+        <div class="container section-body">
+          <div class="section-header">
+            <p class="eyebrow">// your choices</p>
+            <h2 class="section-title">What you decide, and what it changes</h2>
+            <p class="section-lede">Cookiecutter asks a short set of questions once, at generation time. These change what your app does:</p>
+          </div>
+          <dl class="choice-list">
+            <div><dt>LLM provider</dt><dd>Ollama, OpenAI, Anthropic, or OpenRouter — whichever the worker calls, and the only credentials you have to go get.</dd></div>
+            <div><dt>Stripe</dt><dd>On, with real checkout and portal wiring. Off, and it's not in the generated project at all.</dd></div>
+            <div><dt>Auth providers</dt><dd>Google, Microsoft, or both — which sign-in buttons a visitor sees.</dd></div>
+            <div><dt>Magic link</dt><dd>Passwordless email sign-in via Resend, independent of whichever OAuth providers you picked.</dd></div>
+            <div><dt>pgvector</dt><dd>On, and Postgres can do vector similarity search — embeddings, semantic search, retrieval. Off, and it's plain Postgres.</dd></div>
+            <div><dt>Marketing extras</dt><dd>A small JSON-backed blog and a contact form, for a public site around the app.</dd></div>
+          </dl>
+          <p class="prose-note">
+            The rest is naming and defaults: project name, slug, and description; author name and
+            email; domain; brand color and theme; Python and Node versions; and the local Postgres
+            and Redis ports. Straight answers, not decisions — with one exception. Your author email
+            doubles as the contact address on your TLS certificate, which is the kind of detail that
+            only matters once, covered in the
+            <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/docs/deployment.md#https-and-tls">deployment guide</a>.
+          </p>
+        </div>
+      </section>
+
+      <section class="section quickstart" id="quickstart">
+        <div class="container section-body split">
+          <div class="section-header">
+            <p class="eyebrow">// quickstart</p>
+            <h2 class="section-title">From install to a running app</h2>
+            <p class="section-lede">
+              Timed on a clean checkout with Docker's images already pulled: well under a minute from
+              the first command to the app answering in a browser. The first time on a given machine,
+              most of that minute is Docker fetching Postgres, Redis, and the base images — budget a
+              few minutes for that once.
+            </p>
+          </div>
+          <div>
+            <ol class="steps">
+              <li><span>Install cookiecutter, once, ever: <code class="cmd-block">pip install cookiecutter</code></span></li>
+              <li><span>Generate the project: <code class="cmd-block">cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></span></li>
+              <li><span><code>cd</code> into it, copy <code>.env.example</code> to both <code>.env.local</code> and <code>.env.docker.local</code>, set one secret, and point the docker copy's database and Redis URLs at the container hostnames</span></li>
+              <li><span>Install dependencies: <code class="cmd-block">npm ci</code></span></li>
+              <li><span>Build and start everything: <code class="cmd-block">docker compose up -d --build</code></span></li>
+              <li><span>Create and run the database migrations: <code class="cmd-block">npm run db:generate &amp;&amp; npm run db:migrate</code></span></li>
+              <li class="is-done"><span>Open <code>localhost:3000</code> — it's running</span></li>
+            </ol>
+            <p class="aside-note">
+              Signing in for real needs OAuth credentials from Google or Microsoft's own dashboards,
+              which is an errand, not a command — that part, and everything past this first run, is in
+              the README's
+              <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas#post-generation-setup">post-generation setup</a>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-tint checklist" id="checklist">
+        <div class="container section-body">
+          <div class="checklist-head">
+            <div class="section-header">
+              <p class="eyebrow">// checklist</p>
+              <h2 class="section-title">Zero to deployed</h2>
+              <p class="section-lede">
+                Work it top to bottom and there's no prerequisite left to discover the hard way.
+                Checking an item off is remembered if you close the tab and come back, and the whole
+                list copies as Markdown in one action &mdash; paste it into an issue tracker, or hand it
+                to an agent.
+              </p>
+            </div>
+            <div class="progress-panel" id="checklist-progress" hidden>
+              <p class="progress-count">
+                <strong><span id="progress-done">0</span><span class="of"> / <span id="progress-total">0</span></span></strong>
+                <span>done</span>
+              </p>
+              <div class="progress" id="progress-bar" role="progressbar" aria-label="Checklist progress" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+                <div class="progress-fill"></div>
+              </div>
+              <div class="checklist-toolbar" id="checklist-toolbar"></div>
+            </div>
+          </div>
+
+          <div class="phases">
+            <div class="phase">
+              <div class="phase-head">
+                <h3>1. Before you touch code</h3>
+                <span class="phase-count"></span>
+              </div>
+              <p>
+                Accounts and credentials to have ready before you generate anything. Skip whichever
+                don't match the choices you're about to make.
+              </p>
+              <ul>
+                <li><label><input type="checkbox" class="checkbox" data-id="pre-vps" /><span class="check-text"><strong>A VPS</strong> <span class="tag">production only</span> &mdash; Done: you have SSH root access to a fresh Debian-family host (Ubuntu LTS) and know its IP address.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="pre-domain" /><span class="check-text"><strong>A domain name</strong> <span class="tag">production only</span> &mdash; Done: you own a domain and can add A/AAAA records for it.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="pre-google" /><span class="check-text"><strong>Google OAuth credentials</strong> <span class="tag">Google sign-in</span> &mdash; Done: a client ID and secret from <a href="https://console.cloud.google.com">Google Cloud Console</a> &rarr; APIs &amp; Services &rarr; Credentials.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="pre-microsoft" /><span class="check-text"><strong>Microsoft Entra ID credentials</strong> <span class="tag">Microsoft sign-in</span> &mdash; Done: a client ID, secret, and tenant ID (blank is fine, for multi-tenant) from the <a href="https://portal.azure.com">Azure Portal</a> &rarr; App registrations.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="pre-resend" /><span class="check-text"><strong>A Resend API key</strong> <span class="tag">magic link</span> &mdash; Done: an API key from <a href="https://resend.com">resend.com</a> &rarr; API Keys.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="pre-stripe" /><span class="check-text"><strong>A Stripe account</strong> <span class="tag">Stripe</span> &mdash; Done: a publishable key and secret key from the Stripe Dashboard, and your plans already exist there as products and prices.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="pre-llm" /><span class="check-text"><strong>An LLM provider credential</strong> &mdash; Done: whichever provider you'll choose at generation is ready &mdash; an API key for OpenAI, Anthropic or OpenRouter, or Ollama installed locally with a model already pulled.</span></label></li>
+              </ul>
+            </div>
+
+            <div class="phase">
+              <div class="phase-head">
+                <h3>2. Local setup</h3>
+                <span class="phase-count"></span>
+              </div>
+              <p>From a generated project to the full stack answering on your own machine.</p>
+              <ul>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-prereqs" /><span class="check-text"><strong>Prerequisites installed</strong> &mdash; Done: <code>node -v</code>, <code>python3 --version</code> and <code>docker compose version</code> all run without error, matching the Node and Python versions you chose at generation.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-generate" /><span class="check-text"><strong>Project generated</strong> &mdash; Done: <code>cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code> finished, and you're inside the generated project directory.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-env-files" /><span class="check-text"><strong>Both env files created</strong> &mdash; Done: <code>cp .env.example .env.local</code> for the host (<code>npm run dev</code>, <code>npm run db:migrate</code> &mdash; these reach Postgres and Redis on <code>localhost</code>) and <code>cp .env.example .env.docker.local</code> for the containers (<code>docker compose</code> &mdash; these reach them by service name), with <code>.env.docker.local</code>'s <code>DATABASE_URL</code> pointed at <code>@postgres:5432</code> and <code>REDIS_URL</code> at <code>redis://redis:6379</code> instead of <code>localhost</code>.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-secret" /><span class="check-text"><strong><code>NEXTAUTH_SECRET</code> set</strong> &mdash; Done: the output of <code>openssl rand -hex 32</code> is pasted into both env files.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-auth-creds" /><span class="check-text"><strong>Auth credentials filled in</strong> <span class="tag">Google/Microsoft sign-in</span> &mdash; Done: <code>GOOGLE_ID</code>/<code>GOOGLE_SECRET</code> and/or the <code>MICROSOFT_ENTRA_ID_*</code> variables are set in both env files for whichever provider(s) you chose.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-magiclink-key" /><span class="check-text"><strong>Magic-link key filled in</strong> <span class="tag">magic link</span> &mdash; Done: <code>RESEND_API_KEY</code> is set in both env files.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-stripe-keys" /><span class="check-text"><strong>Stripe keys filled in</strong> <span class="tag">Stripe</span> &mdash; Done: <code>STRIPE_PUBLIC_KEY</code> and <code>STRIPE_SECRET_KEY</code> are set in both env files. (<code>STRIPE_WEBHOOK_SECRET</code> comes later, once there's a webhook endpoint to get one from.)</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-llm-key" /><span class="check-text"><strong>LLM provider key filled in</strong> &mdash; Done: the variables for whichever provider you chose (<code>OLLAMA_*</code>, <code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, or <code>OPENROUTER_*</code>) are set in both env files.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-deps" /><span class="check-text"><strong>Dependencies installed</strong> &mdash; Done: <code>npm ci</code> finished without error.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-infra" /><span class="check-text"><strong>Infrastructure running</strong> &mdash; Done: <code>docker compose up -d</code> is up, and <code>docker compose ps</code> shows <code>postgres</code> and <code>redis</code> healthy.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-pgvector" /><span class="check-text"><strong>Vector search confirmed</strong> <span class="tag">pgvector</span> &mdash; Done: <code>docker compose config</code> shows the <code>postgres</code> service running <code>pgvector/pgvector:pg18</code>, not plain <code>postgres</code>.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-migration-generate" /><span class="check-text"><strong>First migration generated</strong> &mdash; Done: <code>npm run db:generate</code> created a migration file. The template ships none, so this runs once before there's anything to apply.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-migration-run" /><span class="check-text"><strong>Migration applied</strong> &mdash; Done: <code>npm run db:migrate</code> ran it with no errors.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-dev-server" /><span class="check-text"><strong>Dev server running</strong> &mdash; Done: <code>npm run dev</code> is up, and <code>http://localhost:3000</code> loads in a browser.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-worker" /><span class="check-text"><strong>Worker running</strong> &mdash; Done: in <code>workers/app</code>, after <code>pip install "poetry&gt;=2.5,&lt;3" &amp;&amp; poetry install</code>, <code>python worker.py</code> is running and logs that it's connected to Redis.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-db-writer" /><span class="check-text"><strong>DB writer running</strong> &mdash; Done: with <code>.env.local</code> exported into the shell (<code>set -a &amp;&amp; source .env.local &amp;&amp; set +a</code>), <code>npm run worker:db-writer</code> is running without error.</span></label></li>
+              </ul>
+            </div>
+
+            <div class="phase">
+              <div class="phase-head">
+                <h3>3. Going live</h3>
+                <span class="phase-count"></span>
+              </div>
+              <p>Taking a working local stack to a real URL a stranger can reach.</p>
+              <ul>
+                <li><label><input type="checkbox" class="checkbox" data-id="prod-dns" /><span class="check-text"><strong>DNS pointed at the host</strong> &mdash; Done: the domain's A (and AAAA, if used) record resolves to the VPS's IP &mdash; confirm with <code>dig +short &lt;your domain&gt;</code>.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="prod-provision" /><span class="check-text"><strong>Host provisioned</strong> &mdash; Done: <code>ansible-playbook -i ansible/inventory.ini ansible/provision.yml</code> has run, and running it again reports zero changes.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="prod-vault" /><span class="check-text"><strong>Secrets vaulted</strong> &mdash; Done: <code>ansible/vault.yml</code> holds every production secret &mdash; the NextAuth secret, the database password, OAuth, Stripe, Resend, your LLM provider, and backups &mdash; and has been encrypted with <code>ansible-vault encrypt</code>.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="prod-deploy" /><span class="check-text"><strong>Deployed</strong> &mdash; Done: <code>ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass</code> finished &mdash; the DNS pre-flight passed, and migrations ran against the new release.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="prod-tls" /><span class="check-text"><strong>TLS live</strong> &mdash; Done: the site answers on <code>https://&lt;your domain&gt;</code> with a valid certificate. Caddy gets this on its own, once DNS resolves.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="prod-callbacks" /><span class="check-text"><strong>Production callback URLs registered</strong> <span class="tag">Google/Microsoft sign-in</span> &mdash; Done: each provider's console has <code>https://&lt;your domain&gt;/api/auth/callback/&lt;provider&gt;</code> registered, matching <code>NEXTAUTH_URL</code> in <code>.env-production</code>.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="prod-stripe-webhook" /><span class="check-text"><strong>Stripe webhook registered</strong> <span class="tag">Stripe</span> &mdash; Done: a webhook endpoint pointing at <code>https://&lt;your domain&gt;/api/webhook/stripe</code> exists in the Stripe Dashboard, and its signing secret is <code>vault_stripe_webhook_secret</code> in the vault.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="prod-backups" /><span class="check-text"><strong>Backups scheduled</strong> &mdash; Done: <code>ansible-playbook -i ansible/inventory.ini ansible/backup.yml</code> has run, and at least one dump has completed and verified at the remote destination (<code>opsctl backup</code> triggers one on demand).</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="prod-smoke-test" /><span class="check-text"><strong>Smoke test passed</strong> &mdash; Done: on the live URL you can sign in, reach the dashboard, and &mdash; if Stripe is on &mdash; complete a Stripe test-mode checkout.</span></label></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container section-body">
+          <aside class="prerelease">
+            <h2 class="badge badge-primary">pre-release</h2>
+            <p>
+              The template generates and builds today, and it's being hardened ahead of its first
+              tagged release — so this page stays out of search until that release ships. You're
+              seeing it because you already found the repo, and early adopters are exactly who it's
+              for right now. Track the work in the
+              <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues">open issues</a>.
+            </p>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="container footer-inner">
+        <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">CrimsonCowLabs/cookiecutter-ai-saas</a>
+        <span>MIT licensed</span>
+      </div>
+    </footer>
   </body>
 </html>
