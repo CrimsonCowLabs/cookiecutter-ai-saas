@@ -7,10 +7,11 @@
 # This first checks that the tools the rest of setup depends on are present
 # and working — Node.js and Docker — before anything destructive (writing
 # env files, installing dependencies, starting containers) happens. It then
-# writes the env files, generates a NEXTAUTH_SECRET, installs dependencies,
-# brings up the Docker Compose services, and generates and applies database
-# migrations. A later ticket (#65) layers conditional-credential prompting on
-# top of this.
+# writes the env files, generates a NEXTAUTH_SECRET, prompts for credentials
+# for whichever optional features (Stripe, OAuth providers, Resend, the
+# configured LLM provider) actually survived generation, installs
+# dependencies, brings up the Docker Compose services, and generates and
+# applies database migrations.
 set -euo pipefail
 
 REQUIRED_NODE_MAJOR="{{ cookiecutter.node_version }}"
@@ -229,6 +230,185 @@ setup_nextauth_secret() {
   fi
 }
 
+# ─── Feature credentials ───────────────────────────────────────────────────
+# post_gen_project.py already stripped the cc:begin/cc:end marker regions
+# (and, for Stripe/magic link, deleted whole files) for anything answered
+# "no" at generation time — and cookiecutter.json's answers don't ship with
+# the generated project at all. So which optional features are actually in
+# play has to be read back out of what survived generation: which KEY= lines
+# are present in .env.local (copied from .env.example by setup_env_files
+# above) and, for Stripe, whether lib/stripe.ts survived handle_stripe().
+
+# Prints "KEY=value" line VALUE for KEY in FILE, or "" if missing/blank.
+# `|| true` keeps `grep -E` finding no match (exit 1) from tripping `set -e`
+# under `pipefail`, since grep is the leftmost — not last — command here.
+env_value() {
+  local key="$1" file="$2"
+  [[ -f "$file" ]] || { printf ''; return; }
+  grep -E "^${key}=" "$file" 2>/dev/null | head -n1 | cut -d'=' -f2- || true
+}
+
+# Escapes a value for safe use as a `sed s#...#VALUE#` replacement (backslash,
+# ampersand, and the `#` delimiter itself all need escaping).
+sed_escape_replacement() {
+  printf '%s' "$1" | sed -e 's/[\&#]/\\&/g'
+}
+
+# Writes VALUE into KEY='s line in .env.local and .env.docker.local, but only
+# where that line is still blank — same idempotence guard as
+# setup_nextauth_secret, so a value a user already filled in (by hand, or on
+# an earlier run of this script) is never clobbered. Stripe/OAuth/Resend/LLM
+# secrets are plain values, not addressing details, so unlike
+# DATABASE_URL/REDIS_URL they're identical in both files.
+set_env_value() {
+  local key="$1" value="$2" escaped f
+  escaped="$(sed_escape_replacement "$value")"
+  for f in .env.local .env.docker.local; do
+    [[ -f "$f" ]] || continue
+    if grep -qE "^${key}=[[:space:]]*$" "$f"; then
+      sed -i.bak "s#^${key}=.*#${key}=${escaped}#" "$f" ||
+        die "Failed to write ${key} to ${f}."
+      rm -f "${f}.bak"
+    fi
+  done
+}
+
+# Prompts for KEY (with PROMPT_TEXT) unless it's already non-blank in
+# .env.local. Pressing enter with no input leaves it blank and moves on —
+# these are setup conveniences, not hard requirements, so nothing here dies.
+prompt_for_credential() {
+  local key="$1" prompt_text="$2" value=""
+  if [[ -n "$(env_value "$key" .env.local)" ]]; then
+    echo "${key} is already set — leaving it as is."
+    return
+  fi
+  read -rp "$prompt_text" value || true
+  if [[ -z "$value" ]]; then
+    echo "Skipping ${key} for now — fill it into .env.local and .env.docker.local whenever you're ready."
+    return
+  fi
+  set_env_value "$key" "$value"
+  success "${key} saved."
+}
+
+# Ollama needs no API key, but it does need to actually be running somewhere
+# this project can reach. OLLAMA_BASE_URL ships pointed at Ollama's
+# OpenAI-compatible endpoint (".../v1"), but its native API
+# (".../api/tags", no "/v1") is the more reliable liveness probe: a plain
+# unauthenticated GET that answers "is Ollama even up" without implying
+# anything about which models are pulled. Unreachable is a warning, not a
+# die() — the user may well start Ollama after setup finishes.
+check_ollama_reachable() {
+  local base_url native_url model
+  base_url="$(env_value OLLAMA_BASE_URL .env.local)"
+  base_url="${base_url:-http://localhost:11434/v1}"
+  native_url="${base_url%/v1}/api/tags"
+  model="$(env_value OLLAMA_MODEL .env.local)"
+  model="${model:-llama3.2}"
+
+  info "Checking for a local Ollama instance at ${base_url}..."
+
+  if curl -sf --max-time 3 "$native_url" >/dev/null 2>&1; then
+    success "Ollama is reachable at ${base_url}."
+  else
+    cat <<EOF
+
+⚠ Could not reach Ollama at ${base_url}.
+
+This project is configured to use a local Ollama instance as its LLM
+provider — no API key is needed, but Ollama itself needs to be installed
+and running before the app can call it.
+
+  Install:      https://ollama.com/download
+  Start:        ollama serve   (or just open the Ollama app)
+  Pull a model: ollama pull ${model}
+
+This isn't a failure: install/start Ollama whenever you're ready and the
+app will be able to reach it — no need to re-run ./setup.sh just for this.
+EOF
+  fi
+}
+
+# For the LLM provider actually configured (exactly one survives in
+# .env.local per post_gen_project.py's llm-<name> markers), prompts for its
+# API key — except Ollama, which gets a reachability check instead.
+setup_llm_credentials() {
+  local provider
+  provider="$(env_value LLM_PROVIDER .env.local)"
+
+  case "$provider" in
+    ollama)
+      check_ollama_reachable
+      ;;
+    openai)
+      echo
+      echo "OpenAI is this project's configured LLM provider."
+      echo "Get an API key at: https://platform.openai.com/api-keys"
+      prompt_for_credential OPENAI_API_KEY "OpenAI API key: "
+      ;;
+    anthropic)
+      echo
+      echo "Anthropic is this project's configured LLM provider."
+      echo "Get an API key at: https://console.anthropic.com/settings/keys"
+      prompt_for_credential ANTHROPIC_API_KEY "Anthropic API key: "
+      ;;
+    openrouter)
+      echo
+      echo "OpenRouter is this project's configured LLM provider."
+      echo "Get an API key at: https://openrouter.ai/keys"
+      prompt_for_credential OPENROUTER_API_KEY "OpenRouter API key: "
+      ;;
+    *)
+      echo "Unrecognized LLM_PROVIDER '${provider}' in .env.local — skipping LLM credential setup."
+      ;;
+  esac
+}
+
+setup_feature_credentials() {
+  info "Checking for optional features that need credentials..."
+
+  # Stripe: unlike the other features, .env.example never marks its keys
+  # with cc:begin/cc:end (they're always there), so lib/stripe.ts surviving
+  # handle_stripe()'s removal is the actual signal that include_stripe=yes.
+  if [[ -f lib/stripe.ts ]]; then
+    echo
+    echo "Stripe is enabled for this project. You'll need:"
+    echo "  - STRIPE_SECRET_KEY    : API keys page      -> https://dashboard.stripe.com/apikeys"
+    echo "  - STRIPE_WEBHOOK_SECRET: a webhook endpoint's signing secret -> https://dashboard.stripe.com/webhooks"
+    prompt_for_credential STRIPE_SECRET_KEY "Stripe secret key (sk_...): "
+    prompt_for_credential STRIPE_WEBHOOK_SECRET "Stripe webhook signing secret (whsec_...): "
+  fi
+
+  if grep -qE '^GOOGLE_ID=' .env.local; then
+    echo
+    echo "Google OAuth is enabled for this project. Create credentials at:"
+    echo "  https://console.cloud.google.com/apis/credentials"
+    prompt_for_credential GOOGLE_ID "Google OAuth client ID: "
+    prompt_for_credential GOOGLE_SECRET "Google OAuth client secret: "
+  fi
+
+  if grep -qE '^MICROSOFT_ENTRA_ID_ID=' .env.local; then
+    echo
+    echo "Microsoft Entra ID (Azure AD) OAuth is enabled. Register an app at:"
+    echo "  https://portal.azure.com/ -> Microsoft Entra ID -> App registrations"
+    prompt_for_credential MICROSOFT_ENTRA_ID_ID "Microsoft Entra ID application (client) ID: "
+    prompt_for_credential MICROSOFT_ENTRA_ID_SECRET "Microsoft Entra ID client secret: "
+    prompt_for_credential MICROSOFT_ENTRA_ID_TENANT_ID "Microsoft Entra ID tenant ID: "
+  fi
+
+  # RESEND_API_KEY survives for magic-link sign-in OR the contact form
+  # (post_gen_project.py's "resend" marker is `magic_link or extras`), so it
+  # doesn't by itself say which — the prompt below covers both.
+  if grep -qE '^RESEND_API_KEY=' .env.local; then
+    echo
+    echo "Resend is enabled (used for magic-link sign-in and/or the contact form)."
+    echo "Get an API key at: https://resend.com/api-keys"
+    prompt_for_credential RESEND_API_KEY "Resend API key: "
+  fi
+
+  setup_llm_credentials
+}
+
 # ─── Dependencies ───────────────────────────────────────────────────────────
 install_dependencies() {
   info "Installing dependencies..."
@@ -360,6 +540,11 @@ main() {
 
   setup_env_files
   setup_nextauth_secret
+  # Prompting for feature credentials before npm ci/docker compose (rather
+  # than after) means any typing happens up front, not interleaved with the
+  # install/container-startup wait — #65 doesn't mandate the ordering, this
+  # is just pacing.
+  setup_feature_credentials
   install_dependencies
   start_containers
   run_migrations
