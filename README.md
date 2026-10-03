@@ -264,6 +264,23 @@ PostgreSQL is the only database. You can optionally enable:
 ## Post-Generation Setup
 
 ```bash
+cd <project-slug>
+./setup.sh
+```
+
+`./setup.sh` does the full job: checks Node.js and Docker are installed and
+running, writes both `.env.local` (host mode) and `.env.docker.local`
+(container mode) from `.env.example`, generates a `NEXTAUTH_SECRET`, prompts
+for credentials for whichever optional features (Stripe, OAuth, Resend, the
+configured LLM provider) survived generation, runs `npm ci`, brings up the
+Docker Compose stack and waits for it to report healthy, generates and
+applies database migrations, and finishes by printing how to start the dev
+server, the Python worker, and the DB writer.
+
+<details>
+<summary>Manual setup (to understand or customize what the script does)</summary>
+
+```bash
 # 1. Enter your project
 cd <project-slug>
 
@@ -299,6 +316,8 @@ python worker.py
 set -a && source .env.local && set +a
 npm run worker:db-writer
 ```
+
+</details>
 
 ---
 

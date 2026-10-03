@@ -25,6 +25,20 @@ skills to reach for and how each one maps to this template.
 
 ## Getting Started
 
+Run `./setup.sh` from the project root and it does the full job: it checks
+Node.js and Docker are installed and running, writes both `.env.local` (host
+mode) and `.env.docker.local` (container mode) from `.env.example`, generates
+a `NEXTAUTH_SECRET`, prompts for credentials for whichever optional features
+(Stripe, Google/Microsoft OAuth, Resend magic-link, your configured LLM
+provider) survived generation, runs `npm ci`, brings up the Docker Compose
+stack and waits for it to report healthy, generates and applies database
+migrations, and finishes by printing how to start the dev server, the Python
+worker, and the DB writer.
+
+```bash
+./setup.sh
+```
+
 ### Prerequisites
 
 - Node.js {{ cookiecutter.node_version }}+
@@ -33,7 +47,10 @@ skills to reach for and how each one maps to this template.
 - PostgreSQL 18
 - Redis 7
 
-### Setup
+### Manual setup
+
+Prefer to do it by hand, or want to understand or customize what `./setup.sh`
+automates? Here are the equivalent steps.
 
 1. **Install dependencies:**
 
@@ -43,10 +60,21 @@ npm ci
 
 2. **Configure environment:**
 
+Two env files cover the two ways this project runs: `.env.local` for host
+mode (`npm run dev`, services on `localhost`) and `.env.docker.local` for
+container mode (`docker compose up`, services reached by their Docker
+Compose service name instead of `localhost`). Both start from
+`.env.example`.
+
 ```bash
 cp .env.example .env.local
-# Edit .env.local with your credentials
+cp .env.example .env.docker.local
 ```
+
+Edit `.env.local` and/or `.env.docker.local` with your credentials, depending
+on which mode(s) you'll run. In `.env.docker.local`, point `DATABASE_URL` and
+`REDIS_URL` at the compose service names (`postgres`, `redis`) on their
+container-internal ports, rather than `localhost`.
 
 3. **Start services with Docker:**
 

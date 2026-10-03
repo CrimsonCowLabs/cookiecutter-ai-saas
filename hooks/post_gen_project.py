@@ -304,7 +304,7 @@ def apply_markers():
 
 def make_scripts_executable():
     """Make shell scripts executable."""
-    scripts = ["scripts/migrate.sh"]
+    scripts = ["scripts/migrate.sh", "setup.sh"]
     for script in scripts:
         if os.path.exists(script):
             os.chmod(script, 0o755)
@@ -329,14 +329,7 @@ def main():
     print(f"{'='*60}")
     print(f"\nNext steps:")
     print(f"  cd {PROJECT_SLUG}")
-    print(f"  cp .env.example .env.local          # host: services on localhost")
-    print(f"  cp .env.example .env.docker.local   # containers: @postgres:5432, redis://redis:6379")
-    print(f"  #   set NEXTAUTH_SECRET in both:  openssl rand -hex 32")
-    print(f"  npm ci")
-    print(f"  docker compose up -d")
-    print(f"  npm run db:generate                 # no migrations ship with the template")
-    print(f"  npm run db:migrate")
-    print(f"  npm run dev")
+    print(f"  ./setup.sh")
     print()
 
 
