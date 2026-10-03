@@ -6,13 +6,22 @@
 #
 # This first checks that the tools the rest of setup depends on are present
 # and working — Node.js and Docker — before anything destructive (writing
-# env files, installing dependencies, starting containers) happens. Later
-# tickets (#63, #64, #65) layer the env-file, `npm ci`, `docker compose`,
-# migration, and conditional-credentials steps on top of this; for now, a
-# clean prerequisite check is the whole script.
+# env files, installing dependencies, starting containers) happens. It then
+# writes the env files, generates a NEXTAUTH_SECRET, installs dependencies,
+# and brings up the Docker Compose services. Later tickets (#64, #65) layer
+# migrations and conditional-credential prompting on top of this.
 set -euo pipefail
 
 REQUIRED_NODE_MAJOR="{{ cookiecutter.node_version }}"
+POSTGRES_PORT="{{ cookiecutter.postgres_port }}"
+REDIS_PORT="{{ cookiecutter.redis_port }}"
+
+# How long to wait for Docker Compose services to report healthy before
+# giving up (seconds). Generous because the first run also has to build the
+# app/worker/db-writer images, which depends_on: condition: service_healthy
+# already waits out before these containers even start.
+HEALTH_TIMEOUT="${SETUP_HEALTH_TIMEOUT:-180}"
+HEALTH_POLL_INTERVAL=3
 
 info()    { printf '\n==> %s\n' "$*"; }
 success() { printf '✔ %s\n' "$*"; }
@@ -151,6 +160,147 @@ check_docker() {
   success "Docker is installed and the daemon is running."
 }
 
+# ─── Environment files ─────────────────────────────────────────────────────
+# Two env files cover the two ways this project runs:
+#   .env.local         host mode:      `npm run dev`, services on localhost
+#   .env.docker.local  container mode: `docker compose up`, services reached
+#                      by compose service name (postgres, redis)
+# Both start from .env.example. Neither is ever overwritten once it exists,
+# so re-running ./setup.sh never clobbers values a user has already filled in.
+setup_env_files() {
+  info "Setting up environment files..."
+
+  if [[ -f .env.local ]]; then
+    echo ".env.local already exists — leaving it as is."
+  else
+    cp .env.example .env.local
+    success "Created .env.local (host mode: services on localhost)."
+  fi
+
+  if [[ -f .env.docker.local ]]; then
+    echo ".env.docker.local already exists — leaving it as is."
+  else
+    cp .env.example .env.docker.local
+    # Container mode: the app/worker/db-writer containers reach Postgres and
+    # Redis by compose service name, not localhost, and always on the
+    # container's own internal port — regardless of what host port
+    # POSTGRES_PORT/REDIS_PORT map to.
+    sed -i.bak \
+      -e "s#localhost:${POSTGRES_PORT}#postgres:5432#" \
+      -e "s#localhost:${REDIS_PORT}#redis:6379#" \
+      .env.docker.local
+    rm -f .env.docker.local.bak
+    success "Created .env.docker.local (container mode: services addressed by compose service name)."
+  fi
+}
+
+# ─── NEXTAUTH_SECRET ────────────────────────────────────────────────────────
+generate_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    # Fallback if openssl isn't on PATH: 32 random bytes straight from the
+    # kernel's CSPRNG, hex-encoded the same way `openssl rand -hex 32` would.
+    od -An -tx1 -N32 /dev/urandom | tr -d ' \n'
+  fi
+}
+
+setup_nextauth_secret() {
+  info "Generating NEXTAUTH_SECRET..."
+
+  local secret="" filled_any=0 f
+  for f in .env.local .env.docker.local; do
+    [[ -f "$f" ]] || continue
+    if grep -qE '^NEXTAUTH_SECRET=[[:space:]]*$' "$f"; then
+      if [[ -z "$secret" ]]; then
+        secret="$(generate_secret)"
+      fi
+      sed -i.bak "s#^NEXTAUTH_SECRET=.*#NEXTAUTH_SECRET=${secret}#" "$f"
+      rm -f "${f}.bak"
+      filled_any=1
+    fi
+  done
+
+  if [[ "$filled_any" -eq 1 ]]; then
+    success "NEXTAUTH_SECRET generated and saved to .env.local and .env.docker.local."
+  else
+    echo "NEXTAUTH_SECRET is already set in both env files — leaving it as is."
+  fi
+}
+
+# ─── Dependencies ───────────────────────────────────────────────────────────
+install_dependencies() {
+  info "Installing dependencies..."
+  echo "Running npm ci to install exactly the versions pinned in package-lock.json."
+
+  npm ci || die "npm ci failed. Fix the error above and re-run ./setup.sh."
+
+  success "Dependencies installed."
+}
+
+# ─── Docker Compose ─────────────────────────────────────────────────────────
+# Polls each container docker compose started until every one of them
+# reports healthy (or, for a container with no healthcheck, that it's at
+# least running), rather than racing ahead while Postgres/Redis are still
+# starting up.
+wait_for_healthy() {
+  info "Waiting for services to become healthy (timeout: ${HEALTH_TIMEOUT}s)..."
+
+  local elapsed=0
+  local fmt='{% raw %}{{.Name}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}{% endraw %}'
+
+  while true; do
+    local ids
+    ids="$(docker compose ps -q)"
+
+    if [[ -z "$ids" ]]; then
+      die "docker compose up -d did not start any containers. Check 'docker compose ps' and 'docker compose logs'."
+    fi
+
+    local all_healthy=1
+    local pending=()
+    local id name status health
+
+    for id in $ids; do
+      IFS='|' read -r name status health < <(docker inspect --format "$fmt" "$id")
+      name="${name#/}"
+
+      if [[ "$health" == "n/a" ]]; then
+        if [[ "$status" != "running" ]]; then
+          all_healthy=0
+          pending+=("${name} (${status})")
+        fi
+      elif [[ "$health" != "healthy" ]]; then
+        all_healthy=0
+        pending+=("${name} (${health})")
+      fi
+    done
+
+    if [[ "$all_healthy" -eq 1 ]]; then
+      success "All services are healthy."
+      return 0
+    fi
+
+    if [[ "$elapsed" -ge "$HEALTH_TIMEOUT" ]]; then
+      die "Timed out after ${HEALTH_TIMEOUT}s waiting for: ${pending[*]}. Check 'docker compose ps' and 'docker compose logs' for details."
+    fi
+
+    sleep "$HEALTH_POLL_INTERVAL"
+    elapsed=$((elapsed + HEALTH_POLL_INTERVAL))
+  done
+}
+
+start_containers() {
+  info "Starting services with Docker Compose..."
+  echo "This builds (on first run) and starts Postgres, Redis, and the"
+  echo "app/worker/db-writer services defined in docker-compose.yml, in the"
+  echo "background."
+
+  docker compose up -d || die "docker compose up -d failed. Fix the error above and re-run ./setup.sh."
+
+  wait_for_healthy
+}
+
 main() {
   info "Setting up {{ cookiecutter.project_name }}"
   echo "This script checks that the tools this project needs are installed"
@@ -161,7 +311,14 @@ main() {
 
   echo
   success "All prerequisites look good!"
-  echo "{{ cookiecutter.project_name }} is ready for the next setup steps."
+
+  setup_env_files
+  setup_nextauth_secret
+  install_dependencies
+  start_containers
+
+  echo
+  success "{{ cookiecutter.project_name }} is set up!"
 }
 
 main "$@"
