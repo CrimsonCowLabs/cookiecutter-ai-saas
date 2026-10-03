@@ -8,8 +8,9 @@
 # and working — Node.js and Docker — before anything destructive (writing
 # env files, installing dependencies, starting containers) happens. It then
 # writes the env files, generates a NEXTAUTH_SECRET, installs dependencies,
-# and brings up the Docker Compose services. Later tickets (#64, #65) layer
-# migrations and conditional-credential prompting on top of this.
+# brings up the Docker Compose services, and generates and applies database
+# migrations. A later ticket (#65) layers conditional-credential prompting on
+# top of this.
 set -euo pipefail
 
 REQUIRED_NODE_MAJOR="{{ cookiecutter.node_version }}"
@@ -301,6 +302,51 @@ start_containers() {
   wait_for_healthy
 }
 
+# ─── Database migrations ───────────────────────────────────────────────────
+# The template ships with no committed migrations: they're generated from
+# lib/db/schema.ts fresh on every setup, then applied to the Postgres
+# container start_containers() just brought up. drizzle-kit migrate tracks
+# which migrations it has already applied in the database itself, so
+# re-running this after a successful run is a no-op rather than a
+# double-apply.
+run_migrations() {
+  info "Generating database migrations from lib/db/schema.ts..."
+
+  npm run db:generate || die "npm run db:generate failed. Check the error above — it usually means lib/db/schema.ts has an issue drizzle-kit couldn't resolve. Fix it and re-run ./setup.sh."
+
+  success "Migrations generated."
+
+  info "Applying database migrations to the Postgres container..."
+
+  npm run db:migrate || die "npm run db:migrate failed. Make sure the postgres container is healthy (docker compose ps) and DATABASE_URL in .env.local points at it, then re-run ./setup.sh."
+
+  success "Migrations applied."
+}
+
+# ─── Final summary ──────────────────────────────────────────────────────────
+# The script stops here on purpose: dev, the Python worker, and the DB writer
+# are all long-lived foreground processes, so starting any of them from this
+# script would just block the terminal instead of handing control back.
+print_ready_summary() {
+  echo
+  success "{{ cookiecutter.project_name }} is set up!"
+  cat <<'EOF'
+
+Start developing:
+
+  npm run dev
+  -> http://localhost:3000
+
+Start the Python worker (in another terminal):
+
+  cd workers/app && poetry install && python worker.py
+
+Start the DB writer (in another terminal):
+
+  npm run worker:db-writer
+EOF
+}
+
 main() {
   info "Setting up {{ cookiecutter.project_name }}"
   echo "This script checks that the tools this project needs are installed"
@@ -316,9 +362,9 @@ main() {
   setup_nextauth_secret
   install_dependencies
   start_containers
+  run_migrations
 
-  echo
-  success "{{ cookiecutter.project_name }} is set up!"
+  print_ready_summary
 }
 
 main "$@"
