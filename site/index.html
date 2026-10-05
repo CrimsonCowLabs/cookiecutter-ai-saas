@@ -57,6 +57,133 @@
       content="cookiecutter-ai-saas: auth, billing, and a background worker for your AI feature, generated in one command."
     />
 
+    <!-- Structured data for search engines and AI assistants: data, not code,
+         so it is the one <script> type besides the inline one below that
+         scripts/check_site.py admits (issue #37). Every claim here must be
+         true of the current template. The FAQPage entries repeat the visible
+         #faq section word for word; the checker enforces that, so change both
+         together. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://crimsoncowlabs.github.io/cookiecutter-ai-saas/#org",
+            "name": "CrimsonCow Labs",
+            "url": "https://crimsoncowlabs.com",
+            "sameAs": [
+              "https://github.com/CrimsonCowLabs"
+            ]
+          },
+          {
+            "@type": "SoftwareSourceCode",
+            "@id": "https://crimsoncowlabs.github.io/cookiecutter-ai-saas/#software",
+            "name": "cookiecutter-ai-saas",
+            "description": "An open-source cookiecutter template that generates a full-stack AI SaaS application: a Next.js app in TypeScript with NextAuth sign-in and optional Stripe billing, a Python worker running a LangGraph agent, Postgres, Redis and BullMQ for background jobs, and a Docker Compose stack behind Caddy that Ansible deploys to a VPS. Pre-release: not yet recommended for production use.",
+            "url": "https://crimsoncowlabs.github.io/cookiecutter-ai-saas/",
+            "codeRepository": "https://github.com/CrimsonCowLabs/cookiecutter-ai-saas",
+            "license": "https://spdx.org/licenses/MIT.html",
+            "programmingLanguage": [
+              "TypeScript",
+              "Python"
+            ],
+            "runtimePlatform": [
+              "Node.js",
+              "Python",
+              "Docker"
+            ],
+            "maintainer": {
+              "@id": "https://crimsoncowlabs.github.io/cookiecutter-ai-saas/#org"
+            },
+            "keywords": [
+              "cookiecutter",
+              "project template",
+              "AI SaaS",
+              "Next.js",
+              "TypeScript",
+              "Python",
+              "LangGraph",
+              "NextAuth",
+              "Stripe",
+              "PostgreSQL",
+              "pgvector",
+              "Redis",
+              "BullMQ",
+              "Docker Compose",
+              "Caddy",
+              "Ansible"
+            ],
+            "creativeWorkStatus": "pre-release",
+            "isAccessibleForFree": true
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://crimsoncowlabs.github.io/cookiecutter-ai-saas/#faq",
+            "url": "https://crimsoncowlabs.github.io/cookiecutter-ai-saas/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "What is cookiecutter-ai-saas?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "cookiecutter-ai-saas is an open-source cookiecutter template that generates a full-stack AI SaaS application: a Next.js 16 app in TypeScript, a Python worker that runs a bounded LangGraph agent, Postgres, Redis and BullMQ for background jobs, sign-in through NextAuth, optional Stripe billing, and a Docker Compose stack behind Caddy that Ansible provisions and deploys to a VPS. It is maintained by CrimsonCow Labs and is pre-release: it generates and runs today, but is not yet recommended for production use."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Who is cookiecutter-ai-saas for?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "cookiecutter-ai-saas is for developers who can already build the AI feature they want to ship, and would rather not hand-build the sign-in, billing, background jobs, TLS and deployment around it. It fits a side project or an early product that will run on a VPS you control. While it is pre-release, it is best suited to early adopters who are comfortable reading the generated code."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "What does cookiecutter-ai-saas cost?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "cookiecutter-ai-saas is free: the template is open source under the MIT licence. Any running costs come from choices you make yourself — a VPS and a domain name for a production deployment, usage fees from OpenAI, Anthropic or OpenRouter unless you run models locally with Ollama, and Stripe's own fees if you turn billing on."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "What do I need before starting with cookiecutter-ai-saas?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "To generate a project with cookiecutter-ai-saas you need Python and pip, to install cookiecutter. To run it locally you need Node.js (version 20 or newer by default; the generated setup.sh checks for whichever version you chose) and Docker with Docker Compose, plus Poetry to run the Python worker on your own machine (Python version 3.14 by default). The features you switch on need their own credentials: Google or Microsoft OAuth credentials, a Resend API key for magic-link sign-in, Stripe keys, and an API key for your LLM provider, or Ollama running locally. A production deployment also needs a Debian-family VPS (Ubuntu LTS) you can reach over SSH, a domain name you can point at it, and Ansible on your own machine."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How is cookiecutter-ai-saas different from starting from scratch?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Starting from scratch, you build sign-in, billing, a job queue, a worker that calls an LLM, TLS and a deployment pipeline before you get to your own feature. A project generated by cookiecutter-ai-saas has those already wired together, leaves out the parts you declined at generation time (such as Stripe billing, or the blog and contact form), and leaves you to write the feature. The trade-off is that you start from its architecture choices — Next.js, a Python worker, Postgres, Redis and BullMQ, Docker Compose and Ansible — which the README documents so you can judge them before generating."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Can I use cookiecutter-ai-saas commercially?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. cookiecutter-ai-saas is released under the MIT licence, which permits commercial use: you can build, run and sell a commercial product on a project generated from it, without paying or asking permission. The licence's one condition is that its copyright and permission notice stays with copies or substantial portions of the template, and it comes with no warranty."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Where can I get help with cookiecutter-ai-saas?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Questions, bug reports and feature requests for cookiecutter-ai-saas go to its GitHub issues, at github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues. Commercial support for cookiecutter-ai-saas is available from CrimsonCow Labs, at crimsoncowlabs.com."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+
     <link rel="stylesheet" href="styles.css" />
     <!-- The one allowance issue #35 made: inline only, first-party, no src
          anywhere (scripts/check_site.py enforces that). It sits in <head>
@@ -371,6 +498,7 @@
           <a href="#choices">Choices</a>
           <a href="#quickstart">Quickstart</a>
           <a href="#checklist">Checklist</a>
+          <a href="#faq">FAQ</a>
         </nav>
         <div class="navbar-actions">
           <div class="theme-toggle" id="theme-toggle" role="group" aria-label="Colour theme"></div>
@@ -606,6 +734,48 @@
         </div>
       </section>
 
+      <!-- Written to be quoted one answer at a time: each answer names the
+           project rather than leaning on "it", and states only what is true of
+           the template today. The FAQPage JSON-LD in <head> repeats every
+           question and answer verbatim, and scripts/check_site.py checks the
+           two agree, so edit both together. -->
+      <section class="section" id="faq">
+        <div class="container section-body">
+          <div class="section-header"><p class="eyebrow">// faq</p><h2 class="section-title">Questions people ask</h2></div>
+          <div class="faq-list">
+            <div class="faq-item" data-faq="what-is-it">
+              <h3 class="faq-q">What is cookiecutter-ai-saas?</h3>
+              <p class="faq-a">cookiecutter-ai-saas is an open-source cookiecutter template that generates a full-stack AI SaaS application: a Next.js 16 app in TypeScript, a Python worker that runs a bounded LangGraph agent, Postgres, Redis and BullMQ for background jobs, sign-in through NextAuth, optional Stripe billing, and a Docker Compose stack behind Caddy that Ansible provisions and deploys to a VPS. It is maintained by CrimsonCow Labs and is pre-release: it generates and runs today, but is not yet recommended for production use.</p>
+            </div>
+            <div class="faq-item" data-faq="who-is-it-for">
+              <h3 class="faq-q">Who is cookiecutter-ai-saas for?</h3>
+              <p class="faq-a">cookiecutter-ai-saas is for developers who can already build the AI feature they want to ship, and would rather not hand-build the sign-in, billing, background jobs, TLS and deployment around it. It fits a side project or an early product that will run on a VPS you control. While it is pre-release, it is best suited to early adopters who are comfortable reading the generated code.</p>
+            </div>
+            <div class="faq-item" data-faq="cost">
+              <h3 class="faq-q">What does cookiecutter-ai-saas cost?</h3>
+              <p class="faq-a">cookiecutter-ai-saas is free: the template is open source under the MIT licence. Any running costs come from choices you make yourself &mdash; a VPS and a domain name for a production deployment, usage fees from OpenAI, Anthropic or OpenRouter unless you run models locally with Ollama, and Stripe's own fees if you turn billing on.</p>
+            </div>
+            <div class="faq-item" data-faq="prerequisites">
+              <h3 class="faq-q">What do I need before starting with cookiecutter-ai-saas?</h3>
+              <p class="faq-a">To generate a project with cookiecutter-ai-saas you need Python and pip, to install cookiecutter. To run it locally you need Node.js (version 20 or newer by default; the generated <code>setup.sh</code> checks for whichever version you chose) and Docker with Docker Compose, plus Poetry to run the Python worker on your own machine (Python version 3.14 by default). The features you switch on need their own credentials: Google or Microsoft OAuth credentials, a Resend API key for magic-link sign-in, Stripe keys, and an API key for your LLM provider, or Ollama running locally. A production deployment also needs a Debian-family VPS (Ubuntu LTS) you can reach over SSH, a domain name you can point at it, and Ansible on your own machine.</p>
+            </div>
+            <div class="faq-item" data-faq="vs-scratch">
+              <h3 class="faq-q">How is cookiecutter-ai-saas different from starting from scratch?</h3>
+              <p class="faq-a">Starting from scratch, you build sign-in, billing, a job queue, a worker that calls an LLM, TLS and a deployment pipeline before you get to your own feature. A project generated by cookiecutter-ai-saas has those already wired together, leaves out the parts you declined at generation time (such as Stripe billing, or the blog and contact form), and leaves you to write the feature. The trade-off is that you start from its architecture choices &mdash; Next.js, a Python worker, Postgres, Redis and BullMQ, Docker Compose and Ansible &mdash; which the README documents so you can judge them before generating.</p>
+            </div>
+            <div class="faq-item" data-faq="commercial-use">
+              <h3 class="faq-q">Can I use cookiecutter-ai-saas commercially?</h3>
+              <p class="faq-a">Yes. cookiecutter-ai-saas is released under the MIT licence, which permits commercial use: you can build, run and sell a commercial product on a project generated from it, without paying or asking permission. The licence's one condition is that its copyright and permission notice stays with copies or substantial portions of the template, and it comes with no warranty.</p>
+            </div>
+            <div class="faq-item" data-faq="support">
+              <h3 class="faq-q">Where can I get help with cookiecutter-ai-saas?</h3>
+              <p class="faq-a">Questions, bug reports and feature requests for cookiecutter-ai-saas go to its GitHub issues, at <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues">github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues</a>. Commercial support for cookiecutter-ai-saas is available from CrimsonCow Labs, at <a href="https://crimsoncowlabs.com">crimsoncowlabs.com</a>.</p>
+            </div>
+          </div>
+          <p class="faq-support" id="commercial-support">Commercial support for cookiecutter-ai-saas is available from CrimsonCow Labs: <a href="https://crimsoncowlabs.com">crimsoncowlabs.com</a>.</p>
+        </div>
+      </section>
+
       <section class="section">
         <div class="container section-body">
           <aside class="prerelease">
@@ -625,7 +795,8 @@
     <footer>
       <div class="container footer-inner">
         <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">CrimsonCowLabs/cookiecutter-ai-saas</a>
-        <span>MIT licensed</span>
+        <span>Plain-text summary for AI assistants: <a href="llms.txt">llms.txt</a></span>
+        <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/LICENSE">MIT licensed</a>
       </div>
     </footer>
   </body>
