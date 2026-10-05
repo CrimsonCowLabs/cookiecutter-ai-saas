@@ -920,12 +920,10 @@
         </div>
       </section>
 
-      <!-- Issue #38. The engagements are placeholders on purpose: their names,
-           scope and starting prices are business decisions the author has not
-           made yet, and scripts/check_site.py fails while any engagement still
-           carries data-placeholder or a TODO. Fill in all three (and the
-           matching <option>s in the contact form below), then delete
-           data-placeholder. -->
+      <!-- Issue #38. Each engagement's name, scope and starting price come from
+           the author; scripts/check_site.py fails on any that still carries
+           data-placeholder or a TODO. Keep the <option>s in the contact form
+           below in the same order: "Ask about this" preselects by index. -->
       <section class="section section-tint" id="consulting">
         <div class="container section-body">
           <div class="section-header">
@@ -939,23 +937,11 @@
             </p>
           </div>
           <ul class="engagement-list">
-            <li class="engagement" data-placeholder>
-              <h3>TODO: engagement name</h3>
-              <p class="engagement-scope">TODO: what the client gets</p>
-              <p class="engagement-price">From $TODO</p>
+            <li class="engagement">
+              <h3>CrimsonCowLabs</h3>
+              <p class="engagement-scope">Launching your project to a deployed, billing-ready product.</p>
+              <p class="engagement-price">From $2,500</p>
               <a class="btn btn-sm engagement-cta" href="#contact" data-engagement="0">Ask about this</a>
-            </li>
-            <li class="engagement" data-placeholder>
-              <h3>TODO: engagement name</h3>
-              <p class="engagement-scope">TODO: what the client gets</p>
-              <p class="engagement-price">From $TODO</p>
-              <a class="btn btn-sm engagement-cta" href="#contact" data-engagement="1">Ask about this</a>
-            </li>
-            <li class="engagement" data-placeholder>
-              <h3>TODO: engagement name</h3>
-              <p class="engagement-scope">TODO: what the client gets</p>
-              <p class="engagement-price">From $TODO</p>
-              <a class="btn btn-sm engagement-cta" href="#contact" data-engagement="2">Ask about this</a>
             </li>
           </ul>
           <p class="closing-line">
@@ -1007,9 +993,7 @@
             <div class="field">
               <label for="contact-engagement">Interested in</label>
               <select class="input select" id="contact-engagement" name="engagement">
-                <option>TODO: engagement name</option>
-                <option>TODO: engagement name</option>
-                <option>TODO: engagement name</option>
+                <option>CrimsonCowLabs</option>
                 <option selected>Not sure yet</option>
               </select>
             </div>

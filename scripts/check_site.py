@@ -215,10 +215,17 @@ OFF_ORIGIN = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|//)", re.I)
 PROMPT = re.compile(r"^[$>#]\s")
 
 failures = []
+# Reported, but the page still passes: things worth knowing that must not hold
+# up a deploy. Printed as GitHub annotations so they show on the run summary.
+warnings = []
 
 
 def fail(message):
     failures.append(message)
+
+
+def warn(message):
+    warnings.append(message)
 
 
 def png_dimensions(path):
@@ -639,16 +646,20 @@ def check_placeholders(page):
 
     #38's engagement names and starting prices are business decisions, and
     the beacon token is issued by Cloudflare; none of them may be invented.
-    Until they are supplied the page carries marked placeholders, and this
-    fails — on purpose, so CI is red until the author fills them in rather
-    than a page with "From $TODO" on it shipping by accident.
+    Until they are supplied the page carries marked placeholders. The
+    engagements fail — on purpose, so CI is red until the author fills them in
+    rather than a page with "From $TODO" on it shipping by accident. The token
+    only warns: a placeholder token costs nothing a reader can see (Cloudflare
+    drops the pageview), so it must not block a deploy while measurement is
+    not yet wanted.
     """
     for where in page.placeholders:
         fail(f"{where} is marked data-placeholder: engagement names and starting prices must "
              "come from the author (#38)")
     if any(beacon["token"] == BEACON_TOKEN_PLACEHOLDER for beacon in page.beacons):
-        fail(f"the beacon's token is still {BEACON_TOKEN_PLACEHOLDER}: the Cloudflare Web "
-             "Analytics token must come from the author's Cloudflare account (#38)")
+        warn(f"the beacon's token is still {BEACON_TOKEN_PLACEHOLDER}, so no pageviews are "
+             "counted: the Cloudflare Web Analytics token must come from the author's "
+             "Cloudflare account (#38)")
     # #contact too: its engagement <select> repeats the engagement names.
     for kind in ("consulting", "contact"):
         for region in page.regions[kind]:
@@ -1330,6 +1341,8 @@ def main():
         check_contact(page)
         check_measurement(page)
 
+    for message in warnings:
+        print(f"::warning::{message}", file=sys.stderr)
     for message in failures:
         print(f"FAIL: {message}", file=sys.stderr)
     if failures:

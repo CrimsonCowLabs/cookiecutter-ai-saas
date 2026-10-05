@@ -314,13 +314,16 @@ That is Cloudflare's, on the firm's domain, not this page's — but it is why
 `#measurement` speaks for what the page and its counters do, not for every
 host a reader might end up on.
 
-**Placeholders fail CI.** The engagements' names and starting prices are the
-author's business decisions, and the beacon token comes from the author's
-Cloudflare account; none may be invented. Until they are supplied the page
-carries placeholders — `data-placeholder` on the element plus `TODO` in its
-text, and the literal token `CF_BEACON_TOKEN_TODO` — and `check_placeholders`
-fails on any of them. CI stays red until the author fills them in, which is
-the point: a page saying "From $TODO" cannot ship by accident. Once filled,
+**Engagement placeholders fail CI.** The engagements' names and starting
+prices are the author's business decisions, and the beacon token comes from
+the author's Cloudflare account; none may be invented. Until they are supplied
+the page carries placeholders — `data-placeholder` on the element plus `TODO`
+in its text, and the literal token `CF_BEACON_TOKEN_TODO`. `check_placeholders`
+fails on the engagement ones: CI stays red until the author fills them in,
+which is the point: a page saying "From $TODO" cannot ship by accident. The
+token only raises a warning annotation: with the placeholder, Cloudflare
+drops every pageview and the reader sees no difference, so measurement can
+wait without blocking a deploy. Once filled,
 `check_consulting` requires each `.engagement` to have an `<h3>` name and a
 `.engagement-price` with a dollar amount, and `#consulting` to say the firm
 wrote or maintains the template.
