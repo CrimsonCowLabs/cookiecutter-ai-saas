@@ -1,0 +1,58 @@
+# cookiecutter-ai-saas
+
+> cookiecutter-ai-saas is an open-source (MIT) cookiecutter template, maintained by CrimsonCow Labs, that generates a full-stack AI SaaS application: a Next.js 16 app in TypeScript with sign-in and optional Stripe billing, a Python worker that runs a bounded LangGraph agent, Postgres, Redis and BullMQ for background jobs, and a Docker Compose stack behind Caddy that Ansible provisions and deploys to a VPS. It is pre-release and not yet recommended for production use.
+
+## What it includes
+
+- App: Next.js 16, React 19 and TypeScript, styled with Tailwind CSS and DaisyUI. Sign-in, dashboard and settings pages, with billing under settings when Stripe is on.
+- Auth: NextAuth v5 with Google and/or Microsoft OAuth, and optional email magic-link sign-in via Resend.
+- Billing: optional Stripe checkout and customer portal.
+- Worker: a Python worker that consumes BullMQ jobs and hands them to a bounded, tool-calling LangGraph agent, reporting progress as it goes.
+- Data: PostgreSQL through Drizzle ORM, with optional pgvector for vector similarity search.
+- Queue: Redis and BullMQ between the app and the worker.
+- Deployment: Docker Compose behind Caddy (automatic TLS), with Ansible playbooks to provision a Debian-family VPS, deploy, and schedule database backups.
+
+Choices made once, at generation time:
+
+- LLM provider: Ollama, OpenAI, Anthropic or OpenRouter.
+- Stripe billing: on or off (off removes it from the generated project).
+- OAuth providers: Google and Microsoft, Google only, or Microsoft only.
+- Magic-link sign-in via Resend: on or off.
+- pgvector: on or off.
+- Marketing extras (a JSON-backed blog and a contact form): on or off.
+- Naming and defaults: project name, slug and description, author, domain, brand colour and theme, Python and Node.js versions, local Postgres and Redis ports.
+
+## How to install
+
+Prerequisites: Python and pip (for cookiecutter), Node.js (20 or newer by default), Docker with Docker Compose, and Poetry for running the Python worker locally (Python 3.14 by default). A production deployment also needs a Debian-family VPS (Ubuntu LTS) reachable over SSH, a domain name, and Ansible.
+
+```bash
+pip install cookiecutter
+cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas
+cd <project-slug>
+./setup.sh
+```
+
+`./setup.sh` checks for Node.js and Docker, writes the env files, generates a NEXTAUTH_SECRET, prompts for credentials for the optional features you kept, runs `npm ci`, starts the Docker Compose services, and generates and applies the database migrations.
+
+## Status
+
+Pre-release. The template generates and runs today and is being hardened ahead of its first tagged release; there is no tagged release yet, and it is not yet recommended for production use.
+
+## Licence
+
+MIT. Free to use, including commercially. See https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/LICENSE
+
+## Where to get help
+
+- Questions and bug reports: https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues
+- Commercial support for cookiecutter-ai-saas is available from CrimsonCow Labs: https://crimsoncowlabs.com
+
+## Links
+
+- [Project page](https://crimsoncowlabs.github.io/cookiecutter-ai-saas/): overview, quickstart, zero-to-deployed checklist and FAQ
+- [Source repository](https://github.com/CrimsonCowLabs/cookiecutter-ai-saas)
+- [README](https://github.com/CrimsonCowLabs/cookiecutter-ai-saas#readme): generating a project, running it locally, architecture and template variables
+- [Deployment guide](https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/docs/deployment.md): provisioning a VPS, deploying, secrets, TLS, backups
+- [Agent guide](https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/docs/agent.md): the shipped example agent, its loop and bounds, adding a tool
+- [Customization guide](https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/docs/customization.md): adding a table, a page, an API route, a pipeline step; changing the theme

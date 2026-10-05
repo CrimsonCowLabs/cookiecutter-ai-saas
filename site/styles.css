@@ -1069,6 +1069,48 @@ footer {
   font-size: 0.8125rem;
 }
 
+/* ---------- FAQ ---------- */
+
+.faq-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr));
+  gap: 1rem;
+  margin-top: 2.5rem;
+}
+
+.faq-item {
+  padding: 1.5rem;
+  border: var(--border) solid var(--border-subtle);
+  border-radius: var(--radius-box);
+  background: var(--surface-card);
+}
+
+.faq-q {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.faq-a {
+  margin-top: 0.5rem;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: var(--text-muted);
+  text-wrap: pretty;
+}
+
+.faq-a code {
+  font-size: 0.8125rem;
+  color: var(--color-base-content);
+}
+
+.faq-support {
+  margin-top: 2rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
 /* ---------- Pre-release ---------- */
 
 .prerelease {

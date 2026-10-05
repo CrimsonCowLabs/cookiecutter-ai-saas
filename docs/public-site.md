@@ -47,6 +47,13 @@ command's copy button (see "Look and themes" below), and nothing about the
 page's content stops working if the script never runs — it only loses those
 conveniences.
 
+Issue #37 added a second `<script>`, of a different kind: a
+`<script type="application/ld+json">` block of structured data (see "AI
+assistants and structured data" below). A browser never executes it, so it is
+data rather than a runtime dependency, and it is the only other script type
+the checks admit. "The inline script" below still means the one classic
+script; it is the only JavaScript on the page.
+
 `.github/workflows/public-site.yml` uploads `site/` to Pages exactly as
 committed, on every push to `main` that touches the page source. Pull requests
 run the checks but do not deploy. `workflow_dispatch` redeploys an unchanged
@@ -95,8 +102,8 @@ light` block, once under `[data-theme="paper"]`); keep the two identical.
 The script lives in `<head>` rather than at the end of `<body>` so a
 remembered theme is applied before first paint, instead of flashing the
 other one; everything else in it waits for `DOMContentLoaded`. It is still
-the page's one inline script. Besides the theme toggle it restores and saves
-checklist state (`cookiecutter-ai-saas-checklist`, keyed by each checkbox's
+the page's one inline classic script (the JSON-LD block is data, not
+code). Besides the theme toggle it restores and saves checklist state (`cookiecutter-ai-saas-checklist`, keyed by each checkbox's
 `data-id` — don't rename those, or returning visitors lose their progress),
 shows the done/total counter and progress bar, and adds the "Copy as
 Markdown" and install-command copy buttons. Every one of those controls is
@@ -174,6 +181,66 @@ only, never from the committed file, which scored SEO 100/100. Against the
 unmodified page, with the hold in place, `is-crawlable` was the only SEO
 audit that failed — everything else that hold does not touch (title,
 description, canonical, link text, crawlable anchors, HTTP status) passed.
+
+## AI assistants and structured data (issue #37)
+
+The page is written to be quoted: an assistant asked for a full-stack AI SaaS
+starter should find everything it needs to name it, describe it and give the
+install command, in the served HTML, without running JavaScript or guessing
+from the README.
+
+**Structured data.** One `<script type="application/ld+json">` in
+`index.html` carries a schema.org `@graph` of three nodes:
+
+- `Organization` — CrimsonCow Labs, `https://crimsoncowlabs.com`, with
+  `sameAs` the `CrimsonCowLabs` GitHub org.
+- `SoftwareSourceCode` — named `cookiecutter-ai-saas`, `url` the Pages URL,
+  `codeRepository` the repo, `license` MIT (`https://spdx.org/licenses/MIT.html`,
+  the same licence as `LICENSE`), its `programmingLanguage`s, and the
+  Organization above as `maintainer` by `@id`. Not as `author`: `LICENSE`
+  names an individual as copyright holder, and the data must not disagree.
+- `FAQPage` — the page's FAQ, as `Question`/`Answer` pairs.
+
+`scripts/check_site.py`'s `check_structured_data` checks each of those values
+against the canonical facts above, not just that a value is there.
+
+**The FAQ is the single source.** The visible FAQ (`#faq`, one `.faq-item`
+per question with an `h3.faq-q` and one `p.faq-a`) is the copy; the `FAQPage`
+repeats it. `check_structured_data` requires the questions to match in
+order and every answer to match the visible answer's text, whitespace aside —
+Google requires FAQ markup to match what the page shows, and it is the same
+rule as `og:title` repeating `<title>`. Edit both together. `check_faq`
+requires the questions #37 asks for by `data-faq` id (`what-is-it`,
+`who-is-it-for`, `cost`, `prerequisites`, `vs-scratch`, `commercial-use`)
+rather than by wording, so the copy can change without the check. The
+licence is stated on the page with a link to `LICENSE` (`check_licence`), and
+`#commercial-support` is the one sentence saying commercial support is
+available from CrimsonCow Labs, with a link to its site
+(`check_commercial_support`).
+
+**`llms.txt`.** `site/llms.txt` is a plain-text summary in the llms.txt shape
+(`# ` heading, `> ` summary, then what the project is and includes, the
+install command, the repo and where to get help). The convention puts it at
+the host root, which belongs to another repo here, so it is served at
+`https://crimsoncowlabs.github.io/cookiecutter-ai-saas/llms.txt` and the page
+links to it. A crawler that follows links finds it; one that only probes
+`/llms.txt` does not. That is accepted: a custom domain is the only fix, and
+there deliberately isn't one. `check_llms_txt` checks the file and the link.
+
+**What #37 widened.** `ALLOWED_SUFFIXES` gained `.txt`, and
+`check_no_build_step` admits exactly one `.txt` file, `llms.txt` at the top
+of `site/` — `robots.txt` is still rejected by name. Script types widened
+from "classic, inline" to that plus `application/ld+json`; any other `type`
+fails, and no script may have a `src`. None of the FAQ, support statement or
+structured data may be built by the inline script
+(`check_content_without_javascript`): the checks read the served HTML, which
+is what a no-JS crawler sees, so finding them there is the proof they work
+without it.
+
+**Don't fabricate claims.** Every fact in the structured data, the FAQ and
+`llms.txt` must be true of the current template. An assistant repeats what it
+finds, so an inflated claim becomes a support burden. Add a property only if
+it is true today, and change it in the same PR that makes it untrue.
 
 ## Indexing is held back on purpose
 
