@@ -50,7 +50,9 @@ reads as slightly raised, Light deliberately flat. The navbar's theme toggle
 swatches (`.swatch-dark` `#f2703a`, `.swatch-light` `#b4370a`) are hardcoded
 hex literals, not `var(--color-primary)` — they currently match each theme's
 primary colour, but if either theme's `--color-primary` ever moves, update
-the matching swatch by hand or the two will silently drift apart.
+the matching swatch by hand or the two will silently drift apart. The same
+two values are hardcoded a third time in `site/favicon.svg` (a favicon cannot
+read the page's CSS variables); update it with them.
 
 Light's block appears twice in `styles.css` — once under
 `@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {…} }`,
@@ -71,17 +73,25 @@ base tokens are active, all via `color-mix(in oklab, …)`:
 | `--surface-card`    | `color-mix(in oklab, var(--color-base-200) 50%, transparent)` | Card and navbar backgrounds |
 | `--surface-tint`    | `color-mix(in oklab, var(--color-base-200) 30%, transparent)` | Section background tint      |
 | `--text-strong`     | `color-mix(in oklab, var(--color-base-content) 80%, transparent)` | Emphasis text            |
-| `--text-muted`      | `color-mix(in oklab, var(--color-base-content) 60%, transparent)` | Secondary text            |
-| `--text-faint`      | `color-mix(in oklab, var(--color-base-content) 40%, transparent)` | Least prominent text      |
+| `--text-muted`      | `color-mix(in oklab, var(--color-base-content) 66%, transparent)` | Secondary text            |
 | `--border-subtle`   | `color-mix(in oklab, var(--color-base-content) 5%, transparent)` | Hairline dividers          |
 | `--border-strong`   | `color-mix(in oklab, var(--color-base-content) 10%, transparent)` | More visible borders     |
-| `--border-field`    | `color-mix(in oklab, var(--color-base-content) 20%, transparent)` | Input/checkbox borders  |
+| `--border-field`    | `color-mix(in oklab, var(--color-base-content) 50%, transparent)` | Input/checkbox borders  |
 | `--primary-soft`    | `color-mix(in oklab, var(--color-primary) 10%, transparent)` | Tag/step/prerelease fill       |
 | `--primary-line`    | `color-mix(in oklab, var(--color-primary) 20%, transparent)` | Tag/step/prerelease border     |
 
 None of these are set per-theme directly — they recompute automatically
 whenever `--color-base-*`/`--color-primary` change, so a new theme only ever
 needs the base token table above, never its own copy of these.
+
+Two of them depart from the design system on purpose (#39). `--text-muted`
+is 66% rather than 60%: at 60% Light's muted text lands at 4.35–4.46:1 on the
+tinted surfaces, just under WCAG AA's 4.5:1. `--border-field` is 50% rather
+than 20%: an input's or checkbox's border is what identifies it as a
+control, so it needs 3:1 against what is behind it, and 20% gave about 1.5:1.
+The design system's `--text-faint` (40%) is not carried over at all — no
+text on this page can be that faint and still meet AA, so there is no
+legitimate use for it here.
 
 ## Typography
 
@@ -136,12 +146,13 @@ above — no component rule hardcodes a colour.
 | Class                                   | Purpose                                              |
 | ----------------------------------------- | ------------------------------------------------------ |
 | `.btn`, `.btn-primary`, `.btn-ghost`       | Buttons. Base is `--color-base-200`; `-primary` swaps in `--color-primary`; `-ghost` is transparent until hover. |
-| `.btn-sm`, `.btn-xs`                       | Size variants. `.btn`/`.btn-sm` floor at the 44px touch target; `.btn-xs` (24px) is the one deliberate exception, for the install card's packed copy button. |
+| `.btn-sm`                                  | Small variant: smaller text and padding, but `.btn` and `.btn-sm` both floor at the 44px touch target. The design system's `.btn-xs` (24px) is deliberately not carried over: every target on the page is at least 44px (#39). |
 | `.badge`, `.badge-primary`, `.badge-warning`, `.badge-sm` | Inline status pills (e.g. the pre-release status line). |
 | `.tag`                                     | Small outlined label using `--primary-soft`/`--primary-line`. |
 | `.checkbox`                                | Custom checkbox (checklist items); checked state fills with `--color-primary`. |
 | `.textarea`                                | Monospace textarea (checklist's "copy as Markdown" fallback). |
 | `.navbar`, `.navbar-inner`, `.brand`, `.nav-links` | Sticky, blurred-backdrop header and its contents. |
+| `.skip-link`                              | "Skip to content", the first Tab stop; off-screen until focused. |
 | `.theme-toggle`, `.theme-option`, `.swatch-dark`, `.swatch-light` | The Dark/Light switch inserted into the navbar by the inline script; hidden (`:empty`) if the script never runs. |
 | `.surface-card`                            | The generic elevated card (problem cards, progress panel, phases). |
 | `.stack-list`, `.choice-list`              | The two definition-list layouts (stack table, generation-time choices grid). |

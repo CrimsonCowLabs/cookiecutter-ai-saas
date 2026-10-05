@@ -55,7 +55,7 @@ assistants and structured data" below). A browser never executes it, so it is
 data rather than a runtime dependency, and it is the only other script type
 the checks admit. "The inline script" below still means the one classic
 script; it is the only JavaScript the page ships itself (#38's analytics
-beacon is Cloudflare's, loaded deferred).
+beacon is Cloudflare's, loaded `async`).
 
 `.github/workflows/public-site.yml` uploads `site/` to Pages exactly as
 committed, on every push to `main` that touches the page source. Pull requests
@@ -259,7 +259,7 @@ exactly these URLs, each allowed in one place:
 
 | URL | Allowed as | Why |
 | --- | --- | --- |
-| `https://static.cloudflareinsights.com/beacon.min.js` | the one `<script src>`, `defer` | Cloudflare Web Analytics pageviews. Pages keeps no server logs, so it is a beacon or no numbers. |
+| `https://static.cloudflareinsights.com/beacon.min.js` | the one `<script src>`, `async` | Cloudflare Web Analytics pageviews. Pages keeps no server logs, so it is a beacon or no numbers. |
 | `https://cloudflareinsights.com` | nowhere in the HTML | Where the beacon sends each pageview. The page never names it, but it does talk to it, so it is on the list; writing it into the markup or the inline script still fails. |
 | `https://crimsoncowlabs.com/api/cookiecutter/contact` | the contact form's `action`, and the inline script | The firm's own server, which emails the enquiry via Resend. |
 | `https://crimsoncowlabs.com/api/cookiecutter/event` | the inline script only | The firm's own server, counting call-to-action clicks. |
@@ -286,8 +286,11 @@ that — and `check_measurement` requires it to mention cookies and name
 Cloudflare.
 
 **A blocked tracker or an unreachable server costs no lead.** The beacon is
-`defer`, so it never blocks rendering, and nothing on the page waits for a
-third-party response. The contact form posts natively — with JavaScript off
+`async`, so it never blocks rendering, and nothing on the page waits for a
+third-party response. Not `defer`: a deferred script runs before
+`DOMContentLoaded`, and the inline script builds every one of its controls
+in a `DOMContentLoaded` handler, so a slow CDN would hold back the theme
+toggle, the checklist and the copy buttons with it (#39). The contact form posts natively — with JavaScript off
 the firm's server answers with a 303 back to the page — and the script only
 upgrades it to `fetch`. `aaron@crimsoncowlabs.com` is a `mailto:` link in
 `#contact`'s served HTML, so it is there when the form, the server and the
@@ -322,11 +325,63 @@ in its text, and the literal token `CF_BEACON_TOKEN_TODO`. `check_placeholders`
 fails on the engagement ones: CI stays red until the author fills them in,
 which is the point: a page saying "From $TODO" cannot ship by accident. The
 token only raises a warning annotation: with the placeholder, Cloudflare
-drops every pageview and the reader sees no difference, so measurement can
-wait without blocking a deploy. Once filled,
+drops every pageview and the page works exactly the same (the reader still
+downloads the beacon, about 10 KB, and its console logs the rejected
+pageview), so measurement can wait without blocking a deploy. Once filled,
 `check_consulting` requires each `.engagement` to have an `<h3>` name and a
 `.engagement-price` with a dollar amount, and `#consulting` to say the firm
 wrote or maintains the template.
+
+## Mobile, accessibility and performance (issue #39)
+
+Most readers open this page first on a phone. `scripts/site-audit/` is the
+repeatable proof that it holds up there: a dev-time browser audit, like
+`generate_og_image.py` a tool rather than a page dependency, and not run by CI.
+Run it after any change to the page's layout, colours or script:
+
+```bash
+npm ci --prefix scripts/site-audit
+CHROME_PATH=/path/to/chrome node scripts/site-audit/audit.mjs [site-dir]
+```
+
+It serves `site/` itself, blocks every off-origin request, and checks 320, 375,
+768 and 1280px (phones emulated as touch devices) in both colour schemes, with
+the script on and off. It also checks the theme overridden against the system
+scheme, sweeps 320–1440px in 8px steps, and loads both `:target` contact
+outcomes. It covers horizontal overflow, navbar overlap, clipped text, 44px
+targets, text size, layout shift from script-inserted controls, keyboard focus
+and Tab order, axe-core's WCAG 2.2 AA rules, and 3:1 borders on form controls.
+It exits 1 with a grouped list of what failed. Its header comment lists each
+check, and why "script off" is a CSP header rather than a browser setting.
+
+What #39 settled, so it is not re-litigated:
+
+- **Every target is 44px on its smallest side**, the navbar's included. The
+  only exemption is a link inline in running prose (WCAG 2.5.8's own
+  exception); the audit lists those as info. That floor drove the navbar's
+  breakpoints: the section links appear only from 1024px, the brand name only
+  from 600px, and below 380px the bar's gutters tighten so its five controls
+  fit at 320.
+- **The navbar is the same height with and without the script.** `.navbar-inner`
+  reserves room for the theme toggle, so inserting it moves nothing (CLS was
+  0.12 on phones before this).
+- **Running prose is at least 15px**, body text 16px, and nothing is under 12px.
+- **Contrast is AA in both themes.** That is why `--text-muted` and
+  `--border-field` depart from the design system; `docs/design-system.md` says
+  how far and why.
+- **The page fetches no images** except `favicon.svg`. The favicon exists so
+  the browser does not ask the host root, which belongs to another repo, for
+  `/favicon.ico` and log a 404.
+
+Measured when #39's fixes landed, against a local copy: Lighthouse mobile scored 100
+for performance and 100 for accessibility in both schemes, and 96 for best
+practices. The only console errors, which cost those 4 points, come from the
+beacon with the placeholder token. The issue's last criterion, opening the
+page on a real phone, is a human step no script replaces, and #39 is not done
+until someone has. The audit also cannot judge contrast on text axe cannot
+measure (the hero's gradient, the status line beside its badge); it lists
+those for a human to check by eye. The page has no `<img>` at all, so the
+image check guards against one arriving rather than testing sizes.
 
 ## Indexing is held back on purpose
 

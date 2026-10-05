@@ -17,4 +17,5 @@ Single-context: one root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`
 The landing page is hand-written static HTML in `site/`, served from GitHub Pages
 at `https://crimsoncowlabs.github.io/cookiecutter-ai-saas/`. It has no build step
 and is held out of search by one tag. Run `python scripts/check_site.py` after
-touching it. See `docs/public-site.md`.
+touching it, and `node scripts/site-audit/audit.mjs` (needs `CHROME_PATH`) after
+changing its layout, colours or script. See `docs/public-site.md`.

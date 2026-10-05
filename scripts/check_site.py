@@ -23,7 +23,7 @@ Issue #38 is the ticket that spends #33's "no third-party runtime dependency",
 because measurement and a contact form cannot be had on Pages without one. It
 spends it by name, not in general: THIRD_PARTY below lists every off-origin URL
 the page may touch, where, and why. One script may now have a `src` — the
-Cloudflare Web Analytics beacon, deferred so it never blocks rendering — and
+Cloudflare Web Analytics beacon, async so it never blocks rendering — and
 the form may post to the firm's own server, as the inline script may for its
 click counts. Anything else off-origin still fails exactly as before. The
 same ticket leaves placeholders for what only the author can supply (the
