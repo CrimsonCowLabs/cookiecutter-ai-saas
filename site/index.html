@@ -205,8 +205,8 @@
         var THEME_KEY = "cookiecutter-ai-saas-theme";
         var CHECKLIST_KEY = "cookiecutter-ai-saas-checklist";
         var THEMES = [
-          { id: "ember", name: "Ember" },
-          { id: "paper", name: "Paper" }
+          { id: "dark", name: "Dark" },
+          { id: "light", name: "Light" }
         ];
         var prefersLight = window.matchMedia
           ? window.matchMedia("(prefers-color-scheme: light)")
@@ -240,10 +240,10 @@
         // ---- Theme ------------------------------------------------------
 
         var saved = load(THEME_KEY);
-        if (saved === "ember" || saved === "paper") ROOT.setAttribute("data-theme", saved);
+        if (saved === "dark" || saved === "light") ROOT.setAttribute("data-theme", saved);
 
         function systemTheme() {
-          return prefersLight && prefersLight.matches ? "paper" : "ember";
+          return prefersLight && prefersLight.matches ? "light" : "dark";
         }
 
         function activeTheme() {

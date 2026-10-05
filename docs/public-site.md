@@ -90,17 +90,17 @@ or font is loaded at runtime. The design uses Inter and JetBrains Mono from
 Google Fonts; this page uses system-font stacks instead, because a CDN font
 is an off-origin runtime dependency.
 
-There are two themes, set by `data-theme` on `<html>`: **Ember** (warm dark,
-the page's original palette) and **Paper** (light). The design project also
+There are two themes, set by `data-theme` on `<html>`: **Dark** (warm,
+the page's original palette) and **Light**. The design project also
 explored a third, "Slate"; it was deliberately not shipped. With no
-`data-theme`, CSS alone picks Ember or Paper from `prefers-color-scheme`, so
+`data-theme`, CSS alone picks Dark or Light from `prefers-color-scheme`, so
 the page is correctly themed with its script off. The script adds an
-Ember/Paper toggle to the navbar. Picking the theme the system does *not*
+Dark/Light toggle to the navbar. Picking the theme the system does *not*
 ask for sets `data-theme` and remembers it in `localStorage` under
 `cookiecutter-ai-saas-theme`; picking the one it does ask for clears that
-override, so there is always a way back to following the system. The Paper
+override, so there is always a way back to following the system. The Light
 variables appear twice in `styles.css` (once in the `prefers-color-scheme:
-light` block, once under `[data-theme="paper"]`); keep the two identical.
+light` block, once under `[data-theme="light"]`); keep the two identical.
 
 The script lives in `<head>` rather than at the end of `<body>` so a
 remembered theme is applied before first paint, instead of flashing the
@@ -125,7 +125,7 @@ them into a `<span>$ </span>`: `user-select: none` does not take a text node
 out of the DOM, and the check will fail.
 
 [`docs/design-system.md`](design-system.md) has the concrete reference for
-all of this: the Ember/Paper token tables, derived tokens, typography scale
+all of this: the Dark/Light token tables, derived tokens, typography scale
 and the component class catalog — use it instead of re-deriving values from
 `styles.css` by hand.
 
