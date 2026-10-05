@@ -19,6 +19,17 @@ the page has a use for. Both come with checks that they say something true:
 the structured data has to agree with the visible page and the repo, and the
 FAQ it exposes has to be the FAQ a person reads, word for word.
 
+Issue #38 is the ticket that spends #33's "no third-party runtime dependency",
+because measurement and a contact form cannot be had on Pages without one. It
+spends it by name, not in general: THIRD_PARTY below lists every off-origin URL
+the page may touch, where, and why. One script may now have a `src` — the
+Cloudflare Web Analytics beacon, deferred so it never blocks rendering — and
+the form may post to the firm's own server, as the inline script may for its
+click counts. Anything else off-origin still fails exactly as before. The
+same ticket leaves placeholders for what only the author can supply (the
+engagements' names and prices, the beacon token), and check_placeholders fails
+while any remains, so the page cannot ship one by accident.
+
 Everything here reads the served HTML, which is exactly what a crawler that
 does not run JavaScript sees. So a check that finds the FAQ, the support
 statement or the structured data in index.html is already proof that they are
@@ -122,19 +133,99 @@ MAX_DESCRIPTION_LENGTH = 160
 OG_IMAGE_WIDTH = 1200
 OG_IMAGE_HEIGHT = 630
 
+# The third-party allowance #38 made, and all of it: each URL, the one way the
+# page may use it, and why. #33 ruled out any third-party runtime dependency
+# for a page that needed none; #38 needs measurement, and GitHub Pages gives no
+# server logs, so it is a beacon or no numbers. Add to this only from a ticket
+# that says why — an ad network or a tag manager would need that conversation
+# again, not a line here.
+#
+# The uses are the places in the page a URL may appear. BEACON_REPORTS is the
+# one the page never writes: the beacon's own requests to Cloudflare, listed
+# because the page does talk to that origin, but allowed nowhere in the HTML —
+# naming it in the markup or the inline script still fails.
+SCRIPT_SRC = "script src"
+FORM_ACTION = "form action"
+INLINE_SCRIPT = "inline script"
+BEACON_REPORTS = "sent by the beacon"
+BEACON_URL = "https://static.cloudflareinsights.com/beacon.min.js"
+BEACON_REPORT_URL = "https://cloudflareinsights.com"
+CONTACT_URL = "https://crimsoncowlabs.com/api/cookiecutter/contact"
+EVENT_URL = "https://crimsoncowlabs.com/api/cookiecutter/event"
+THIRD_PARTY = {
+    BEACON_URL: (frozenset({SCRIPT_SRC}), "Cloudflare Web Analytics beacon: cookieless "
+                 "pageviews, since Pages keeps no logs (#38)"),
+    BEACON_REPORT_URL: (frozenset({BEACON_REPORTS}), "where the beacon reports each pageview "
+                        "(page URL, referrer, browser type; no cookie); the page itself never "
+                        "names it (#38)"),
+    CONTACT_URL: (frozenset({FORM_ACTION, INLINE_SCRIPT}), "contact form endpoint on the "
+                  "firm's server, which emails the enquiry via Resend (#38)"),
+    EVENT_URL: (frozenset({INLINE_SCRIPT}), "call-to-action click counter on the firm's "
+                "server: daily counts, no cookies, no IP or user agent kept (#38)"),
+}
+SCRIPT_SRC_ALLOWED = {url for url, (uses, _) in THIRD_PARTY.items() if SCRIPT_SRC in uses}
+FORM_ACTION_ALLOWED = {url for url, (uses, _) in THIRD_PARTY.items() if FORM_ACTION in uses}
+INLINE_SCRIPT_URLS = {url for url, (uses, _) in THIRD_PARTY.items() if INLINE_SCRIPT in uses}
+
+# The fallback contact, in the served HTML so a blocked script or an
+# unreachable server cannot hide it.
+CONTACT_EMAIL = "aaron@crimsoncowlabs.com"
+
+# Where the firm's server sends a native (no-JS) form POST back to, with a 303:
+# PAGE_URL plus one of these fragments, never a query string. Both are
+# elements in #contact's served HTML that CSS :target reveals, so the reader
+# gets a confirmation without the script. The server (in
+# CrimsonCowLabs/marketing-site) and this list change together.
+CONTACT_OUTCOME_IDS = ("contact-sent", "contact-error")
+
+# The server's own field limits, mirrored as maxlength so a browser stops the
+# reader at the limit rather than the server rejecting the whole message.
+# Change them with the server's.
+CONTACT_MAXLENGTH = {"name": 200, "email": 320, "message": 5000}
+
+# What the author still has to supply before the page can ship (#38). The
+# markup marks each placeholder with data-placeholder; the beacon's token (in
+# its data-cf-beacon) is this literal until Cloudflare issues the real one.
+BEACON_TOKEN_PLACEHOLDER = "CF_BEACON_TOKEN_TODO"
+
+# Honeypot field: hidden from people, filled in by bots. It is exempt from the
+# label requirement because nobody is meant to see it.
+HONEYPOT = "website"
+CONTACT_FIELDS = ("name", "email", "message", HONEYPOT)
+
 # Off-origin on an <a> is a link, which is the point. Off-origin anywhere else
-# is a runtime dependency: the page stops rendering when that host does.
-URL_ATTRS = {"src", "href", "srcset", "data", "poster"}
+# is a runtime dependency: the page stops rendering when that host does — or,
+# for a form's action, stops working — unless THIRD_PARTY names it.
+URL_ATTRS = {"src", "href", "srcset", "data", "poster", "action", "formaction"}
+# Elements read whole — all their descendant text, links and ids — by id. The
+# navbar is one more region, found by its class: it is what "reachable from
+# the top" means.
+REGIONS = ("commercial-support", "consulting", "contact", "measurement")
+NAVBAR = "navbar"
+
+# An absolute URL in the inline script, or a protocol-relative //host one,
+# which is just as off-origin. The host has to look like one (a dot in it), so
+# a `//` comment is not mistaken for a URL.
+INLINE_URL = re.compile(r"""(?:\bhttps?:)?//[a-z0-9-]+(?:\.[a-z0-9-]+)+[^\s"'`<>()\\]*""", re.I)
+PRICE = re.compile(r"\$\s?\d")
+AUTHORED = re.compile(r"\b(?:wrote|written|built|authored|maintains?|maintained)\b", re.I)
 OFF_ORIGIN = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|//)", re.I)
 
 # A prompt character pasted along with the command is a broken paste.
 PROMPT = re.compile(r"^[$>#]\s")
 
 failures = []
+# Reported, but the page still passes: things worth knowing that must not hold
+# up a deploy. Printed as GitHub annotations so they show on the run summary.
+warnings = []
 
 
 def fail(message):
     failures.append(message)
+
+
+def warn(message):
+    warnings.append(message)
 
 
 def png_dimensions(path):
@@ -169,8 +260,16 @@ class Page(HTMLParser):
         self.ids = []              # every id= attribute, in document order
         self.faq_items = []        # {"id", "questions", "answers"}, one per .faq-item
         self.stray_faq = []        # .faq-q/.faq-a text found outside any .faq-item
-        self.commercial_support = []  # {"text", "links"}, one per #commercial-support
+        self.regions = {kind: [] for kind in (*REGIONS, NAVBAR)}  # {"text", "links", "ids"} each
+        self.engagements = []      # {"names", "prices", "placeholder"}, one per .engagement
+        self.placeholders = []     # a description of every element with data-placeholder
+        self.beacons = []          # the self.scripts entries whose src is SCRIPT_SRC_ALLOWED
+        self.forms = []            # {"id", "method", "action", "in_contact"}, one per <form>
+        self.fields = []           # {"tag", "name", "type", "id", "required", "maxlength",
+                                   #  "labelled", "form"}
+        self.label_for = set()     # every <label for=...>
         self._stack = []
+        self._form = None          # the self.forms entry currently open
         self._heading = None       # (tag, classes, [text so far]) while inside h1-h6
         self._script = None        # the self.scripts entry whose text is being read
         self._captures = []        # elements whose whole descendant text is wanted
@@ -189,23 +288,58 @@ class Page(HTMLParser):
             # A missing type and an empty one mean the same thing; MIME types
             # are case-insensitive. Its text is read in handle_data.
             self._script = {
-                "src": bool(attrs.get("src")),
+                "src": (attrs.get("src") or "").strip(),
                 "type": (attrs.get("type") or "").strip().lower(),
                 "text": "",
+                # Boolean attributes parse to None, so presence is the test.
+                "deferred": "defer" in attrs or "async" in attrs,
             }
             self.scripts.append(self._script)
+            if self._script["src"] in SCRIPT_SRC_ALLOWED:
+                # The beacon's configuration, parsed here once for every check
+                # that needs the token: "token" is None if there is none,
+                # "config_error" says the attribute was not a JSON object.
+                config = attrs.get("data-cf-beacon")
+                try:
+                    token = json.loads(config or "").get("token")
+                    config_error = False
+                except (json.JSONDecodeError, AttributeError):
+                    token, config_error = None, True
+                self.beacons.append({"script": self._script, "config": config,
+                                     "token": token, "config_error": config_error})
         elif tag == "a":
             self.links.append(attrs.get("href", ""))
             for capture in self._captures:
                 capture["links"].append(attrs.get("href", ""))
         elif tag == "link":
             self.link_tags.append(attrs)
+        elif tag == "label" and attrs.get("for"):
+            self.label_for.add(attrs["for"])
+        elif tag == "form":
+            self._form = {
+                "id": attrs.get("id"),
+                "method": (attrs.get("method") or "get").strip().lower(),
+                "action": (attrs.get("action") or "").strip(),
+                "in_contact": self._inside("contact"),
+            }
+            self.forms.append(self._form)
+        elif tag in ("input", "textarea", "select"):
+            self.fields.append({
+                "tag": tag,
+                "name": attrs.get("name"),
+                "type": (attrs.get("type") or "").strip().lower(),
+                "id": attrs.get("id"),
+                "required": "required" in attrs,
+                "maxlength": (attrs.get("maxlength") or "").strip(),
+                "labelled": any(open_tag == "label" for open_tag, _ in self._stack),
+                "form": self._form["id"] if self._form else None,
+            })
         for attr, value in attrs.items():
             if attr.startswith("on"):
                 self.inline_handlers.append((tag, attr))
-            # A <script src> is rejected in full below, on-origin included, so
-            # it is excluded here rather than reported twice under a message
-            # that only makes sense for an off-origin one. A <link rel=canonical>
+            # A <script src> is held to THIRD_PARTY in full below, on-origin
+            # included, so it is excluded here rather than reported twice
+            # under a message that only makes sense for an off-origin one. A <link rel=canonical>
             # (or similar metadata-only rels) is never fetched by the browser at
             # all — it is read the way an <a href> is, by whatever follows it on
             # purpose, not loaded as part of rendering the page — so it is exempt
@@ -226,6 +360,8 @@ class Page(HTMLParser):
         classes = attrs.get("class", "").split()
         if attrs.get("id"):
             self.ids.append(attrs["id"])
+            for capture in self._captures:
+                capture["ids"].append(attrs["id"])
         if _is_heading(tag):
             # A heading cannot contain another; a browser closes the open one
             # first, and so does this.
@@ -245,17 +381,38 @@ class Page(HTMLParser):
             self.faq_items.append(item)
         elif tag == "p" and "faq-a" in classes:
             kind = "faq-a"
-        elif attrs.get("id") == "commercial-support":
-            kind = "commercial-support"
+        elif "engagement" in classes:
+            kind = "engagement"
+            item = {"names": [], "prices": [], "placeholder": "data-placeholder" in attrs}
+            self.engagements.append(item)
+        elif "engagement-price" in classes:
+            kind = "engagement-price"
+        elif attrs.get("id") in REGIONS:
+            kind = attrs["id"]
+        elif tag == "header" and "navbar" in classes:
+            kind = NAVBAR
         if kind:
-            self._captures.append(
-                {"kind": kind, "depth": len(self._stack), "parts": [], "links": [], "item": item}
-            )
+            self._captures.append({"kind": kind, "depth": len(self._stack), "parts": [],
+                                   "links": [], "ids": [], "item": item})
+        if "data-placeholder" in attrs:
+            if attrs.get("id"):
+                where = f'<{tag} id="{attrs["id"]}">'
+            elif attrs.get("class"):
+                where = f'<{tag} class="{attrs["class"]}">'
+            else:
+                where = f"<{tag}>"
+            # An engagement is also named by its position (1-based), so three
+            # unfilled ones are three distinguishable failures.
+            if kind == "engagement":
+                where = f"engagement {len(self.engagements)} {where}"
+            self.placeholders.append(where)
         self._stack.append((tag, classes))
 
     def handle_endtag(self, tag):
         if tag == "script":
             self._script = None
+        elif tag == "form":
+            self._form = None
         while self._stack:
             if self._stack.pop()[0] == tag:
                 break
@@ -265,7 +422,7 @@ class Page(HTMLParser):
             self._close_heading()
         while self._captures and len(self._stack) <= self._captures[-1]["depth"]:
             capture = self._captures[-1]
-            if capture["kind"] == "faq-item":
+            if capture["kind"] in ("faq-item", "engagement"):
                 # A question left open by a missing </h3> still belongs to
                 # the item it was written in, not to whatever comes next.
                 self._close_heading()
@@ -281,23 +438,34 @@ class Page(HTMLParser):
             self.text.append((heading_tag, classes, text))
         if "faq-q" in classes:
             self._faq_add("questions", text)
+        engagement = self._innermost("engagement")
+        if heading_tag == "h3" and engagement is not None:
+            engagement["names"].append(text)
 
     def _close_capture(self, capture):
         text = " ".join("".join(capture["parts"]).split())
         if capture["kind"] == "faq-a":
             self._faq_add("answers", text)
-        elif capture["kind"] == "commercial-support":
-            self.commercial_support.append({"text": text, "links": capture["links"]})
+        elif capture["kind"] == "engagement-price":
+            engagement = self._innermost("engagement")
+            if engagement is not None:
+                engagement["prices"].append(text)
+        elif capture["kind"] in self.regions:
+            self.regions[capture["kind"]].append(
+                {"text": text, "links": capture["links"], "ids": capture["ids"]})
 
-    def _innermost_faq_item(self):
-        """The innermost .faq-item currently open, or None."""
+    def _innermost(self, kind):
+        """The item of the innermost open capture of this kind, or None."""
         for capture in reversed(self._captures):
-            if capture["kind"] == "faq-item":
+            if capture["kind"] == kind:
                 return capture["item"]
         return None
 
+    def _inside(self, kind):
+        return any(capture["kind"] == kind for capture in self._captures)
+
     def _faq_add(self, field, text):
-        item = self._innermost_faq_item()
+        item = self._innermost("faq-item")
         if item is None:
             self.stray_faq.append(text)
         else:
@@ -420,18 +588,219 @@ def check_html(page):
     if not page.texts("title"):
         fail("<title> is empty")
 
-    with_src = sum(script["src"] for script in page.scripts)
-    if with_src:
-        fail(f"{with_src} <script src> element(s): a script may be inline but must not load "
-             "from anywhere, this origin included")
     for script in page.scripts:
         if script["type"] not in SCRIPT_TYPES:
             fail(f'<script type="{script["type"]}">: the only script types allowed are an inline '
                  f"classic script and {JSON_LD} structured data")
     for tag, attr in page.inline_handlers:
         fail(f"<{tag} {attr}>: inline event handler is still JavaScript")
+    check_third_party(page)
+
+
+def check_third_party(page):
+    """The page touches no off-origin URL that THIRD_PARTY does not name.
+
+    This is where #38's allowance is enforced, and where its limits are. A
+    <script src> is still rejected unless it is exactly the Cloudflare beacon,
+    local paths included, and there may be one beacon. It has to be `defer` or
+    `async`: a classic script without either blocks parsing until its host
+    answers, and a blocked or unreachable tracker must not cost the page its
+    rendering. Every other off-origin resource — a stylesheet, a font, an
+    image, a preconnect — is a render dependency on a host this page does not
+    control and fails as it always has, so nothing third-party can block
+    rendering. A form may post off-origin only to the contact endpoint. The
+    inline classic script is held to the same list: any http(s) URL in it
+    must be one THIRD_PARTY allows there, protocol-relative //host ones
+    included. (Before #38 it contained none.)
+    """
+    for script in page.scripts:
+        if script["src"] and script["src"] not in SCRIPT_SRC_ALLOWED:
+            fail(f'<script src="{script["src"]}">: the only script that may load from anywhere, '
+                 f"this origin included, is the Cloudflare Web Analytics beacon {BEACON_URL} "
+                 "(#38); every other script is inline")
+    for beacon in page.beacons:
+        if not beacon["script"]["deferred"]:
+            fail(f'<script src="{beacon["script"]["src"]}"> has neither defer nor async, so it '
+                 "blocks rendering until Cloudflare answers: a blocked tracker must not hold up "
+                 "the page (#38)")
+    if len(page.beacons) > 1:
+        fail(f"{len(page.beacons)} copies of the Cloudflare beacon: it counts each pageview "
+             "once per copy")
+
     for tag, attr, value in page.off_origin:
-        fail(f"<{tag} {attr}=\"{value}\">: off-origin runtime dependency")
+        if tag == "form" and attr == "action" and value in FORM_ACTION_ALLOWED:
+            continue
+        fail(f"<{tag} {attr}=\"{value}\">: off-origin runtime dependency not named in THIRD_PARTY")
+
+    for script in page.scripts:
+        if script["src"] or script["type"] not in CLASSIC_SCRIPT_TYPES:
+            continue
+        for url in INLINE_URL.findall(script["text"]):
+            if url not in INLINE_SCRIPT_URLS:
+                fail(f"the inline script talks to {url!r}, which THIRD_PARTY does not allow it: "
+                     f"only {sorted(INLINE_SCRIPT_URLS)} (#38)")
+
+
+def check_placeholders(page):
+    """Nothing the author has yet to supply is still a placeholder.
+
+    #38's engagement names and starting prices are business decisions, and
+    the beacon token is issued by Cloudflare; none of them may be invented.
+    Until they are supplied the page carries marked placeholders. The
+    engagements fail — on purpose, so CI is red until the author fills them in
+    rather than a page with "From $TODO" on it shipping by accident. The token
+    only warns: a placeholder token costs nothing a reader can see (Cloudflare
+    drops the pageview), so it must not block a deploy while measurement is
+    not yet wanted.
+    """
+    for where in page.placeholders:
+        fail(f"{where} is marked data-placeholder: engagement names and starting prices must "
+             "come from the author (#38)")
+    if any(beacon["token"] == BEACON_TOKEN_PLACEHOLDER for beacon in page.beacons):
+        warn(f"the beacon's token is still {BEACON_TOKEN_PLACEHOLDER}, so no pageviews are "
+             "counted: the Cloudflare Web Analytics token must come from the author's "
+             "Cloudflare account (#38)")
+    # #contact too: its engagement <select> repeats the engagement names.
+    for kind in ("consulting", "contact"):
+        for region in page.regions[kind]:
+            if re.search(r"\bTODO\b", region["text"]):
+                fail(f"#{kind} still says TODO: engagement names and starting prices must come "
+                     "from the author (#38)")
+
+
+def check_consulting(page):
+    """The firm, why it is credible here, and named engagements with a starting price.
+
+    Credibility is the one fact the page can prove: CrimsonCow Labs wrote the
+    template the reader is about to use. The test for that is deliberately
+    loose about wording — the firm's name, and a sentence with the word
+    "template" and a verb of authorship in it — so the copy can be rewritten without editing this. Each
+    engagement needs a name and a price signal, a dollar amount, so an enquiry
+    arrives already knowing roughly what it costs.
+    """
+    regions = page.regions["consulting"]
+    if len(regions) != 1:
+        fail(f'expected exactly one element with id="consulting", found {len(regions)}')
+    else:
+        text = regions[0]["text"]
+        if ORG_NAME not in text:
+            fail(f"#consulting does not name {ORG_NAME!r}")
+        # In one sentence, so "products built on it" next to an unrelated
+        # mention of the template does not pass for a claim of authorship.
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        if not any("template" in s.lower() and AUTHORED.search(s) for s in sentences):
+            fail(f"#consulting does not say {ORG_NAME} wrote or maintains this template, "
+                 "which is the reason a reader should trust it here")
+    if not page.engagements:
+        fail('no .engagement elements: #38 asks for named engagements with a starting price')
+    for number, engagement in enumerate(page.engagements, 1):
+        if engagement["placeholder"]:
+            continue  # already failed in check_placeholders, which says what to supply
+        names = [name for name in engagement["names"] if name]
+        label = f".engagement {names[0]!r}" if names else f".engagement #{number}"
+        if len(names) != 1:
+            fail(f"{label}: expected exactly one non-empty <h3> naming it, found {len(names)}")
+        if not any(PRICE.search(price) for price in engagement["prices"]):
+            fail(f'{label}: no .engagement-price with a starting amount in dollars '
+                 f'(found {engagement["prices"]})')
+
+
+def check_contact(page):
+    """A contact form that works, labelled, with a fallback that needs neither it nor the script.
+
+    The form posts natively, so it works with JavaScript off; the script only
+    upgrades it. If the firm's server is unreachable, the mailto link is still
+    there — in the served HTML, which is what this reads, so it cannot be one
+    the script inserts on failure. A native submit comes back to
+    CONTACT_OUTCOME_IDS, which have to be in #contact for :target to show the
+    reader what happened. And the contact section is linked from the
+    navbar, so it is reachable from the top without scrolling the page.
+
+    Which server the form may post to is check_third_party's business; this
+    only requires that it posts to one at all, since Pages cannot take a POST.
+    """
+    regions = page.regions["contact"]
+    if len(regions) != 1:
+        fail(f'expected exactly one element with id="contact", found {len(regions)}')
+        return
+    forms = [form for form in page.forms if form["id"] == "contact-form"]
+    if len(forms) != 1:
+        fail(f'expected exactly one <form id="contact-form">, found {len(forms)}')
+    else:
+        form = forms[0]
+        if not form["in_contact"]:
+            fail('<form id="contact-form"> is not inside #contact')
+        if form["method"] != "post":
+            fail(f'<form id="contact-form"> has method {form["method"]!r}, not post')
+        if not OFF_ORIGIN.match(form["action"]):
+            fail(f'<form id="contact-form"> posts to {form["action"]!r}, which is GitHub Pages: '
+                 "it cannot receive a POST, so the form only works with the script")
+
+        fields = [field for field in page.fields if field["form"] == "contact-form"]
+        names = {field["name"] for field in fields}
+        for required in CONTACT_FIELDS:
+            if required not in names:
+                what = "honeypot field" if required == HONEYPOT else "field"
+                fail(f'the contact form has no {what} named {required!r}')
+        for field in fields:
+            if field["name"] == HONEYPOT or field["type"] in ("hidden", "submit", "button", "reset", "image"):
+                continue
+            if not field["labelled"] and field["id"] not in page.label_for:
+                fail(f'contact form <{field["tag"]} name="{field["name"]}"> has no <label>: '
+                     "wrap it in one or point one at its id with for=")
+        for field in fields:
+            limit = CONTACT_MAXLENGTH.get(field["name"])
+            if limit is not None and field["maxlength"] != str(limit):
+                fail(f'contact form <{field["tag"]} name="{field["name"]}"> has maxlength '
+                     f'{field["maxlength"] or "unset"}, not the server\'s limit of {limit}')
+            if field["name"] == "email":
+                if field["type"] != "email":
+                    fail(f'the contact form\'s email field is type {field["type"]!r}, not "email"')
+                if not field["required"]:
+                    fail("the contact form's email field is not required")
+
+    mailto = f"mailto:{CONTACT_EMAIL}"
+    if not any(href.split("?")[0] == mailto for href in regions[0]["links"]):
+        fail(f'no <a href="{mailto}"> in the served HTML of #contact: if the form\'s server is '
+             "unreachable or the script is blocked, the reader has no other way to reach out")
+
+    for outcome in CONTACT_OUTCOME_IDS:
+        if outcome not in regions[0]["ids"]:
+            fail(f'no id="{outcome}" in #contact: the server sends a no-JS submit back to '
+                 f"{PAGE_URL}#{outcome}, and without it the reader is not told what happened")
+
+    navbar = page.regions[NAVBAR]
+    if not any(href in ("#contact", PAGE_URL + "#contact") for region in navbar for href in region["links"]):
+        fail('no link to #contact in <header class="navbar">: the contact path has to be '
+             "reachable from the top of the page")
+
+
+def check_measurement(page):
+    """The page says what it measures, and the beacon it says it uses is there and configured.
+
+    #38 asks for measurement that sets no cookies and collects no personal
+    data, and for the page to say so; this audience notices tracking, so the
+    disclosure names the provider and the absence of cookies outright.
+    """
+    regions = page.regions["measurement"]
+    if len(regions) != 1:
+        fail(f'expected exactly one element with id="measurement", found {len(regions)}: '
+             "the page has to say what it measures")
+    else:
+        text = regions[0]["text"]
+        if "cookie" not in text.lower():
+            fail(f"#measurement does not say anything about cookies: {text!r}")
+        if "Cloudflare" not in text:
+            fail(f"#measurement does not name Cloudflare Web Analytics: {text!r}")
+
+    if not page.beacons:
+        fail(f'no <script src="{BEACON_URL}">: pageviews are not measured')
+        return
+    beacon = page.beacons[0]
+    if beacon["config_error"]:
+        fail(f"the beacon's data-cf-beacon is not a JSON object: {beacon['config']!r}")
+    elif not isinstance(beacon["token"], str) or not beacon["token"].strip():
+        fail(f"the beacon's data-cf-beacon has no token: {beacon['config']!r}")
 
 
 def check_indexing(page):
@@ -875,7 +1244,7 @@ def check_commercial_support(page):
     this check to hold to: it names the firm the way a person reads it and
     links to where to reach it.
     """
-    statements = page.commercial_support
+    statements = page.regions["commercial-support"]
     if len(statements) != 1:
         fail(f'expected exactly one element with id="commercial-support", found {len(statements)}')
         return
@@ -967,13 +1336,21 @@ def main():
         check_commercial_support(page)
         check_content_without_javascript(page)
         check_llms_txt(page, site)
+        check_placeholders(page)
+        check_consulting(page)
+        check_contact(page)
+        check_measurement(page)
 
+    for message in warnings:
+        print(f"::warning::{message}", file=sys.stderr)
     for message in failures:
         print(f"FAIL: {message}", file=sys.stderr)
     if failures:
         sys.exit(1)
     print(f"ok: {site} is a static landing page with a copyable install command, "
-          f"structured data that matches its FAQ, a linked {LLMS_TXT}, {indexing}")
+          f"structured data that matches its FAQ, a linked {LLMS_TXT}, priced engagements, "
+          f"a contact form with a mailto fallback, disclosed cookieless measurement and "
+          f"no third party beyond THIRD_PARTY, {indexing}")
 
 
 if __name__ == "__main__":

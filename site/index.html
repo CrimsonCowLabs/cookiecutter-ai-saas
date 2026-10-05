@@ -191,9 +191,12 @@
          before the first paint instead of flashing the other one; the rest
          waits for the document. Everything the page means is already in the
          HTML below — this only adds conveniences on top of it (a theme
-         override, checklist persistence and progress, copy buttons), and the
-         page is still complete and usable with it turned off: the theme then
-         follows prefers-color-scheme from CSS alone. -->
+         override, checklist persistence and progress, copy buttons, CTA click
+         counts, an in-place contact form submit), and the page is still
+         complete and usable with it turned off: the theme then follows
+         prefers-color-scheme from CSS alone, and the contact form posts
+         natively. Its only off-origin requests are the two CrimsonCow Labs
+         endpoints below (issue #38), and neither can block or break the page. -->
     <script>
       (function () {
         "use strict";
@@ -455,6 +458,7 @@
             navigator.clipboard.writeText(pre.textContent.trim()).then(
               function () {
                 report("copied", "Install commands copied.");
+                track("install-copy");
               },
               function () {
                 report("copy failed", "Could not copy — select the commands below instead.");
@@ -465,9 +469,144 @@
           head.appendChild(status);
         }
 
+        // ---- Measurement ------------------------------------------------
+
+        // Counts one call-to-action click on CrimsonCow Labs' own server: the
+        // CTA's name and nothing else — no cookie, no referrer, no
+        // identifier, no page state. Fire-and-forget: no-cors so there is no response to wait
+        // for, keepalive so it survives the navigation the click starts, and
+        // every failure (blocked, offline, server down) is swallowed, so
+        // counting can never break or delay what the reader clicked.
+        var EVENT_URL = "https://crimsoncowlabs.com/api/cookiecutter/event";
+
+        function track(cta) {
+          try {
+            if (!window.fetch || !window.URLSearchParams) return;
+            fetch(EVENT_URL, {
+              method: "POST",
+              mode: "no-cors",
+              credentials: "omit",
+              referrerPolicy: "no-referrer",
+              keepalive: true,
+              body: new URLSearchParams({ cta: cta })
+            }).catch(function () {});
+          } catch (err) {
+            // Counting is best-effort; the click itself already happened.
+          }
+        }
+
+        function trackLinks() {
+          // The repo URL comes from the navbar's own link rather than a
+          // second copy of it here, so the two cannot drift apart.
+          var repo = document.getElementById("repo-link");
+          var repoUrl = repo ? repo.href.replace(/\/+$/, "") : null;
+          // Likewise the contact address, from the mailto link beside the form.
+          var mail = document.getElementById("contact-email");
+          var mailto = mail ? mail.getAttribute("href") : null;
+          // One delegated listener covers every link, including ones added
+          // later (the status message's copy of the mailto link). Only the
+          // repo root counts as "repo", not its issues or docs; links to the
+          // contact section and to the contact address count as "contact".
+          document.addEventListener("click", function (event) {
+            var link = event.target.closest ? event.target.closest("a[href]") : null;
+            if (!link) return;
+            var href = link.getAttribute("href");
+            if (href === "#contact" || (mailto && href === mailto)) {
+              track("contact");
+            } else if (repoUrl && link.href.replace(/\/+$/, "") === repoUrl) {
+              track("repo");
+            }
+          });
+        }
+
+        // ---- Contact form -----------------------------------------------
+
+        var FORM_TIMEOUT_MS = 10000;
+
+        function setUpContactForm() {
+          var form = document.getElementById("contact-form");
+          var status = document.getElementById("contact-status");
+          var email = document.getElementById("contact-email");
+          var submit = document.getElementById("contact-submit");
+          var select = document.getElementById("contact-engagement");
+          if (!form || !status) return;
+
+          function show(kind, text, withEmail) {
+            status.className = "contact-status is-" + kind;
+            status.textContent = text;
+            if (withEmail && email) {
+              // The address is the one already in the HTML beside the form,
+              // copied rather than restated, so there is one place to change it.
+              status.appendChild(document.createTextNode(" "));
+              status.appendChild(email.cloneNode(true)).removeAttribute("id");
+              status.appendChild(document.createTextNode(" instead."));
+            }
+          }
+
+          function unreachable() {
+            show("error", "Couldn't reach the form service — email", true);
+          }
+
+          // "Ask about this" on an engagement preselects it in the form.
+          document.querySelectorAll("[data-engagement]").forEach(function (link) {
+            link.addEventListener("click", function () {
+              var index = Number(link.dataset.engagement);
+              if (select && select.options[index]) select.selectedIndex = index;
+            });
+          });
+
+          if (!window.fetch || !window.FormData || !window.URLSearchParams) return;
+
+          form.addEventListener("submit", function (event) {
+            event.preventDefault();
+            var controller = window.AbortController ? new AbortController() : null;
+            var timer = controller ? setTimeout(function () { controller.abort(); }, FORM_TIMEOUT_MS) : null;
+            // Runs however the attempt ends — even if showing the outcome
+            // throws — so the button is never left disabled.
+            function done() {
+              clearTimeout(timer);
+              if (submit) submit.disabled = false;
+            }
+            if (submit) submit.disabled = true;
+            show("pending", "Sending…");
+            fetch(form.action, {
+              method: "POST",
+              body: new URLSearchParams(new FormData(form)),
+              headers: { Accept: "application/json" },
+              credentials: "omit",
+              referrerPolicy: "no-referrer",
+              signal: controller ? controller.signal : undefined
+            })
+              .then(function (response) {
+                // Anything that is not the service's own JSON — a proxy's
+                // error page, a 404 — is the service being unreachable.
+                return response.json();
+              })
+              .then(
+                function (result) {
+                  if (result && result.ok === true) {
+                    show("ok", "Thanks — your message is on its way. We'll reply by email.");
+                    form.reset();
+                  } else if (result && typeof result.error === "string" && result.error) {
+                    show("error", result.error);
+                  } else {
+                    unreachable();
+                  }
+                },
+                // Blocked, offline, timed out or not JSON: the reader's
+                // message stays in the form, and the email address is right
+                // there.
+                unreachable
+              )
+              .then(done, done);
+          });
+        }
+
         document.addEventListener("DOMContentLoaded", function () {
           addThemeToggle();
           addInstallCopy();
+          trackLinks();
+          setUpContactForm();
           var list = document.getElementById("checklist");
           if (!list) return;
           setUpChecklist(list);
@@ -499,10 +638,12 @@
           <a href="#quickstart">Quickstart</a>
           <a href="#checklist">Checklist</a>
           <a href="#faq">FAQ</a>
+          <a href="#consulting">Consulting</a>
         </nav>
         <div class="navbar-actions">
           <div class="theme-toggle" id="theme-toggle" role="group" aria-label="Colour theme"></div>
-          <a class="btn btn-sm" href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">GitHub</a>
+          <a class="btn btn-sm" id="repo-link" href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">GitHub</a>
+          <a class="btn btn-sm btn-primary" href="#contact">Hire us</a>
         </div>
       </div>
     </header>
@@ -519,6 +660,9 @@
           <p class="hero-actions">
             <a class="btn btn-primary" href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">Read the code on GitHub</a>
             <a class="btn btn-ghost" href="#checklist">Zero to deployed checklist</a>
+          </p>
+          <p class="hero-hire">
+            Want help shipping it? <a href="#consulting">Work with CrimsonCow Labs</a>, who wrote it.
           </p>
         </div>
 
@@ -772,7 +916,102 @@
               <p class="faq-a">Questions, bug reports and feature requests for cookiecutter-ai-saas go to its GitHub issues, at <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues">github.com/CrimsonCowLabs/cookiecutter-ai-saas/issues</a>. Commercial support for cookiecutter-ai-saas is available from CrimsonCow Labs, at <a href="https://crimsoncowlabs.com">crimsoncowlabs.com</a>.</p>
             </div>
           </div>
-          <p class="faq-support" id="commercial-support">Commercial support for cookiecutter-ai-saas is available from CrimsonCow Labs: <a href="https://crimsoncowlabs.com">crimsoncowlabs.com</a>.</p>
+          <p class="faq-support" id="commercial-support">Commercial support for cookiecutter-ai-saas is available from CrimsonCow Labs: <a href="https://crimsoncowlabs.com">crimsoncowlabs.com</a>, or <a href="#consulting">see the engagements below</a>.</p>
+        </div>
+      </section>
+
+      <!-- Issue #38. Each engagement's name, scope and starting price come from
+           the author; scripts/check_site.py fails on any that still carries
+           data-placeholder or a TODO. Keep the <option>s in the contact form
+           below in the same order: "Ask about this" preselects by index. -->
+      <section class="section section-tint" id="consulting">
+        <div class="container section-body">
+          <div class="section-header">
+            <p class="eyebrow">// work with us</p>
+            <h2 class="section-title">Help shipping it, from the people who built it</h2>
+            <p class="section-lede">
+              CrimsonCow Labs does software development consulting and teaching, and wrote and
+              maintains this template &mdash; every part of the stack above, and the decisions
+              behind it. If you would rather have help getting your product built on it, or your
+              team up to speed with it, these are the ways to work with us.
+            </p>
+          </div>
+          <ul class="engagement-list">
+            <li class="engagement">
+              <h3>CrimsonCowLabs</h3>
+              <p class="engagement-scope">Launching your project to a deployed, billing-ready product.</p>
+              <p class="engagement-price">From $2,500</p>
+              <a class="btn btn-sm engagement-cta" href="#contact" data-engagement="0">Ask about this</a>
+            </li>
+          </ul>
+          <p class="closing-line">
+            Not sure which fits? <a href="#contact">Tell us what you're building</a> and we'll say.
+          </p>
+        </div>
+      </section>
+
+      <!-- The form posts to CrimsonCow Labs' own server, so it works without
+           the inline script: the server answers with a 303 back to this page
+           at #contact-sent or #contact-error, and CSS :target shows the
+           matching message below — no script needed. With the script, it
+           submits in place instead, and falls back to the email address
+           below if the server cannot be reached. That address is in the served HTML, not
+           only in the failure message, so a blocked or broken form never
+           costs the reader a way to get in touch. -->
+      <section class="section" id="contact">
+        <div class="container section-body split">
+          <div class="section-header">
+            <p class="eyebrow">// contact</p>
+            <h2 class="section-title">Tell us what you're building</h2>
+            <p class="section-lede">
+              A few lines on the product, where it is now and what you need help with is plenty.
+              It goes straight to a person at CrimsonCow Labs, who will reply by email.
+            </p>
+            <p class="contact-alt">
+              Prefer email? <a id="contact-email" href="mailto:aaron@crimsoncowlabs.com">aaron@crimsoncowlabs.com</a>
+            </p>
+          </div>
+          <form class="contact-form surface-card" id="contact-form" method="post" action="https://crimsoncowlabs.com/api/cookiecutter/contact">
+            <!-- Shown only when the URL's fragment names them (CSS :target),
+                 which is where the server's 303 lands after a no-JS submit.
+                 The limits on the fields below are the server's. -->
+            <p class="contact-flash is-ok" id="contact-sent">
+              Thanks &mdash; your message is on its way. We'll reply by email.
+            </p>
+            <p class="contact-flash is-error" id="contact-error">
+              Your message wasn't sent. Check the fields below and try again, or email us
+              at <a href="mailto:aaron@crimsoncowlabs.com">aaron@crimsoncowlabs.com</a>.
+            </p>
+            <div class="field">
+              <label for="contact-name">Name</label>
+              <input class="input" id="contact-name" name="name" type="text" maxlength="200" required autocomplete="name" />
+            </div>
+            <div class="field">
+              <label for="contact-email-input">Email</label>
+              <input class="input" id="contact-email-input" name="email" type="email" maxlength="320" required autocomplete="email" />
+            </div>
+            <div class="field">
+              <label for="contact-engagement">Interested in</label>
+              <select class="input select" id="contact-engagement" name="engagement">
+                <option>CrimsonCowLabs</option>
+                <option selected>Not sure yet</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="contact-message">Message</label>
+              <textarea class="input contact-message" id="contact-message" name="message" rows="6" maxlength="5000" required></textarea>
+            </div>
+            <!-- A field people never see and bots fill in: the server drops any
+                 submission where it is not empty. -->
+            <div class="hp" aria-hidden="true">
+              <label for="contact-website">Website</label>
+              <input id="contact-website" name="website" type="text" tabindex="-1" autocomplete="off" />
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary" id="contact-submit" type="submit">Send message</button>
+              <p class="contact-status" id="contact-status" role="status" aria-live="polite"></p>
+            </div>
+          </form>
         </div>
       </section>
 
@@ -797,7 +1036,21 @@
         <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas">CrimsonCowLabs/cookiecutter-ai-saas</a>
         <span>Plain-text summary for AI assistants: <a href="llms.txt">llms.txt</a></span>
         <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/LICENSE">MIT licensed</a>
+        <p class="footer-note" id="measurement">
+          What this page measures: Cloudflare Web Analytics counts pageviews without cookies. To do
+          that it sees the page's address, the page you came from and your browser type, and it
+          stores no cookie or identifier on your device. Clicks on the repo link, the install copy
+          button and the contact links are sent to CrimsonCow Labs' own server as bare counts: no
+          cookies, no referrer, and nothing that identifies you is stored. The contact form sends
+          only what you type into it.
+        </p>
       </div>
     </footer>
+
+    <!-- Pageview counting (issue #38): Cloudflare Web Analytics, cookieless.
+         defer, at the end of <body>, and nothing on the page waits for it or
+         depends on its response — blocked or unreachable, the page is the
+         same. The token is the author's to supply. -->
+    <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "CF_BEACON_TOKEN_TODO"}'></script>
   </body>
 </html>
