@@ -31,15 +31,17 @@ redirect in anything published — use the canonical path above.
 
 `site/` is hand-written HTML and CSS: `index.html`, `styles.css`, and a small
 number of static assets described below. There is no build step, no
-framework and no third-party runtime dependency, and that is a constraint
-rather than a stage the page has not outgrown yet. A page with no toolchain
-cannot have a broken toolchain, and it is the fastest and most crawlable
-thing this repo can serve.
+framework and no third-party runtime dependency beyond the named list #38
+admits (see "Consulting, contact and measurement" below), and that is a
+constraint rather than a stage the page has not outgrown yet. A page with no
+toolchain cannot have a broken toolchain, and it is the fastest and most
+crawlable thing this repo can serve.
 
 Issue #35 spent one piece of that constraint, deliberately: `index.html` may
 now carry `<script>`, but only inline, with no `src` — not to a CDN and not to
-a local file either. That is still "no third-party runtime dependency" and
-still no build step; it is the page shipping a few lines of its own
+a local file either (#38 later admitted exactly one `src`, the analytics
+beacon). That was still "no third-party runtime dependency" and still no
+build step; it is the page shipping a few lines of its own
 vanilla JS rather than depending on anything that isn't committed in the file
 itself. The checklist's persistence and its Markdown copy button are built
 that way, as are the theme toggle, the progress counter and the install
@@ -52,7 +54,8 @@ Issue #37 added a second `<script>`, of a different kind: a
 assistants and structured data" below). A browser never executes it, so it is
 data rather than a runtime dependency, and it is the only other script type
 the checks admit. "The inline script" below still means the one classic
-script; it is the only JavaScript on the page.
+script; it is the only JavaScript the page ships itself (#38's analytics
+beacon is Cloudflare's, loaded deferred).
 
 `.github/workflows/public-site.yml` uploads `site/` to Pages exactly as
 committed, on every push to `main` that touches the page source. Pull requests
@@ -103,12 +106,17 @@ The script lives in `<head>` rather than at the end of `<body>` so a
 remembered theme is applied before first paint, instead of flashing the
 other one; everything else in it waits for `DOMContentLoaded`. It is still
 the page's one inline classic script (the JSON-LD block is data, not
-code). Besides the theme toggle it restores and saves checklist state (`cookiecutter-ai-saas-checklist`, keyed by each checkbox's
-`data-id` — don't rename those, or returning visitors lose their progress),
-shows the done/total counter and progress bar, and adds the "Copy as
-Markdown" and install-command copy buttons. Every one of those controls is
-inserted or revealed by the script, so none sits on the page doing nothing
-when it doesn't run.
+code). Besides the theme toggle it restores and saves checklist state
+(`cookiecutter-ai-saas-checklist`, keyed by each checkbox's `data-id` —
+don't rename those, or returning visitors lose their progress), shows the
+done/total counter and progress bar, and adds the "Copy as Markdown" and
+install-command copy buttons. Every one of those controls is inserted or
+revealed by the script, so none sits on the page doing nothing when it
+doesn't run. Since #38 it also counts call-to-action clicks (repo, install
+copy, contact) and upgrades the contact form to submit in place; both are
+enhancements of things that work without it — the links still go where they
+go, and the form still posts natively (see "Consulting, contact and
+measurement" below).
 
 The install command's `$ ` prompts are CSS `::before` generated content, not
 text in the HTML, so they are never selected or copied — and never seen by
@@ -231,8 +239,8 @@ there deliberately isn't one. `check_llms_txt` checks the file and the link.
 `check_no_build_step` admits exactly one `.txt` file, `llms.txt` at the top
 of `site/` — `robots.txt` is still rejected by name. Script types widened
 from "classic, inline" to that plus `application/ld+json`; any other `type`
-fails, and no script may have a `src`. None of the FAQ, support statement or
-structured data may be built by the inline script
+fails, and no script may have a `src` except the one #38 names. None of the
+FAQ, support statement or structured data may be built by the inline script
 (`check_content_without_javascript`): the checks read the served HTML, which
 is what a no-JS crawler sees, so finding them there is the proof they work
 without it.
@@ -241,6 +249,81 @@ without it.
 `llms.txt` must be true of the current template. An assistant repeats what it
 finds, so an inflated claim becomes a support burden. Add a property only if
 it is true today, and change it in the same PR that makes it untrue.
+
+## Consulting, contact and measurement (issue #38)
+
+This is the ticket that spends #33's "no third-party runtime dependency". It
+is amended, not dropped: still no build step, no framework, and the
+allowance is a named list — `THIRD_PARTY` in `scripts/check_site.py` — of
+exactly these URLs, each allowed in one place:
+
+| URL | Allowed as | Why |
+| --- | --- | --- |
+| `https://static.cloudflareinsights.com/beacon.min.js` | the one `<script src>`, `defer` | Cloudflare Web Analytics pageviews. Pages keeps no server logs, so it is a beacon or no numbers. |
+| `https://cloudflareinsights.com` | nowhere in the HTML | Where the beacon sends each pageview. The page never names it, but it does talk to it, so it is on the list; writing it into the markup or the inline script still fails. |
+| `https://crimsoncowlabs.com/api/cookiecutter/contact` | the contact form's `action`, and the inline script | The firm's own server, which emails the enquiry via Resend. |
+| `https://crimsoncowlabs.com/api/cookiecutter/event` | the inline script only | The firm's own server, counting call-to-action clicks. |
+
+The two `crimsoncowlabs.com` endpoints live in the
+`CrimsonCowLabs/marketing-site` repo, not here. Any other off-origin `src`, stylesheet, font, preconnect, form
+action, or URL in the inline script fails (`check_third_party`). An ad network
+or a tag manager would need this conversation again, not a new row. In
+`THIRD_PARTY` each URL's uses are a set of named places (`script src`,
+`form action`, `inline script`, and for `cloudflareinsights.com` only "sent
+by the beacon"); the inline-script check also catches protocol-relative
+`//host` URLs.
+
+**What is measured, and what is not.** Pageviews, via Cloudflare Web
+Analytics: it sets no cookie and stores no identifier on the reader's device,
+but to count a pageview it does see the page URL, the referrer and the
+browser type. Clicks on the repo link, the install-command copy button and
+the contact links (`#contact` and the `mailto:` address) are sent by the
+inline script to the event endpoint with `credentials: "omit"` and
+`referrerPolicy: "no-referrer"`, and stored as bare daily counts with no IP
+address or user agent. The form sends only what the reader types.
+`#measurement` says exactly this on the page — keep it no stronger than
+that — and `check_measurement` requires it to mention cookies and name
+Cloudflare.
+
+**A blocked tracker or an unreachable server costs no lead.** The beacon is
+`defer`, so it never blocks rendering, and nothing on the page waits for a
+third-party response. The contact form posts natively — with JavaScript off
+the firm's server answers with a 303 back to the page — and the script only
+upgrades it to `fetch`. `aaron@crimsoncowlabs.com` is a `mailto:` link in
+`#contact`'s served HTML, so it is there when the form, the server and the
+script all fail (`check_contact`). The navbar links to `#contact`, so the
+path is reachable from the top. Test this with a blocker actually on.
+
+**The no-JS round trip is a contract with the server.** After a native POST
+the server answers with a 303 to `PAGE_URL#contact-sent` on success or
+`PAGE_URL#contact-error` on failure — a fragment, never a query string. Both
+are `<p class="contact-flash">` elements in `#contact`'s served HTML, hidden
+by default and shown by CSS `:target`, so a reader with JavaScript off is
+told what happened (the error one carries the `mailto:` link). The script
+does not read the URL at all; with it on, the form never navigates. The
+inputs carry the server's own limits as `maxlength` (name 200, email 320,
+message 5000). `check_contact` requires both ids inside `#contact` and those
+limits (`CONTACT_OUTCOME_IDS`, `CONTACT_MAXLENGTH`); change them together
+with the server in `CrimsonCowLabs/marketing-site`.
+
+**One cookie caveat.** The page and the app set no cookies, and both fetch
+paths omit credentials. But a native (no-JS) form POST is a top-level
+navigation to `crimsoncowlabs.com`, and Cloudflare's edge in front of that
+host may set its own bot-management cookie (`__cf_bm`) on that response.
+That is Cloudflare's, on the firm's domain, not this page's — but it is why
+`#measurement` speaks for what the page and its counters do, not for every
+host a reader might end up on.
+
+**Placeholders fail CI.** The engagements' names and starting prices are the
+author's business decisions, and the beacon token comes from the author's
+Cloudflare account; none may be invented. Until they are supplied the page
+carries placeholders — `data-placeholder` on the element plus `TODO` in its
+text, and the literal token `CF_BEACON_TOKEN_TODO` — and `check_placeholders`
+fails on any of them. CI stays red until the author fills them in, which is
+the point: a page saying "From $TODO" cannot ship by accident. Once filled,
+`check_consulting` requires each `.engagement` to have an `<h3>` name and a
+`.engagement-price` with a dollar amount, and `#consulting` to say the firm
+wrote or maintains the template.
 
 ## Indexing is held back on purpose
 
