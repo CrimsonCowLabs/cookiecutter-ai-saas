@@ -7,6 +7,9 @@ __pycache__/
 .venv/
 venv/
 
+# Node (scripts/site-audit is a dev-time tool; its deps are installed, not committed)
+/scripts/site-audit/node_modules/
+
 # macOS
 .DS_Store
 ._*

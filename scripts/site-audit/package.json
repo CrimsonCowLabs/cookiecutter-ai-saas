@@ -1,0 +1,13 @@
+{
+  "name": "site-audit",
+  "private": true,
+  "description": "Dev-time mobile, accessibility and performance audit of the public landing page in site/ (issue #39). Not a page dependency.",
+  "type": "module",
+  "scripts": {
+    "audit": "node audit.mjs"
+  },
+  "dependencies": {
+    "axe-core": "4.14.0",
+    "playwright-core": "1.63.0"
+  }
+}
