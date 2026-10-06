@@ -281,5 +281,5 @@ cookiecutter prompts — by the time you have a generated project, `globals.css`
 and `config.ts` already have concrete values and nothing is templated.
 
 This is the theme system for a *generated project*. The public landing page
-at `site/` is a separate, hand-written page with its own Ember/Paper themes —
+at `site/` is a separate, hand-written page with its own Dark/Light themes —
 see [`docs/design-system.md`](design-system.md) for that one.

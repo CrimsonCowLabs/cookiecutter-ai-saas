@@ -185,6 +185,7 @@
     </script>
 
     <link rel="stylesheet" href="styles.css" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <!-- The one allowance issue #35 made: inline only, first-party, no src
          anywhere (scripts/check_site.py enforces that). It sits in <head>
          rather than at the end of <body> so a remembered theme is applied
@@ -205,8 +206,8 @@
         var THEME_KEY = "cookiecutter-ai-saas-theme";
         var CHECKLIST_KEY = "cookiecutter-ai-saas-checklist";
         var THEMES = [
-          { id: "ember", name: "Ember" },
-          { id: "paper", name: "Paper" }
+          { id: "dark", name: "Dark" },
+          { id: "light", name: "Light" }
         ];
         var prefersLight = window.matchMedia
           ? window.matchMedia("(prefers-color-scheme: light)")
@@ -240,10 +241,10 @@
         // ---- Theme ------------------------------------------------------
 
         var saved = load(THEME_KEY);
-        if (saved === "ember" || saved === "paper") ROOT.setAttribute("data-theme", saved);
+        if (saved === "dark" || saved === "light") ROOT.setAttribute("data-theme", saved);
 
         function systemTheme() {
-          return prefersLight && prefersLight.matches ? "paper" : "ember";
+          return prefersLight && prefersLight.matches ? "light" : "dark";
         }
 
         function activeTheme() {
@@ -427,7 +428,7 @@
           if (!head || !pre || !navigator.clipboard || !navigator.clipboard.writeText) return;
           var button = document.createElement("button");
           button.type = "button";
-          button.className = "btn btn-xs btn-ghost";
+          button.className = "btn btn-sm btn-ghost";
           // The visible label is terse; the hidden hint says what it copies,
           // and the live region announces the outcome the label change shows.
           var label = document.createElement("span");
@@ -617,6 +618,7 @@
   </head>
 
   <body>
+    <a class="skip-link" href="#top">Skip to content</a>
     <div class="ambient" aria-hidden="true"></div>
 
     <header class="navbar">
@@ -1048,9 +1050,12 @@
     </footer>
 
     <!-- Pageview counting (issue #38): Cloudflare Web Analytics, cookieless.
-         defer, at the end of <body>, and nothing on the page waits for it or
+         async, at the end of <body>, and nothing on the page waits for it or
          depends on its response — blocked or unreachable, the page is the
-         same. The token is the author's to supply. -->
-    <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "CF_BEACON_TOKEN_TODO"}'></script>
+         same. async rather than defer: a deferred script runs before
+         DOMContentLoaded, which would hold every script-built control back
+         until a third-party CDN answered. The token is the author's to
+         supply. -->
+    <script async src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "CF_BEACON_TOKEN_TODO"}'></script>
   </body>
 </html>

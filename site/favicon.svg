@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- The navbar's logo, in each theme's primary colour. Without a favicon a
+       browser asks the host root for /favicon.ico, which belongs to another
+       repo here and is a 404. -->
+  <style>
+    svg { color: #b4370a; }
+    @media (prefers-color-scheme: dark) { svg { color: #f2703a; } }
+  </style>
+  <path d="M12 2.5l8.23 4.75v9.5L12 21.5l-8.23-4.75v-9.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+  <path d="M12 7.25l1.15 3.6 3.6 1.15-3.6 1.15L12 16.75l-1.15-3.6-3.6-1.15 3.6-1.15z" fill="currentColor" />
+  <circle cx="8.4" cy="8.4" r="0.85" fill="currentColor" />
+  <circle cx="15.6" cy="8.4" r="0.85" fill="currentColor" />
+  <circle cx="8.4" cy="15.6" r="0.85" fill="currentColor" />
+  <circle cx="15.6" cy="15.6" r="0.85" fill="currentColor" />
+</svg>
