@@ -719,11 +719,11 @@
             </p>
           </div>
           <dl class="stack-list">
-            <div><dt>app</dt><dd>A <strong>Next.js app</strong> your users see: sign-in, dashboard, billing, settings.</dd></div>
+            <div><dt>app</dt><dd>A <strong>Next.js app</strong> your users see: sign-in, a dashboard, and billing settings when Stripe is on.</dd></div>
             <div><dt>worker</dt><dd>A <strong>Python worker</strong> that does the AI part — pulls a job off the queue, calls the model you chose, reports progress as it goes.</dd></div>
             <div><dt>database</dt><dd><strong>Postgres</strong> for everything that still has to be there tomorrow.</dd></div>
             <div><dt>queue</dt><dd><strong>Redis and BullMQ</strong> carrying jobs between the app and the worker.</dd></div>
-            <div><dt>deploy</dt><dd>A <strong>Docker Compose stack behind Caddy</strong> that one Ansible playbook can put on a fresh VPS, TLS included.</dd></div>
+            <div><dt>deploy</dt><dd>A <strong>Docker Compose stack behind Caddy</strong> that two Ansible playbooks put on a fresh VPS &mdash; one provisions it, one deploys &mdash; TLS included.</dd></div>
           </dl>
         </div>
       </section>
@@ -737,7 +737,7 @@
           </div>
           <dl class="choice-list">
             <div><dt>LLM provider</dt><dd>Ollama, OpenAI, Anthropic, or OpenRouter — whichever the worker calls, and the only credentials you have to go get.</dd></div>
-            <div><dt>Stripe</dt><dd>On, with real checkout and portal wiring. Off, and it's not in the generated project at all.</dd></div>
+            <div><dt>Stripe</dt><dd>On, with real checkout and portal wiring. Off, and the checkout, portal, webhook and billing settings page are left out of the generated project.</dd></div>
             <div><dt>Auth providers</dt><dd>Google, Microsoft, or both — which sign-in buttons a visitor sees.</dd></div>
             <div><dt>Magic link</dt><dd>Passwordless email sign-in via Resend, independent of whichever OAuth providers you picked.</dd></div>
             <div><dt>pgvector</dt><dd>On, and Postgres can do vector similarity search — embeddings, semantic search, retrieval. Off, and it's plain Postgres.</dd></div>
@@ -747,7 +747,7 @@
             The rest is naming and defaults: project name, slug, and description; author name and
             email; domain; brand color and theme; Python and Node versions; and the local Postgres
             and Redis ports. Straight answers, not decisions — with one exception. Your author email
-            doubles as the contact address on your TLS certificate, which is the kind of detail that
+            doubles as the contact address for your TLS certificate, which is the kind of detail that
             only matters once, covered in the
             <a href="https://github.com/CrimsonCowLabs/cookiecutter-ai-saas/blob/main/docs/deployment.md#https-and-tls">deployment guide</a>.
           </p>
@@ -853,7 +853,7 @@
                 <li><label><input type="checkbox" class="checkbox" data-id="local-migration-generate" /><span class="check-text"><strong>First migration generated</strong> &mdash; Done: <code>npm run db:generate</code> created a migration file. The template ships none, so this runs once before there's anything to apply.</span></label></li>
                 <li><label><input type="checkbox" class="checkbox" data-id="local-migration-run" /><span class="check-text"><strong>Migration applied</strong> &mdash; Done: <code>npm run db:migrate</code> ran it with no errors.</span></label></li>
                 <li><label><input type="checkbox" class="checkbox" data-id="local-dev-server" /><span class="check-text"><strong>Dev server running</strong> &mdash; Done: <code>npm run dev</code> is up, and <code>http://localhost:3000</code> loads in a browser.</span></label></li>
-                <li><label><input type="checkbox" class="checkbox" data-id="local-worker" /><span class="check-text"><strong>Worker running</strong> &mdash; Done: in <code>workers/app</code>, after <code>pip install "poetry&gt;=2.5,&lt;3" &amp;&amp; poetry install</code>, <code>python worker.py</code> is running and logs that it's connected to Redis.</span></label></li>
+                <li><label><input type="checkbox" class="checkbox" data-id="local-worker" /><span class="check-text"><strong>Worker running</strong> &mdash; Done: in <code>workers/app</code>, after <code>pip install "poetry&gt;=2.5,&lt;3" &amp;&amp; poetry install</code>, <code>python worker.py</code> is running and logs that it's listening for jobs.</span></label></li>
                 <li><label><input type="checkbox" class="checkbox" data-id="local-db-writer" /><span class="check-text"><strong>DB writer running</strong> &mdash; Done: with <code>.env.local</code> exported into the shell (<code>set -a &amp;&amp; source .env.local &amp;&amp; set +a</code>), <code>npm run worker:db-writer</code> is running without error.</span></label></li>
               </ul>
             </div>

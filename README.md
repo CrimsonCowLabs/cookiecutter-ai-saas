@@ -4,6 +4,8 @@ A cookiecutter template for scaffolding production-ready, full-stack AI SaaS
 applications: Next.js + a Python AI worker, with auth, billing, background
 jobs, and one-command VPS provisioning and deployment.
 
+**Project page:** <https://crimsoncowlabs.github.io/cookiecutter-ai-saas/>
+
 > **Status: pre-release.** This template is being modernized ahead of its first
 > tagged release — dependencies, the agent layer, and deployment tooling are all
 > in flight. Not yet recommended for production use.

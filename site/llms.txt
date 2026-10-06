@@ -4,7 +4,7 @@
 
 ## What it includes
 
-- App: Next.js 16, React 19 and TypeScript, styled with Tailwind CSS and DaisyUI. Sign-in, dashboard and settings pages, with billing under settings when Stripe is on.
+- App: Next.js 16, React 19 and TypeScript, styled with Tailwind CSS and DaisyUI. Sign-in and dashboard pages, plus a settings page with plan and billing when Stripe is on.
 - Auth: NextAuth v5 with Google and/or Microsoft OAuth, and optional email magic-link sign-in via Resend.
 - Billing: optional Stripe checkout and customer portal.
 - Worker: a Python worker that consumes BullMQ jobs and hands them to a bounded, tool-calling LangGraph agent, reporting progress as it goes.
@@ -15,7 +15,7 @@
 Choices made once, at generation time:
 
 - LLM provider: Ollama, OpenAI, Anthropic or OpenRouter.
-- Stripe billing: on or off (off removes it from the generated project).
+- Stripe billing: on or off (off leaves the checkout, customer portal, webhook and billing settings page out of the generated project).
 - OAuth providers: Google and Microsoft, Google only, or Microsoft only.
 - Magic-link sign-in via Resend: on or off.
 - pgvector: on or off.
