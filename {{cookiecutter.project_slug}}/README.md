@@ -263,8 +263,10 @@ pages are checked against WCAG 2.2 AA, and `/legal/accessibility` is its
 accessibility statement.
 {%- if cookiecutter.include_stripe == "yes" %} Every subscribe button shows the plan's
 automatic-renewal terms beside it, Stripe Checkout repeats them and requires
-agreeing to the Terms of Service, and `/legal/subscriptions` explains renewal,
-cancellation and refunds (California's Automatic Renewal Law).
+agreeing to the Terms of Service, new subscribers are emailed the same terms
+and how to cancel (when Resend is configured), and `/legal/subscriptions`
+explains renewal, cancellation and refunds (California's Automatic Renewal
+Law).
 {%- endif %}
 [docs/compliance.md](docs/compliance.md) covers each risk, what the app
 already does and what is still up to you. It is not legal advice.

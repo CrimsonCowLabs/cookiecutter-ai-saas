@@ -151,7 +151,9 @@ export const subscriptions = pgTable("subscriptions", {
   userId: uuid("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
-  stripeSubscriptionId: text("stripe_subscription_id").notNull(),
+  // Unique so a redelivered checkout.session.completed event can't record the
+  // same subscription twice, or send its acknowledgment email twice.
+  stripeSubscriptionId: text("stripe_subscription_id").notNull().unique(),
   stripePriceId: text("stripe_price_id").notNull(),
   plan: planEnum("plan").notNull(),
   status: subscriptionStatusEnum("status").notNull(),

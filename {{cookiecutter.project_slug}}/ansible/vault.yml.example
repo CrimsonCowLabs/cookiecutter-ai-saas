@@ -70,7 +70,8 @@ vault_stripe_webhook_secret: ""
 
 # cc:begin resend
 # ─── Email ─────────────────────────────────────────────────────────────────
-# Resend sends the magic-link emails and the contact-form notifications.
+# Resend sends the magic-link emails, the contact-form notifications and the
+# acknowledgment new subscribers get.
 vault_resend_api_key: ""
 # cc:end resend
 

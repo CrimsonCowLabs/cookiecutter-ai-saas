@@ -396,12 +396,13 @@ setup_feature_credentials() {
     prompt_for_credential MICROSOFT_ENTRA_ID_TENANT_ID "Microsoft Entra ID tenant ID: "
   fi
 
-  # RESEND_API_KEY survives for magic-link sign-in OR the contact form
-  # (post_gen_project.py's "resend" marker is `magic_link or extras`), so it
-  # doesn't by itself say which — the prompt below covers both.
+  # RESEND_API_KEY survives for magic-link sign-in, the contact form OR the
+  # subscription acknowledgment (post_gen_project.py's "resend" marker is
+  # `magic_link or extras or stripe`), so it doesn't by itself say which —
+  # the prompt below covers all three.
   if grep -qE '^RESEND_API_KEY=' .env.local; then
     echo
-    echo "Resend is enabled (used for magic-link sign-in and/or the contact form)."
+    echo "Resend is enabled (used for magic-link sign-in, the contact form and/or subscription acknowledgment emails)."
     echo "Get an API key at: https://resend.com/api-keys"
     prompt_for_credential RESEND_API_KEY "Resend API key: "
   fi

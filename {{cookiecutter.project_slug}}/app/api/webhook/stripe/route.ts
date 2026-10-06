@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { users, subscriptions, purchases } from "@/lib/db/schema";
 import { getStripe, findCheckoutSession } from "@/lib/stripe";
 import { audit } from "@/lib/audit";
+import { sendSubscriptionAcknowledgment } from "@/lib/subscription-acknowledgment";
 import config from "@/config";
 
 /**
@@ -211,15 +212,30 @@ export async function POST(req: NextRequest) {
 
           const period = getSubscriptionPeriod(sub);
 
-          await db.insert(subscriptions).values({
-            userId: user.id,
-            stripeSubscriptionId: sub.id,
-            stripePriceId: priceId!,
-            plan: plan.tier,
-            status: "active",
-            currentPeriodStart: period.start,
-            currentPeriodEnd: period.end,
-          });
+          // An empty `inserted` means Stripe redelivered an event this
+          // subscription was already recorded for (see the unique
+          // stripe_subscription_id in lib/db/schema.ts), and the subscriber
+          // was already sent the acknowledgment below.
+          const inserted = await db
+            .insert(subscriptions)
+            .values({
+              userId: user.id,
+              stripeSubscriptionId: sub.id,
+              stripePriceId: priceId!,
+              plan: plan.tier,
+              status: "active",
+              currentPeriodStart: period.start,
+              currentPeriodEnd: period.end,
+            })
+            .onConflictDoNothing({ target: subscriptions.stripeSubscriptionId })
+            .returning();
+
+          // California's Automatic Renewal Law: acknowledge the subscription
+          // with its terms and how to cancel (a no-op without Resend; see
+          // lib/subscription-acknowledgment.ts).
+          if (inserted.length > 0) {
+            await sendSubscriptionAcknowledgment({ to: user.email, plan });
+          }
         }
 
         break;

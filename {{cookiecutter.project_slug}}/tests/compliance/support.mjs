@@ -43,6 +43,34 @@ export function minimumAge() {
   return value;
 }
 
+// cc:begin stripe
+/**
+ * config.stripe.plans, read out of config.ts (the project root is the cwd):
+ * [{ tier, name, price, currency, interval, priceId }]. `priceId` is the live
+ * one where config.ts picks by environment, since `next start` runs with
+ * NODE_ENV=production.
+ */
+export function configuredPlans() {
+  const source = fs.readFileSync("config.ts", "utf8");
+  const plans = [
+    ...source.matchAll(
+      /tier: "(\w+)",[\s\S]*?priceId:\s*(?:process\.env\.NODE_ENV === "production"\s*\?\s*)?"([^"]*)",?[\s\S]*?name: "([^"]+)",[\s\S]*?price: ([\d.]+),[\s\S]*?currency: "(\w+)",[\s\S]*?interval: "(\w+)"/g
+    ),
+  ].map(([, tier, priceId, name, price, currency, interval]) => ({
+    tier,
+    name,
+    price: Number(price),
+    currency,
+    interval,
+    priceId,
+  }));
+  if (plans.length === 0) {
+    throw new Error("config.ts should list plans with a tier, priceId, name, price, currency and interval");
+  }
+  return plans;
+}
+// cc:end stripe
+
 /** Every same-site `href` in `html`, without its query or fragment. */
 export function links(html) {
   return [...html.matchAll(/href="(\/[^"#?]*)/g)].map((m) => m[1]);

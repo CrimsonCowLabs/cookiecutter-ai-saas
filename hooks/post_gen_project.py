@@ -190,6 +190,9 @@ def handle_stripe():
         remove_directory("app/(main)/legal/subscriptions")
         remove_file("tests/compliance/renewal-terms.test.mjs")
         remove_file("tests/compliance/fake-stripe.mjs")
+        remove_file("lib/subscription-acknowledgment.ts")
+        remove_file("tests/compliance/subscription-acknowledgment.test.mjs")
+        remove_file("tests/compliance/fake-resend.mjs")
 
 
 def handle_magic_link():
@@ -250,8 +253,9 @@ def marker_decisions():
         "stripe": stripe,
         "no-stripe": not stripe,
         "magic-link": magic_link,
-        # RESEND_API_KEY serves both magic link and the contact form.
-        "resend": magic_link or extras,
+        # RESEND_API_KEY serves magic link, the contact form and the
+        # subscription acknowledgment email.
+        "resend": magic_link or extras or stripe,
         # One provider is answered and only that one's variables ship. The
         # worker's settings.py still reads all four, with defaults, the way
         # lib/plans.ts survives include_stripe=no: it is provider-agnostic code,

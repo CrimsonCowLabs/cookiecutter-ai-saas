@@ -134,9 +134,14 @@ jobs:
           if [ "${{ matrix.include_stripe }}" = no ]; then
             test ! -e "$G/lib/renewal-terms.ts" && test ! -e "$G/components/billing"
             test ! -e "$G/app/(main)/legal/subscriptions" && test ! -e "$G/tests/compliance/renewal-terms.test.mjs"
-            ! grep -rqiE 'renew|subscription|STRIPE_API_BASE' "$G/app" "$G/components" "$G/lib/legal-topics.ts" "$G/scripts/check_compliance.sh" "$G/docs/compliance.md"
+            test ! -e "$G/lib/subscription-acknowledgment.ts" && test ! -e "$G/tests/compliance/subscription-acknowledgment.test.mjs"
+            test ! -e "$G/tests/compliance/fake-resend.mjs"
+            ! grep -rqiE 'renew|subscription|STRIPE_API_BASE|RESEND_BASE_URL' "$G/app" "$G/components" "$G/lib/legal-topics.ts" "$G/scripts/check_compliance.sh" "$G/docs/compliance.md"
           else
             test -e "$G/lib/renewal-terms.ts" && test -e "$G/app/(main)/legal/subscriptions/page.tsx"
+            # New subscribers are acknowledged by email, so Resend's key ships
+            # whatever the magic-link and marketing-extras answers.
+            test -e "$G/lib/subscription-acknowledgment.ts" && grep -q '^RESEND_API_KEY=' "$G/.env.example"
           fi
           if [ "${{ matrix.include_marketing_extras }}" = no ]; then
             test ! -e "$G/app/(main)/blog" && test ! -e "$G/app/(main)/contact" && test ! -e "$G/app/api/contact"
@@ -189,10 +194,18 @@ jobs:
           done
           # No marker comment survives into a generated project.
           ! grep -rq 'cc:begin\|cc:end' "$G/.env.example" "$G/ansible"
-          # Magic link is independent of the OAuth choice: off drops its files, provider, UI and env vars.
+          # Magic link is independent of the OAuth choice: off drops its files, provider and UI.
+          # RESEND_API_KEY stays when the contact form or Stripe still sends email.
           if [ "${{ matrix.include_magic_link }}" = no ]; then
             test ! -e "$G/app/(main)/(auth)/magic-link" && test ! -e "$G/components/auth/magic-link-form.tsx"
-            ! grep -rE 'MagicLink|/magic-link|Resend|RESEND' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts" "$G/.env.example"
+            ! grep -rE 'MagicLink|/magic-link|providers/resend' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts"
+            # With nothing else sending email, no trace of Resend ships at all.
+            if [ "${{ matrix.include_marketing_extras }}" = no ] && [ "${{ matrix.include_stripe }}" = no ]; then
+              if grep -rE 'Resend|RESEND' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts" "$G/.env.example"; then
+                echo "Resend survived with magic link, marketing extras and Stripe all off" >&2
+                exit 1
+              fi
+            fi
           else
             test -e "$G/components/auth/magic-link-form.tsx"
           fi
@@ -391,6 +404,12 @@ jobs:
   # every subscribe button has its plan's auto-renewal terms beside it, and
   # every Stripe Checkout Session repeats them and requires terms-of-service
   # consent, checked against a stand-in Stripe API.
+  # Issue #82 (subscription acknowledgment) adds
+  # tests/compliance/subscription-acknowledgment.test.mjs: a completed
+  # subscription checkout emails the subscriber exactly one acknowledgment
+  # with the renewal terms and how to cancel (read from a stand-in Resend
+  # API), a one-time purchase sends none, and an app without Resend still
+  # accepts the webhook and sends nothing.
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an
@@ -398,7 +417,7 @@ jobs:
   # against a freshly generated one, with the default answers. It drives the
   # runner's preinstalled Google Chrome through puppeteer-core.
   compliance:
-    name: The legal pages, age gate, renewal terms, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app
+    name: The legal pages, age gate, renewal terms and acknowledgment, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

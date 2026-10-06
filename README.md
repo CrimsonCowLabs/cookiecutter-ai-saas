@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **200 files** with
+Every generated project is a complete distributed system — **203 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -131,8 +131,12 @@ and prove what they claim against a running app rather than asserting it:
   beside it, built from the plan's own config and linked with
   `aria-describedby`. Stripe Checkout repeats the same text and requires
   the terms-of-service box, which the check proves against a stand-in Stripe
-  API. `/legal/subscriptions` covers renewal, cancellation and refunds. A
-  project without Stripe has none of it and makes no subscription claims.
+  API. With Resend configured, the Stripe webhook emails each new subscriber
+  one acknowledgment repeating the terms and how to cancel (none for
+  one-time purchases); without it, `docs/compliance.md` says to turn on
+  Stripe's own confirmation emails instead. `/legal/subscriptions` covers
+  renewal, cancellation and refunds. A project without Stripe has none of it
+  and makes no subscription claims.
 - **No third-party requests before consent.** Fonts are self-hosted through
   `next/font`, and `scripts/check_compliance.sh` loads the public, auth, legal
   and dashboard pages in a headless Chrome and fails, naming the host, if any
@@ -168,7 +172,7 @@ None of it is legal advice, and the pages and guide say so.
 | `include_stripe` | yes | yes, no | Stripe billing integration |
 | `include_marketing_extras` | yes | yes, no | Static JSON blog and contact form (with its API route) |
 | `auth_providers` | google_microsoft | google_microsoft, google_only, microsoft_only | OAuth providers |
-| `include_magic_link` | yes | yes, no | Email magic-link sign-in via Resend, independent of the OAuth choice. `no` drops its form, `/magic-link` page and provider; `RESEND_API_KEY` stays only if the contact form is kept |
+| `include_magic_link` | yes | yes, no | Email magic-link sign-in via Resend, independent of the OAuth choice. `no` drops its form, `/magic-link` page and provider; `RESEND_API_KEY` stays only if the contact form or Stripe is kept |
 | `llm_provider` | ollama | ollama, openai, anthropic, openrouter | AI model provider. Sets `LLM_PROVIDER` and ships only that provider's credentials, in `.env.example`, the vault example and the env file a deploy renders. The worker's `settings.py` reads all four with defaults, so switching later means adding that provider's variables back, not changing code |
 | `python_version` | 3.14 | any version | Python for worker Dockerfile. `poetry.lock` is resolved for 3.14; any other value drops it and you must run `poetry lock` in `workers/app` once |
 | `node_version` | 20 | any version | Node.js for Dockerfiles |

@@ -12,24 +12,8 @@
 // FAKE_STRIPE_PORT (see ./fake-stripe.mjs).
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import { config, launchBrowser, withPage, asSignedInUser, links } from "./support.mjs";
+import { config, configuredPlans, launchBrowser, withPage, asSignedInUser, links } from "./support.mjs";
 import { startFakeStripe } from "./fake-stripe.mjs";
-
-/**
- * config.stripe.plans, read out of config.ts (the project root is the cwd):
- * [{ tier, name, price, currency, interval }].
- */
-function configuredPlans() {
-  const source = fs.readFileSync("config.ts", "utf8");
-  const plans = [
-    ...source.matchAll(
-      /tier: "(\w+)",[\s\S]*?name: "([^"]+)",[\s\S]*?price: ([\d.]+),[\s\S]*?currency: "(\w+)",[\s\S]*?interval: "(\w+)"/g
-    ),
-  ].map(([, tier, name, price, currency, interval]) => ({ tier, name, price: Number(price), currency, interval }));
-  assert.ok(plans.length > 0, "config.ts should list plans with a tier, name, price, currency and interval");
-  return plans;
-}
 
 const plans = configuredPlans();
 const paidPlans = plans.filter((p) => p.price > 0);

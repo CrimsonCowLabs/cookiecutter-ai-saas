@@ -24,7 +24,7 @@
     "test:auth": "node --test tests/auth/auth.test.mjs",
     "test:billing": "node --test tests/billing/*.test.mjs",
     "test:billing:integration": "node --test tests/billing/integration/*.test.mjs",
-    "test:compliance": "node --test tests/compliance/*.test.mjs"
+    "test:compliance": "node --test --test-concurrency=1 tests/compliance/*.test.mjs"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.4",

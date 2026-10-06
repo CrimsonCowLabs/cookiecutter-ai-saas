@@ -51,7 +51,7 @@ scripts/check_compliance.sh
 Name test files to run only those, for example
 `scripts/check_compliance.sh tests/compliance/age-gate.test.mjs`.
 
-It needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3998{% endif %} and 3999 free,
+It needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3001, 3997, 3998{% endif %} and 3999 free,
 and Chrome or Chromium (set `CHROME_PATH` if it is not in a usual place). Run it on a fresh checkout, not your working
 copy: it writes its own `.env.local`, so it refuses to run when one exists,
 and it deletes the compose volumes when it finishes.
@@ -68,6 +68,10 @@ It checks that:
   and every Stripe Checkout the app opens repeats them and requires the
   terms-of-service box (see
   [Subscriptions and automatic renewal](#subscriptions-and-automatic-renewal));
+- a completed subscription checkout sends the subscriber exactly one
+  acknowledgment email with the same terms and how to cancel, even when
+  Stripe delivers the event twice; a one-time purchase sends none, and
+  without Resend configured the webhook still succeeds and sends nothing;
 {%- endif %}
 - the home page, the sign-in and sign-up pages, the other public pages, the
   blog (when the project has one), every legal page and the dashboard make
@@ -201,6 +205,25 @@ nothing about renewal.
 - **Cancel online.** Settings → Manage billing opens the Stripe billing
   portal, where the customer cancels. Access lasts until the end of the
   paid period.
+- **The acknowledgment.** When Resend is configured (`RESEND_API_KEY`), the
+  Stripe webhook emails every new subscriber once, on
+  `checkout.session.completed`, from `config.resend.fromNoReply`
+  (`lib/subscription-acknowledgment.ts`): the same renewal terms, word for
+  word, and step-by-step how to cancel online through Settings → Manage
+  billing and the billing portal, with a link to `/legal/subscriptions`. A
+  redelivered event sends nothing more, and a one-time purchase sends
+  nothing. Without `RESEND_API_KEY` the app sends nothing; see below. A
+  send that fails (Resend down, domain not verified) is logged as
+  `Subscription acknowledgment send failed` and not retried, since the
+  subscription is already recorded: watch your logs for it, and consider
+  keeping Stripe's own confirmation emails on as well (see below) as a
+  backstop.
+- **One subscription, one row.** `subscriptions.stripe_subscription_id` is
+  unique, which is what stops a redelivered event from sending a second
+  acknowledgment. On an existing deployment, remove any duplicate rows
+  before applying the schema change (`npm run db:push` or your migration),
+  or it will fail. This keeps the oldest row for each subscription:
+  `delete from subscriptions a using subscriptions b where a.stripe_subscription_id = b.stripe_subscription_id and (a.created_at, a.id) > (b.created_at, b.id);`
 - **The notice.** `/legal/subscriptions` explains renewal, cancellation and
   refunds and lists each plan's terms; the Terms of Service have a
   "Payment and Automatic Renewal" section linking to it.
@@ -209,7 +232,12 @@ nothing about renewal.
   right terms beside it and that each Checkout Session the app creates
   carries them and requires consent. The app's Stripe client is pointed at a
   stand-in API for that (`tests/compliance/fake-stripe.mjs`, through
-  `STRIPE_API_BASE`, which you leave unset).
+  `STRIPE_API_BASE`, which you leave unset). It also posts signed
+  `checkout.session.completed` events to the webhook and reads the emails
+  the app sends from a stand-in Resend API (`tests/compliance/fake-resend.mjs`,
+  through `RESEND_BASE_URL`, which you also leave unset), and starts a
+  second copy of the app without `RESEND_API_KEY` to prove it then sends
+  nothing.
 
 **What you still have to do.**
 
@@ -224,10 +252,17 @@ nothing about renewal.
   billing has no cancel button and the app's promise of online cancellation
   is false. Don't add a step that makes cancelling harder than subscribing,
   such as a required call or chat.
-- Send the acknowledgement. Turn on Stripe's email receipts for successful
-  payments (Settings → Customer emails), and make sure what the customer
-  gets after subscribing states the renewal terms and how to cancel; add
-  them to your receipt or welcome email if it does not.
+- Make sure the acknowledgment is sent. Set `RESEND_API_KEY` and verify
+  your sending domain in Resend, and the app sends it. If you run without
+  Resend, the app sends nothing, so turn on Stripe's own subscription
+  confirmation emails instead: in the Stripe Dashboard, turn on emails to
+  customers for successful payments (Settings → Customer emails) and for
+  subscriptions (Settings → Billing → Subscriptions and emails), and add the
+  renewal terms and how to cancel (Settings → Manage billing, then cancel in
+  the billing portal) to what Stripe sends, for example in the default
+  invoice footer (Settings → Billing → Invoice template), since its standard
+  receipt says neither. Either way, buy a test subscription and read what
+  arrives.
 - Send renewal reminders. The app does not send them. The ARL requires a
   yearly reminder of the terms and how to cancel for every subscription, and
   a notice before a free trial or promotional price longer than 31 days

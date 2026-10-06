@@ -51,7 +51,7 @@ STRIPE_WEBHOOK_SECRET={{ vault_stripe_webhook_secret | default('') }}
 # cc:end stripe
 # cc:begin resend
 
-# ─── Resend (Email: magic link sign-in, contact form) ─
+# ─── Resend (Email: magic link sign-in, contact form, subscription acknowledgment) ─
 RESEND_API_KEY={{ vault_resend_api_key | default('') }}
 # cc:end resend
 

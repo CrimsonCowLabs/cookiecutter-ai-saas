@@ -62,6 +62,13 @@ export default function SubscriptionsPage() {
           , including automatic renewal. Stripe sends a receipt by email.
         </p>
         <p>
+          <strong className="text-base-content">We confirm it by email.</strong>{" "}
+          Once you subscribe, we email you an acknowledgment that repeats the
+          renewal terms of your plan and explains how to cancel. If this app
+          is not set up to send email, the confirmation emails Stripe sends
+          for us are used instead.
+        </p>
+        <p>
           <strong className="text-base-content">Cancel online, anytime.</strong>{" "}
           Open Settings in your dashboard and choose Manage billing. That opens
           the billing portal, where you can cancel in a few clicks, with no
