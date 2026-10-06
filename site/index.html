@@ -151,7 +151,7 @@
                 "name": "What do I need before starting with cookiecutter-ai-saas?",
                 "acceptedAnswer": {
                   "@type": "Answer",
-                  "text": "To generate a project with cookiecutter-ai-saas you need Python and pip, to install cookiecutter. To run it locally you need Node.js (version 20 or newer by default; the generated setup.sh checks for whichever version you chose) and Docker with Docker Compose, plus Poetry to run the Python worker on your own machine (Python version 3.14 by default). The features you switch on need their own credentials: Google or Microsoft OAuth credentials, a Resend API key for magic-link sign-in, Stripe keys, and an API key for your LLM provider, or Ollama running locally. A production deployment also needs a Debian-family VPS (Ubuntu LTS) you can reach over SSH, a domain name you can point at it, and Ansible on your own machine."
+                  "text": "To generate a project with cookiecutter-ai-saas you need Python and pipx, to install cookiecutter. To run it locally you need Node.js (version 20 or newer by default; the generated setup.sh checks for whichever version you chose) and Docker with Docker Compose, plus Poetry to run the Python worker on your own machine (Python version 3.14 by default). The features you switch on need their own credentials: Google or Microsoft OAuth credentials, a Resend API key for magic-link sign-in, Stripe keys, and an API key for your LLM provider, or Ollama running locally. A production deployment also needs a Debian-family VPS (Ubuntu LTS) you can reach over SSH, a domain name you can point at it, and Ansible on your own machine."
                 }
               },
               {
@@ -677,7 +677,7 @@
             <div class="install-head" id="install-head">
               <span>Generate your project:</span>
             </div>
-            <pre id="install-command"><code><span class="cmd">pip install cookiecutter</span>
+            <pre id="install-command"><code><span class="cmd">pipx install cookiecutter</span>
 <span class="cmd">cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</span></code></pre>
           </div>
         </div>
@@ -768,7 +768,7 @@
           </div>
           <div>
             <ol class="steps">
-              <li><span>Install cookiecutter, once, ever: <code class="cmd-block">pip install cookiecutter</code></span></li>
+              <li><span>Install cookiecutter, once, ever: <code class="cmd-block">pipx install cookiecutter</code></span></li>
               <li><span>Generate the project: <code class="cmd-block">cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas</code></span></li>
               <li><span><code>cd</code> into it, copy <code>.env.example</code> to both <code>.env.local</code> and <code>.env.docker.local</code>, set one secret, and point the docker copy's database and Redis URLs at the container hostnames</span></li>
               <li><span>Install dependencies: <code class="cmd-block">npm ci</code></span></li>
@@ -903,7 +903,7 @@
             </div>
             <div class="faq-item" data-faq="prerequisites">
               <h3 class="faq-q">What do I need before starting with cookiecutter-ai-saas?</h3>
-              <p class="faq-a">To generate a project with cookiecutter-ai-saas you need Python and pip, to install cookiecutter. To run it locally you need Node.js (version 20 or newer by default; the generated <code>setup.sh</code> checks for whichever version you chose) and Docker with Docker Compose, plus Poetry to run the Python worker on your own machine (Python version 3.14 by default). The features you switch on need their own credentials: Google or Microsoft OAuth credentials, a Resend API key for magic-link sign-in, Stripe keys, and an API key for your LLM provider, or Ollama running locally. A production deployment also needs a Debian-family VPS (Ubuntu LTS) you can reach over SSH, a domain name you can point at it, and Ansible on your own machine.</p>
+              <p class="faq-a">To generate a project with cookiecutter-ai-saas you need Python and pipx, to install cookiecutter. To run it locally you need Node.js (version 20 or newer by default; the generated <code>setup.sh</code> checks for whichever version you chose) and Docker with Docker Compose, plus Poetry to run the Python worker on your own machine (Python version 3.14 by default). The features you switch on need their own credentials: Google or Microsoft OAuth credentials, a Resend API key for magic-link sign-in, Stripe keys, and an API key for your LLM provider, or Ollama running locally. A production deployment also needs a Debian-family VPS (Ubuntu LTS) you can reach over SSH, a domain name you can point at it, and Ansible on your own machine.</p>
             </div>
             <div class="faq-item" data-faq="vs-scratch">
               <h3 class="faq-q">How is cookiecutter-ai-saas different from starting from scratch?</h3>

@@ -24,7 +24,7 @@ what you get. Three focused guides cover everything past that:
 ### Via Cookiecutter CLI
 
 ```bash
-pip install cookiecutter
+pipx install cookiecutter
 cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas
 ```
 

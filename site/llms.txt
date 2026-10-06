@@ -24,10 +24,10 @@ Choices made once, at generation time:
 
 ## How to install
 
-Prerequisites: Python and pip (for cookiecutter), Node.js (20 or newer by default), Docker with Docker Compose, and Poetry for running the Python worker locally (Python 3.14 by default). A production deployment also needs a Debian-family VPS (Ubuntu LTS) reachable over SSH, a domain name, and Ansible.
+Prerequisites: Python and pipx (for cookiecutter), Node.js (20 or newer by default), Docker with Docker Compose, and Poetry for running the Python worker locally (Python 3.14 by default). A production deployment also needs a Debian-family VPS (Ubuntu LTS) reachable over SSH, a domain name, and Ansible.
 
 ```bash
-pip install cookiecutter
+pipx install cookiecutter
 cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas
 cd <project-slug>
 ./setup.sh
