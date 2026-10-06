@@ -89,6 +89,25 @@ const config = {
     loginUrl: "/sign-in",
     callbackUrl: "/dashboard",
   },
+  // Replace every REPLACE_WITH_ value before you launch. See
+  // docs/compliance.md, which says what each one is for and where to get it.
+  legal: {
+    // 13 is the US line (COPPA). Some EU countries set 14, 15 or 16 under the
+    // GDPR; raise this if you serve them.
+    minimumAge: 13,
+    marketingPostalAddress: "REPLACE_WITH_MARKETING_POSTAL_ADDRESS",
+    dmcaAgent: {
+      name: "REPLACE_WITH_DMCA_AGENT_NAME",
+      postalAddress: "REPLACE_WITH_DMCA_AGENT_POSTAL_ADDRESS",
+      phone: "REPLACE_WITH_DMCA_AGENT_PHONE",
+      email: "REPLACE_WITH_DMCA_AGENT_EMAIL",
+    },
+    accessibility: {
+      contactEmail: "REPLACE_WITH_ACCESSIBILITY_CONTACT_EMAIL",
+      reviewDate: "REPLACE_WITH_ACCESSIBILITY_REVIEW_DATE",
+    },
+    consentTextVersion: "REPLACE_WITH_CONSENT_TEXT_VERSION",
+  },
 } satisfies ConfigProps;
 
 export default config;

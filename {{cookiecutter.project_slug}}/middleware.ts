@@ -30,6 +30,7 @@ export default auth((req) => {
     "/contact",
     "/privacy-policy",
     "/tos",
+    "/legal",
     "/api/auth",
     "/api/webhook",
   ];

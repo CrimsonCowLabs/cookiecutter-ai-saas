@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **171 files** with
+Every generated project is a complete distributed system — **186 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -111,6 +111,28 @@ answer sets.
 
 ---
 
+## Compliance Coverage
+
+Generated apps are built with common legal risks for small SaaS apps in mind,
+and prove what they claim against a running app rather than asserting it:
+
+- **A `/legal` hub**, linked from the footer, next to the Privacy Policy and
+  Terms. Each topic page says what the risk is and how the app handles it.
+- **No third-party requests before consent.** Fonts are self-hosted through
+  `next/font`, and `scripts/check_compliance.sh` loads the public, auth, legal
+  and dashboard pages in a headless Chrome and fails, naming the host, if any
+  of them contacts another server. A Google Fonts `<link>` is called out by
+  name.
+- **The operator's legal details** (minimum age, marketing postal address,
+  DMCA agent, accessibility contact, consent-text version) in one `legal`
+  section of `config.ts`, shipped as placeholders to replace before launch.
+- **An operator guide**, `docs/compliance.md` in the generated project, that
+  covers each risk, what the app does and what is still up to the operator.
+
+None of it is legal advice, and the pages and guide say so.
+
+---
+
 ## Template Variables
 
 | Variable | Default | Options | Description |
@@ -153,6 +175,7 @@ answer sets.
 │   │   │   └── layout.tsx         #   Sidebar + auth guard
 │   │   ├── blog/                  # Static JSON blog (optional)
 │   │   ├── contact/               # Contact form (optional)
+│   │   ├── legal/                 # /legal hub + one page per compliance topic
 │   │   ├── privacy-policy/
 │   │   ├── tos/
 │   │   └── page.tsx               # Marketing landing page
@@ -211,7 +234,7 @@ answer sets.
 ├── docker-compose.yml             # Dev: app + worker + db-writer + postgres + redis
 ├── docker-compose.prod.yml        # Prod: adds Caddy; nothing else on the host's ports
 ├── Caddyfile                      # TLS + HTTP→HTTPS for your domain
-├── config.ts                      # Central app config (plans, resend, colors, auth)
+├── config.ts                      # Central app config (plans, resend, colors, auth, legal)
 ├── middleware.ts                   # Edge-safe route protection
 ├── postcss.config.js              # Tailwind 4 PostCSS plugin (theme lives in app/globals.css)
 ├── drizzle.config.ts              # Migration generator config
@@ -221,7 +244,10 @@ answer sets.
 ├── tsconfig.json                  # Strict TypeScript
 ├── .env.example                   # All env vars documented
 ├── scripts/
-│   └── migrate.sh                 # Database migrations (the migrator image's command)
+│   ├── migrate.sh                 # Database migrations (the migrator image's command)
+│   └── check_compliance.sh        # Proves the /legal claims against a running app
+├── tests/compliance/              # What check_compliance.sh asserts, in a headless Chrome
+├── docs/compliance.md             # Operator guide to the legal risks the app handles
 ├── cli/
 │   ├── src/                       # opsctl — status, logs, shell, over your own SSH
 │   └── tsconfig.json              # Built by `npm run cli:build` / the `prepare` script

@@ -242,11 +242,21 @@ Drizzle ORM/Kit stay on the stable 0.x line; 1.0 is still a release candidate.
 | `npm run db:push` | Push schema (dev only) |
 | `npm run db:migrate` | Run pending migrations |
 | `npm run db:studio` | Open Drizzle Studio |
+| `scripts/check_compliance.sh` | Prove the `/legal` pages' claims against a running app, in a real browser (see [the compliance guide](docs/compliance.md)) |
 
 Operating a deployed instance — status, logs, an interactive shell, and
 provisioning, deploying, editing secrets and taking a backup — is `opsctl`,
 not an npm script or an `ansible-playbook` command remembered over SSH — see
 [The CLI](#the-cli).
+
+## Compliance
+
+The app ships a `/legal` hub, linked from the footer, that explains how it
+handles common legal risks, and the operator details those pages need (your
+postal address, DMCA agent, accessibility contact) live in `config.ts`'s
+`legal` section as placeholders to replace before launch.
+[docs/compliance.md](docs/compliance.md) covers each risk, what the app
+already does and what is still up to you. It is not legal advice.
 
 ## Deployment
 
@@ -639,6 +649,7 @@ app/                    # Next.js App Router pages
   (main)/               # Main route group
     (auth)/             # Auth pages (sign-in, sign-up)
     dashboard/          # Authenticated area
+    legal/              # /legal hub and one page per compliance topic
   actions/              # Server actions
   api/                  # API routes
 components/             # React components
@@ -656,6 +667,7 @@ workers/
   db-writer/            # Node.js DB writer
 scripts/
   migrate.sh            # Migration runner (the migrator image's command)
+  check_compliance.sh   # Runs tests/compliance against a real, running app
 cli/
   src/                  # opsctl — status, logs and shell over your own SSH
   tsconfig.json         # Built by `npm run cli:build` / the `prepare` script

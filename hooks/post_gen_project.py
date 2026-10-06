@@ -304,7 +304,7 @@ def apply_markers():
 
 def make_scripts_executable():
     """Make shell scripts executable."""
-    scripts = ["scripts/migrate.sh", "setup.sh"]
+    scripts = ["scripts/migrate.sh", "scripts/check_compliance.sh", "setup.sh"]
     for script in scripts:
         if os.path.exists(script):
             os.chmod(script, 0o755)

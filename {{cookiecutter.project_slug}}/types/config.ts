@@ -23,6 +23,34 @@ export interface PlanConfig {
   }[];
 }
 
+// The operator's legal details, for the /legal pages and the compliance
+// features that need them as those are added. Each string ships as a "REPLACE_WITH_..."
+// placeholder; see docs/compliance.md for what each one is for.
+export interface LegalConfig {
+  // Visitors younger than this cannot create an account.
+  minimumAge: number;
+  // The physical postal address every marketing email has to carry
+  // (CAN-SPAM). A PO box or a registered mail-receiving service is fine.
+  marketingPostalAddress: string;
+  // The designated agent for copyright (DMCA) notices, exactly as registered
+  // with the US Copyright Office.
+  dmcaAgent: {
+    name: string;
+    postalAddress: string;
+    phone: string;
+    email: string;
+  };
+  accessibility: {
+    // Where visitors report an accessibility problem.
+    contactEmail: string;
+    // When the accessibility statement was last reviewed, as YYYY-MM-DD.
+    reviewDate: string;
+  };
+  // The version of the consent text visitors agree to. Changing it makes
+  // every existing consent invalid, so everyone is asked again.
+  consentTextVersion: string;
+}
+
 export interface ConfigProps {
   appName: string;
   appDescription: string;
@@ -43,4 +71,5 @@ export interface ConfigProps {
     loginUrl: string;
     callbackUrl: string;
   };
+  legal: LegalConfig;
 }

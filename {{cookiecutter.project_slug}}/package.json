@@ -23,7 +23,8 @@
     "test:cli": "tsc -p cli && cd cli/dist && node --test",
     "test:auth": "node --test tests/auth/auth.test.mjs",
     "test:billing": "node --test tests/billing/*.test.mjs",
-    "test:billing:integration": "node --test tests/billing/integration/*.test.mjs"
+    "test:billing:integration": "node --test tests/billing/integration/*.test.mjs",
+    "test:compliance": "node --test tests/compliance/*.test.mjs"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.4",
@@ -54,6 +55,7 @@
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.5",
     "postcss": "^8.4.49",
+    "puppeteer-core": "^24.43.1",
     "tailwindcss": "^4.0.0",
     "typescript": "^6.0.3"
   }

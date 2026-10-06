@@ -367,6 +367,40 @@ jobs:
       - name: The access rules hold against a running app
         run: scripts/check_auth.sh .generated-auth/auth-app
 
+  # Acceptance criteria for issue #78 (compliance foundation): /legal and its
+  # subpages render and the footer links to the hub, and no page a visitor
+  # can reach — public, auth, legal or the dashboard — makes their browser
+  # contact another server before consent.
+  #
+  # Unlike check_auth.sh, the runner ships inside the generated project
+  # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an
+  # operator can rerun it after changing their app; this job just runs it
+  # against a freshly generated one, with the default answers. It drives the
+  # runner's preinstalled Google Chrome through puppeteer-core.
+  compliance:
+    name: The legal pages and no-third-party-requests rule hold against a running app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install cookiecutter
+
+      # Matches "node_version" in cookiecutter.json.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate project
+        run: cookiecutter . --no-input -o .generated-compliance project_name="Compliance App"
+
+      - name: The compliance suite passes against a running app
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: .generated-compliance/compliance-app/scripts/check_compliance.sh
+
   # Acceptance criteria for issue #27 (make the billing flow work end to
   # end): subscription lifecycle webhooks move users between plans correctly,
   # and one-time purchases are recorded and granted — including staying

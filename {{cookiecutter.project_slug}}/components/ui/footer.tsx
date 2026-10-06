@@ -52,6 +52,9 @@ export function Footer() {
               <li>
                 <Link href="/tos" className="hover:text-base-content transition-colors">Terms of Service</Link>
               </li>
+              <li>
+                <Link href="/legal" className="hover:text-base-content transition-colors">Legal</Link>
+              </li>
             </ul>
           </div>
 
