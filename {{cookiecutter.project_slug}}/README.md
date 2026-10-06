@@ -19,7 +19,9 @@ skills to reach for and how each one maps to this template.
 - **Database:** PostgreSQL 18, Drizzle ORM
 - **Auth:** NextAuth v5 (JWT sessions, OAuth)
 - **Queue:** BullMQ (Redis-backed)
+{%- if cookiecutter.include_stripe == "yes" %}
 - **Payments:** Stripe (subscriptions)
+{%- endif %}
 - **Email:** Resend
 - **Deployment:** Docker Compose, Caddy reverse proxy (TLS in the stack)
 
@@ -259,6 +261,11 @@ passes a neutral age screen first (COPPA; the minimum age is
 `legal.minimumAge`, 13 by default), and no date of birth is kept. Its key
 pages are checked against WCAG 2.2 AA, and `/legal/accessibility` is its
 accessibility statement.
+{%- if cookiecutter.include_stripe == "yes" %} Every subscribe button shows the plan's
+automatic-renewal terms beside it, Stripe Checkout repeats them and requires
+agreeing to the Terms of Service, and `/legal/subscriptions` explains renewal,
+cancellation and refunds (California's Automatic Renewal Law).
+{%- endif %}
 [docs/compliance.md](docs/compliance.md) covers each risk, what the app
 already does and what is still up to you. It is not legal advice.
 

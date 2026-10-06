@@ -67,16 +67,46 @@ export default function TermsOfServicePage() {
             </p>
           </section>
 
+          {/* cc:begin stripe */}
           <section className="space-y-3">
             <h2 className="text-xl font-semibold text-base-content">
-              5. Payment and Billing
+              5. Payment and Automatic Renewal
             </h2>
             <p>
-              Paid plans are billed on a recurring basis. You can cancel at any
-              time through the billing portal. You&apos;ll retain access until the
-              end of your current billing period.
+              A paid plan is a subscription that renews automatically at the
+              end of each billing period, monthly or yearly as shown for your
+              plan, at the price shown next to its subscribe button, until you
+              cancel. We charge the payment method you gave at checkout when
+              you subscribe and again at the start of each new period. You
+              agree to these renewal terms when you subscribe.
+            </p>
+            <p>
+              You can cancel online at any time: in Settings, choose Manage
+              billing to open the billing portal. Cancelling stops the next
+              renewal; you keep your plan until the end of the period you have
+              paid for. Payments are not refunded for the rest of a period you
+              cancel in, except where the law requires it. If we change a
+              plan&apos;s price, we will tell you before the change applies to
+              your next renewal, so you can cancel first. See{" "}
+              <Link href="/legal/subscriptions" className="link link-primary">
+                Subscriptions &amp; renewal
+              </Link>{" "}
+              for the terms of each plan.
             </p>
           </section>
+          {/* cc:end stripe */}
+          {/* cc:begin no-stripe */}
+          <section className="space-y-3">
+            <h2 className="text-xl font-semibold text-base-content">
+              5. Fees
+            </h2>
+            <p>
+              Prices for paid plans are shown on our website. We will tell you
+              what a plan costs, and ask for your agreement, before charging
+              you anything.
+            </p>
+          </section>
+          {/* cc:end no-stripe */}
 
           <section className="space-y-3">
             <h2 className="text-xl font-semibold text-base-content">

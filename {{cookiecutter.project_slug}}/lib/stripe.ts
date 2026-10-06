@@ -1,4 +1,6 @@
 import Stripe from "stripe";
+import type { PlanConfig } from "@/types/config";
+import { renewalTerms } from "@/lib/renewal-terms";
 
 let client: Stripe | null = null;
 
@@ -15,15 +17,34 @@ export function getStripe(): Stripe {
     if (!secretKey) {
       throw new Error("STRIPE_SECRET_KEY is not set");
     }
-    client = new Stripe(secretKey, { typescript: true });
+    client = new Stripe(secretKey, { typescript: true, ...apiBase() });
   }
   return client;
 }
 
+/**
+ * Where the Stripe API is. STRIPE_API_BASE is unset in production, so
+ * Stripe's own applies; the compliance suite points it at a stand-in
+ * (tests/compliance/fake-stripe.mjs) to see which Checkout Sessions the app
+ * creates.
+ */
+function apiBase(): Pick<Stripe.StripeConfig, "host" | "port" | "protocol"> {
+  const base = process.env.STRIPE_API_BASE;
+  if (!base) return {};
+  const url = new URL(base);
+  return {
+    host: url.hostname,
+    port: url.port || undefined,
+    protocol: url.protocol === "http:" ? "http" : "https",
+  };
+}
+
 interface CreateCheckoutParams {
-  priceId: string;
+  plan: PlanConfig;
   successUrl: string;
   cancelUrl: string;
+  // The Terms of Service the customer has to agree to before paying.
+  termsUrl: string;
   couponId?: string | null;
   clientReferenceId?: string;
   user?: {
@@ -42,10 +63,14 @@ export const createCheckout = async ({
   clientReferenceId,
   successUrl,
   cancelUrl,
-  priceId,
+  termsUrl,
+  plan,
   couponId,
 }: CreateCheckoutParams): Promise<string | null> => {
   try {
+    const terms = renewalTerms(plan);
+    if (!terms) throw new Error(`${plan.tier} does not renew, so it has no subscription to check out`);
+
     const userParam: {
       customer?: string;
       customer_email?: string;
@@ -65,11 +90,23 @@ export const createCheckout = async ({
       client_reference_id: clientReferenceId,
       line_items: [
         {
-          price: priceId,
+          price: plan.priceId,
           quantity: 1,
         },
       ],
       discounts: couponId ? [{ coupon: couponId }] : [],
+      // California's Automatic Renewal Law: the renewal terms right beside
+      // the pay button, word for word what the app showed beside its own
+      // subscribe button, and the customer's affirmative consent to them
+      // before paying. Stripe records that consent on the session
+      // (`consent.terms_of_service`). See docs/compliance.md.
+      custom_text: {
+        submit: { message: terms },
+        terms_of_service_acceptance: {
+          message: `I agree to the [Terms of Service](${termsUrl}), including automatic renewal until I cancel.`,
+        },
+      },
+      consent_collection: { terms_of_service: "required" },
       success_url: successUrl,
       cancel_url: cancelUrl,
     });

@@ -9,7 +9,11 @@ export interface PlanConfig {
   priceId: string;
   name: string;
   description?: string;
+  // What the plan's Stripe Price charges, in `currency` (an ISO 4217 code,
+  // such as "usd"), every `interval`. Pricing cards and the renewal terms
+  // customers agree to quote these, so keep them equal to the Price itself.
   price: number;
+  currency: string;
   priceAnchor?: number;
   interval: "month" | "year";
   limits: {

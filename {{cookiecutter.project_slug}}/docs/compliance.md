@@ -51,8 +51,8 @@ scripts/check_compliance.sh
 Name test files to run only those, for example
 `scripts/check_compliance.sh tests/compliance/age-gate.test.mjs`.
 
-It needs Docker, ports 3000 and 3999 free, and Chrome or Chromium (set `CHROME_PATH`
-if it is not in a usual place). Run it on a fresh checkout, not your working
+It needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3998{% endif %} and 3999 free,
+and Chrome or Chromium (set `CHROME_PATH` if it is not in a usual place). Run it on a fresh checkout, not your working
 copy: it writes its own `.env.local`, so it refuses to run when one exists,
 and it deletes the compose volumes when it finishes.
 
@@ -63,6 +63,12 @@ It checks that:
 - no account is created without a passed age check, through any sign-in
   method the app offers, and no date of birth is kept anywhere (see
   [Children's privacy](#childrens-privacy-coppa));
+{%- if cookiecutter.include_stripe == "yes" %}
+- every subscribe and upgrade button has the plan's renewal terms beside it,
+  and every Stripe Checkout the app opens repeats them and requires the
+  terms-of-service box (see
+  [Subscriptions and automatic renewal](#subscriptions-and-automatic-renewal));
+{%- endif %}
 - the home page, the sign-in and sign-up pages, the other public pages, the
   blog (when the project has one), every legal page and the dashboard make
   no request to another server.
@@ -145,6 +151,102 @@ by Google, Microsoft or magic link alike.
   that passed the age screen, within the hour. Opened elsewhere, it sends
   them back to the age screen to answer it there and ask for a new link.
 
+{% if cookiecutter.include_stripe == "yes" -%}
+## Subscriptions and automatic renewal
+
+**The law and the risk.** California's Automatic Renewal Law (ARL, Business
+and Professions Code §§17600–17606, as amended by AB 2863 from 1 July 2025)
+applies to any subscription sold to a California consumer that renews
+without the customer asking again. Before the customer pays, the business
+must show the renewal terms "clearly and conspicuously" and right next to
+the request for consent: that the subscription continues until cancelled,
+how to cancel, what will be charged, and how often. It must get the
+customer's express affirmative consent to those terms, send an
+acknowledgement that includes them and how to cancel, and let a customer
+who subscribed online cancel online, without a phone call or a chat. Goods or
+services supplied without that consent count as an unconditional gift
+(§17603), so the customer can recover what they paid, and a violation is
+also unfair competition, with civil penalties of up to $2,500 per violation
+in a public enforcement action (§17206) and class actions in practice. Many
+other states have similar laws, and the federal Restore Online Shoppers'
+Confidence Act (ROSCA, 15 U.S.C. 8401–8405) requires the same disclosure,
+consent and simple cancellation for every online sale with a recurring
+charge; the FTC enforces it with civil penalties of up to $53,088 per
+violation (16 CFR 1.98). As of October 2026.
+
+Subscribe buttons used to show only a price, and Stripe Checkout said
+nothing about renewal.
+
+**What the app does.**
+
+- **One source for the terms.** `lib/renewal-terms.ts` writes each plan's
+  terms from its own `price`, `currency` and `interval` in `config.ts`'s
+  `stripe.plans`: that it renews automatically every interval until
+  cancelled, what is charged and when, and how to cancel online. Free plans,
+  and anything that does not renew, get none.
+- **Beside every subscribe button.** `components/billing/renewal-terms.tsx`
+  shows the terms directly under each paid plan's button on the landing
+  page's pricing cards and under each upgrade button in the dashboard
+  settings, and links the button to them with `aria-describedby`, so a
+  screen reader reads them with the button. The cards' prices come from the
+  same config.
+- **Repeated at checkout, with consent required.** Every subscription
+  Checkout Session (`createCheckout` in `lib/stripe.ts`), including the one
+  the app opens on its own after sign-up for a plan picked beforehand,
+  carries the same text beside Stripe's pay button (`custom_text.submit`) and
+  requires the customer to tick a terms-of-service box, worded to include
+  automatic renewal and linking to `/tos`, before paying
+  (`consent_collection.terms_of_service`). Stripe records that consent on the
+  session.
+- **Cancel online.** Settings → Manage billing opens the Stripe billing
+  portal, where the customer cancels. Access lasts until the end of the
+  paid period.
+- **The notice.** `/legal/subscriptions` explains renewal, cancellation and
+  refunds and lists each plan's terms; the Terms of Service have a
+  "Payment and Automatic Renewal" section linking to it.
+- The compliance check reads the plans out of `config.ts` and proves, in a
+  real browser against the running app, that every subscribe button has the
+  right terms beside it and that each Checkout Session the app creates
+  carries them and requires consent. The app's Stripe client is pointed at a
+  stand-in API for that (`tests/compliance/fake-stripe.mjs`, through
+  `STRIPE_API_BASE`, which you leave unset).
+
+**What you still have to do.**
+
+- Keep `price`, `currency` and `interval` in `config.ts` equal to the Stripe
+  Price each plan's `priceId` points at. The terms quote the config, and the
+  customer is charged the Price; if they differ, the terms are wrong.
+- In the Stripe Dashboard, under Settings → Public details, set your Terms of
+  Service URL (`https://{{ cookiecutter.domain_name }}/tos`). Stripe refuses to create a
+  Checkout Session that requires terms-of-service consent until it is set.
+- Turn on cancellation in the customer portal (Settings → Billing → Customer
+  portal: allow customers to cancel subscriptions). Without it, Manage
+  billing has no cancel button and the app's promise of online cancellation
+  is false. Don't add a step that makes cancelling harder than subscribing,
+  such as a required call or chat.
+- Send the acknowledgement. Turn on Stripe's email receipts for successful
+  payments (Settings → Customer emails), and make sure what the customer
+  gets after subscribing states the renewal terms and how to cancel; add
+  them to your receipt or welcome email if it does not.
+- Send renewal reminders. The app does not send them. The ARL requires a
+  yearly reminder of the terms and how to cancel for every subscription, and
+  a notice before a free trial or promotional price longer than 31 days
+  converts. Turn on Stripe's "Send emails about upcoming renewals" (Settings
+  → Billing → Subscriptions and emails) for yearly plans, and send the yearly
+  reminder to monthly subscribers yourself.
+- Before raising a price, tell existing subscribers, with time to cancel
+  first; the Terms of Service promise it. The ARL requires notice of a
+  material change.
+- Write your refund policy. `/legal/subscriptions` and the Terms of Service
+  say a partly used period is not refunded except where the law requires;
+  change both if you offer more, and honour refunds some countries require
+  (the EU's 14-day withdrawal right, for one, unless the customer waived it
+  when service started).
+- If you add a free trial, a discount that later rises to the full price, or
+  another plan, its terms must say so: extend `lib/renewal-terms.ts` and
+  check the result on the landing page and in Checkout.
+
+{% endif -%}
 ## Fonts and third-party requests
 
 **The law and the risk.** Under the EU's GDPR, an IP address is personal

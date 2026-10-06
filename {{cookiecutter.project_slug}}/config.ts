@@ -12,6 +12,7 @@ const config = {
         name: "Free",
         description: "Get started for free",
         price: 0,
+        currency: "usd",
         interval: "year",
         limits: {
           jobsPerMonth: 100,
@@ -36,6 +37,7 @@ const config = {
         name: "Pro",
         description: "For power users",
         price: 99,
+        currency: "usd",
         interval: "year",
         limits: {
           jobsPerMonth: 5000,
@@ -59,6 +61,7 @@ const config = {
         name: "Enterprise",
         description: "For growing teams",
         price: 249,
+        currency: "usd",
         interval: "year",
         limits: {
           jobsPerMonth: 50000,

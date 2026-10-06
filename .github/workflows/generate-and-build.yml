@@ -129,6 +129,15 @@ jobs:
       # Each flag value must leave (or remove) exactly what it promises.
       - name: Assert flag effects
         run: |
+          # Without Stripe there are no subscriptions, so no renewal terms,
+          # no subscriptions page and no claim about either anywhere.
+          if [ "${{ matrix.include_stripe }}" = no ]; then
+            test ! -e "$G/lib/renewal-terms.ts" && test ! -e "$G/components/billing"
+            test ! -e "$G/app/(main)/legal/subscriptions" && test ! -e "$G/tests/compliance/renewal-terms.test.mjs"
+            ! grep -rqiE 'renew|subscription|STRIPE_API_BASE' "$G/app" "$G/components" "$G/lib/legal-topics.ts" "$G/scripts/check_compliance.sh" "$G/docs/compliance.md"
+          else
+            test -e "$G/lib/renewal-terms.ts" && test -e "$G/app/(main)/legal/subscriptions/page.tsx"
+          fi
           if [ "${{ matrix.include_marketing_extras }}" = no ]; then
             test ! -e "$G/app/(main)/blog" && test ! -e "$G/app/(main)/contact" && test ! -e "$G/app/api/contact"
           else
@@ -378,6 +387,10 @@ jobs:
   # is created through any provider without a passed age check, and no date
   # of birth is kept. The second run raises legal.minimumAge and reruns it, to
   # prove the line moves with the config rather than being fixed at 13.
+  # Issue #81 (renewal terms) adds tests/compliance/renewal-terms.test.mjs:
+  # every subscribe button has its plan's auto-renewal terms beside it, and
+  # every Stripe Checkout Session repeats them and requires terms-of-service
+  # consent, checked against a stand-in Stripe API.
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an
@@ -385,7 +398,7 @@ jobs:
   # against a freshly generated one, with the default answers. It drives the
   # runner's preinstalled Google Chrome through puppeteer-core.
   compliance:
-    name: The legal pages, age gate, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app
+    name: The legal pages, age gate, renewal terms, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

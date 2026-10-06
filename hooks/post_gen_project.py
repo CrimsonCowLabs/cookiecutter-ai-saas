@@ -183,6 +183,13 @@ def handle_stripe():
         # covered by tsconfig's **/*.tsx include regardless of whether
         # anything imports it).
         remove_file("components/dashboard/resume-pending-plan.tsx")
+        # Automatic-renewal terms: a project without billing sells no
+        # subscriptions, so it makes no claims about them either.
+        remove_file("lib/renewal-terms.ts")
+        remove_directory("components/billing")
+        remove_directory("app/(main)/legal/subscriptions")
+        remove_file("tests/compliance/renewal-terms.test.mjs")
+        remove_file("tests/compliance/fake-stripe.mjs")
 
 
 def handle_magic_link():
@@ -241,6 +248,7 @@ def marker_decisions():
         "contact": extras,
         "no-contact": not extras,
         "stripe": stripe,
+        "no-stripe": not stripe,
         "magic-link": magic_link,
         # RESEND_API_KEY serves both magic link and the contact form.
         "resend": magic_link or extras,

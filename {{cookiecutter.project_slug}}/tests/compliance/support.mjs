@@ -119,7 +119,8 @@ export async function launchBrowser() {
 
 /**
  * Load `path` in a fresh page with no consent given, hand the loaded page to
- * `fn`, and close it again once `fn` is done. Every request the page tries to
+ * `fn`, and close it again once `fn` is done. `cookie` is one `name=value`
+ * or a list of them. Every request the page tries to
  * make to another origin is aborted before it is sent, so nothing a test
  * does here ever leaks anything, and is recorded in the `offOrigin` list
  * passed to `fn` (see visit() below for its shape).
@@ -132,8 +133,8 @@ export async function withPage(browser, path, { cookie } = {}, fn) {
   const page = await context.newPage();
   const offOrigin = [];
   try {
-    if (cookie) {
-      const [name, ...rest] = cookie.split("=");
+    for (const c of [cookie ?? []].flat()) {
+      const [name, ...rest] = c.split("=");
       await context.setCookie({ name, value: rest.join("="), domain: base.hostname, path: "/" });
     }
 

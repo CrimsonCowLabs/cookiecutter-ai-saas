@@ -15,8 +15,9 @@
 # `next start`, signed-in pages are reached with a session cookie the tests
 # mint themselves, and the tests talk to Postgres directly.
 #
-# Needs Docker, port 3000 free, and a Chrome or Chromium binary (set
-# CHROME_PATH if it is not in a usual place; see tests/compliance/support.mjs).
+# Needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3998{% endif %} and 3999
+# free, and a Chrome or Chromium binary (set CHROME_PATH if it is not in a
+# usual place; see tests/compliance/support.mjs).
 #
 # Meant for a fresh checkout or CI, not your working copy: it rewrites
 # .env.local, so it refuses to run when one exists, and it tears the compose
@@ -55,6 +56,13 @@ REDIS_URL="redis://localhost:${REDIS_PORT}"
 # ones. Unused providers' settings are harmless.
 FAKE_OIDC_PORT=3999
 FAKE_OIDC="http://localhost:${FAKE_OIDC_PORT}"
+{%- if cookiecutter.include_stripe == "yes" %}
+# The renewal-terms tests see which Stripe Checkout Sessions the app creates
+# by way of a fake Stripe API they run on this port
+# (tests/compliance/fake-stripe.mjs); STRIPE_API_BASE points the app's Stripe
+# client at it. The secret key is a placeholder that only has to be present.
+FAKE_STRIPE_PORT=3998
+{%- endif %}
 
 cat > "$ENV_FILE" <<ENV
 NEXTAUTH_URL=${BASE_URL}
@@ -68,6 +76,10 @@ AUTH_GOOGLE_ISSUER=${FAKE_OIDC}/google
 MICROSOFT_ENTRA_ID_ID=compliance-test
 MICROSOFT_ENTRA_ID_SECRET=compliance-test
 AUTH_MICROSOFT_ENTRA_ID_ISSUER=${FAKE_OIDC}/microsoft
+{%- if cookiecutter.include_stripe == "yes" %}
+STRIPE_SECRET_KEY=sk_test_0000000000000000000000000000000000000000
+STRIPE_API_BASE=http://localhost:${FAKE_STRIPE_PORT}
+{%- endif %}
 ENV
 
 # Outside the project, so a run leaves nothing behind in the tree.
@@ -120,6 +132,9 @@ if [[ $# -gt 0 ]]; then TESTS=(node --test "$@"); else TESTS=(npm run test:compl
 # SERVER_LOG lets the age-gate tests check no date of birth was logged.
 if ! BASE_URL="$BASE_URL" NEXTAUTH_SECRET="$NEXTAUTH_SECRET" DATABASE_URL="$DATABASE_URL" \
   FAKE_OIDC_PORT="$FAKE_OIDC_PORT" SERVER_LOG="$SERVER_LOG" \
+{%- if cookiecutter.include_stripe == "yes" %}
+  FAKE_STRIPE_PORT="$FAKE_STRIPE_PORT" \
+{%- endif %}
   "${TESTS[@]}"; then
   echo "---- server log (last 50 lines) ----" >&2
   tail -n 50 "$SERVER_LOG" >&2 || true

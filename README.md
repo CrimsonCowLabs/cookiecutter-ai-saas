@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **195 files** with
+Every generated project is a complete distributed system — **200 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -125,6 +125,14 @@ and prove what they claim against a running app rather than asserting it:
   away, no date of birth is stored anywhere, and the check proves it by
   signing up through every provider against the running app.
   `/legal/children` is the children's privacy notice.
+- **Renewal terms where customers subscribe (California ARL).** With Stripe
+  included, every subscribe and upgrade button has the plan's auto-renewal
+  terms (price, interval, renews until cancelled, how to cancel online)
+  beside it, built from the plan's own config and linked with
+  `aria-describedby`. Stripe Checkout repeats the same text and requires
+  the terms-of-service box, which the check proves against a stand-in Stripe
+  API. `/legal/subscriptions` covers renewal, cancellation and refunds. A
+  project without Stripe has none of it and makes no subscription claims.
 - **No third-party requests before consent.** Fonts are self-hosted through
   `next/font`, and `scripts/check_compliance.sh` loads the public, auth, legal
   and dashboard pages in a headless Chrome and fails, naming the host, if any

@@ -5,6 +5,10 @@ import { Logo } from "@/components/brand/logo";
 import { Navbar } from "@/components/ui/navbar";
 import { Footer } from "@/components/ui/footer";
 import { Main } from "@/components/ui/skip-link";
+import { formatPrice, getPlanConfig } from "@/lib/plans";
+// cc:begin stripe
+import { WithRenewalTerms } from "@/components/billing/renewal-terms";
+// cc:end stripe
 
 export const metadata: Metadata = {
   title: "__PROJECT_NAME__ | AI-Powered SaaS Platform",
@@ -130,11 +134,11 @@ const features = [
 
 /* ─────────────── Pricing Data ─────────────── */
 
+// Name, price, currency and interval come from config.ts, the plans checkout
+// actually charges for; the rest is this page's own marketing copy.
 const plans = [
   {
-    name: "Free",
-    price: 0,
-    interval: "forever",
+    ...getPlanConfig("free"),
     description: "Get started with basic features",
     features: [
       { name: "5 jobs per month", included: true },
@@ -149,9 +153,7 @@ const plans = [
     featured: false,
   },
   {
-    name: "Pro",
-    price: 29,
-    interval: "month",
+    ...getPlanConfig("pro"),
     description: "For professionals and growing teams",
     features: [
       { name: "100 jobs per month", included: true },
@@ -161,14 +163,17 @@ const plans = [
       { name: "Priority processing", included: true },
       { name: "Custom models", included: false },
     ],
+    // cc:begin stripe
+    cta: "Subscribe to Pro",
+    // cc:end stripe
+    // cc:begin no-stripe
     cta: "Start Pro Trial",
+    // cc:end no-stripe
     href: "/sign-up?plan_id=pro",
     featured: true,
   },
   {
-    name: "Enterprise",
-    price: 99,
-    interval: "month",
+    ...getPlanConfig("enterprise"),
     description: "For teams that need everything",
     features: [
       { name: "Unlimited jobs", included: true },
@@ -331,7 +336,7 @@ export default async function LandingPage() {
                   <p className="text-sm text-base-content/70 mt-1">{plan.description}</p>
                   <div className="mt-4">
                     <span className="text-4xl font-bold">
-                      {plan.price === 0 ? "Free" : `$${plan.price}`}
+                      {plan.price === 0 ? "Free" : formatPrice(plan)}
                     </span>
                     {plan.price > 0 && (
                       <span className="text-sm text-base-content/70">/{plan.interval}</span>
@@ -358,17 +363,37 @@ export default async function LandingPage() {
                   ))}
                 </ul>
 
+                {/* cc:begin stripe */}
+                <WithRenewalTerms plan={plan}>
+                  {(describedBy) => (
+                    <Link
+                      href={plan.href}
+                      aria-describedby={describedBy}
+                      className={`btn w-full ${plan.featured ? "btn-primary" : "btn-outline"}`}
+                    >
+                      {plan.cta}
+                    </Link>
+                  )}
+                </WithRenewalTerms>
+                {/* cc:end stripe */}
+                {/* cc:begin no-stripe */}
                 <Link
                   href={plan.href}
-                  className={`btn w-full ${
-                    plan.featured ? "btn-primary" : "btn-outline"
-                  }`}
+                  className={`btn w-full ${plan.featured ? "btn-primary" : "btn-outline"}`}
                 >
                   {plan.cta}
                 </Link>
+                {/* cc:end no-stripe */}
               </div>
             ))}
           </div>
+          {/* cc:begin stripe */}
+          <p className="mt-8 text-center text-sm text-base-content/70">
+            <Link href="/legal/subscriptions" className="link link-primary">
+              How renewal, cancellation and refunds work
+            </Link>
+          </p>
+          {/* cc:end stripe */}
         </div>
       </section>
 

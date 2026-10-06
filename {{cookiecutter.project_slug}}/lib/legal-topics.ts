@@ -28,10 +28,13 @@ export const legalTopics: LegalTopic[] = [
     title: "Email preferences",
     summary: "Which emails we send, and how to stop the ones you don't want.",
   },
+  // cc:begin stripe
   {
     title: "Subscriptions & renewal",
-    summary: "How paid plans renew, and how to cancel.",
+    summary: "How paid plans renew, how to cancel, and what is refunded.",
+    href: "/legal/subscriptions",
   },
+  // cc:end stripe
   {
     title: "Copyright & DMCA",
     summary: "How to report content that infringes your copyright.",

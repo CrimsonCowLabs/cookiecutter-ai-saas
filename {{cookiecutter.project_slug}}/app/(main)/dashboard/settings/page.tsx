@@ -2,8 +2,9 @@ import { eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users, subscriptions } from "@/lib/db/schema";
-import { getPlanLimits } from "@/lib/plans";
-import { createPortalAction } from "@/app/actions/billing";
+import { formatPrice, getPlanConfig } from "@/lib/plans";
+import { createPortalAction, startCheckoutAction } from "@/app/actions/billing";
+import { WithRenewalTerms } from "@/components/billing/renewal-terms";
 import config from "@/config";
 import Link from "next/link";
 
@@ -23,7 +24,8 @@ export default async function SettingsPage() {
   });
   if (!user) return null;
 
-  const limits = getPlanLimits(user.plan);
+  const currentPlan = getPlanConfig(user.plan);
+  const limits = currentPlan.limits;
 
   const subscription = await db.query.subscriptions.findFirst({
     where: eq(subscriptions.userId, session.user.id),
@@ -62,13 +64,13 @@ export default async function SettingsPage() {
               <p className="text-sm text-base-content/60">
                 {user.plan === "free"
                   ? "Free forever"
-                  : "Billed annually"}
+                  : `${formatPrice(currentPlan)} a ${currentPlan.interval}, renews automatically`}
               </p>
             </div>
             {user.plan === "free" ? (
-              <Link href="/sign-up?plan_id=pro" className="btn btn-primary">
+              <a href="#upgrade" className="btn btn-primary">
                 Upgrade
-              </Link>
+              </a>
             ) : (
               <form action={createPortalAction}>
                 <button type="submit" className="btn btn-outline">
@@ -119,8 +121,8 @@ export default async function SettingsPage() {
 
       {/* Plan comparison (for free users) */}
       {user.plan === "free" && (
-        <div className="space-y-3">
-          <h2 className="text-lg font-semibold">Upgrade</h2>
+        <section id="upgrade" aria-labelledby="upgrade-heading" className="space-y-3 scroll-mt-6">
+          <h2 id="upgrade-heading" className="text-lg font-semibold">Upgrade</h2>
           <div className="grid gap-3 md:grid-cols-2">
             {config.stripe.plans
               .filter((p) => p.tier !== "free")
@@ -132,14 +134,14 @@ export default async function SettingsPage() {
                   }`}
                 >
                   <div>
-                    <p className="font-semibold">{plan.name}</p>
+                    <h3 className="font-semibold">{plan.name}</h3>
                     <p className="text-sm text-base-content/60">
                       {plan.description}
                     </p>
                     <p className="text-2xl font-bold mt-2">
-                      ${plan.price}
+                      {formatPrice(plan)}
                       <span className="text-sm font-normal text-base-content/60">
-                        /month
+                        /{plan.interval}
                       </span>
                     </p>
                   </div>
@@ -157,16 +159,29 @@ export default async function SettingsPage() {
                       </li>
                     ))}
                   </ul>
-                  <Link
-                    href={`/sign-up?plan_id=${plan.tier}`}
-                    className="btn btn-primary w-full"
-                  >
-                    Upgrade to {plan.name}
-                  </Link>
+                  <form action={startCheckoutAction}>
+                    <input type="hidden" name="planId" value={plan.tier} />
+                    <WithRenewalTerms plan={plan}>
+                      {(describedBy) => (
+                        <button
+                          type="submit"
+                          aria-describedby={describedBy}
+                          className="btn btn-primary w-full"
+                        >
+                          Upgrade to {plan.name}
+                        </button>
+                      )}
+                    </WithRenewalTerms>
+                  </form>
                 </div>
               ))}
           </div>
-        </div>
+          <p className="text-sm text-base-content/70">
+            <Link href="/legal/subscriptions" className="link link-primary">
+              How renewal, cancellation and refunds work
+            </Link>
+          </p>
+        </section>
       )}
     </div>
   );

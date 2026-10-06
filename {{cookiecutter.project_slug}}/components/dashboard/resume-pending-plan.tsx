@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { getPendingPlanId, forgetPendingPlan } from "@/lib/pending-plan";
-import { resumeCheckoutAction } from "@/app/actions/billing";
+import { startCheckoutAction } from "@/app/actions/billing";
 
 /**
  * Mounted once in the dashboard layout. A visitor who picked a paid plan
@@ -22,7 +22,7 @@ import { resumeCheckoutAction } from "@/app/actions/billing";
  * set-state-in-effect lint rule exists to catch.
  *
  * A real form submission, not a bare client call to the action, so
- * resumeCheckoutAction's redirect() is handled by Next's normal form-action
+ * startCheckoutAction's redirect() is handled by Next's normal form-action
  * navigation path — the same mechanism the sidebar's sign-out button relies
  * on.
  */
@@ -39,7 +39,7 @@ export function ResumePendingPlan() {
   }, []);
 
   return (
-    <form ref={formRef} action={resumeCheckoutAction} hidden>
+    <form ref={formRef} action={startCheckoutAction} hidden>
       <input ref={inputRef} type="hidden" name="planId" />
     </form>
   );
