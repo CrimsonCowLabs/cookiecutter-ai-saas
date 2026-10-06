@@ -143,7 +143,8 @@ echo "==> Running the compliance tests"
 # ports the app is pointed at, so two files starting the same one at once
 # would collide.
 if [[ $# -gt 0 ]]; then TESTS=(node --test --test-concurrency=1 "$@"); else TESTS=(npm run test:compliance); fi
-# SERVER_LOG lets the age-gate tests check no date of birth was logged.
+# SERVER_LOG lets the age-gate tests check no date of birth was logged{% if cookiecutter.include_stripe == "yes" %},
+# and the acknowledgment tests check what an unfulfilled checkout logs{% endif %}.
 if ! BASE_URL="$BASE_URL" NEXTAUTH_SECRET="$NEXTAUTH_SECRET" DATABASE_URL="$DATABASE_URL" \
   FAKE_OIDC_PORT="$FAKE_OIDC_PORT" SERVER_LOG="$SERVER_LOG" \
 {%- if cookiecutter.include_stripe == "yes" %}

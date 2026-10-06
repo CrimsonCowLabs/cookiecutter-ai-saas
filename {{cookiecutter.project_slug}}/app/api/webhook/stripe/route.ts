@@ -57,6 +57,21 @@ function getSubscriptionPeriod(sub: Stripe.Subscription): {
   };
 }
 
+/**
+ * A paid checkout with no account to fulfil it for. Accounts are created only
+ * by Auth.js, behind the age gate (lib/auth.ts), so the webhook never makes
+ * one; the operator reconciles the payment instead (docs/compliance.md,
+ * "Children's privacy (COPPA)"). Logged by Stripe ids only, never the email.
+ * The event is still answered 200: a redelivery would find no account either.
+ */
+function logUnfulfilled(session: Stripe.Checkout.Session, customerId?: string | null) {
+  console.error(
+    `[Webhook] no account for checkout session ${session.id}` +
+      ` (customer ${customerId ?? "none"}); not fulfilled. Refund it in Stripe` +
+      " or ask the customer to sign up."
+  );
+}
+
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
@@ -88,7 +103,13 @@ export async function POST(req: NextRequest) {
         // Handle one-time purchases
         if (stripeObject.metadata?.type === "one_time_purchase") {
           const userId = stripeObject.client_reference_id;
-          if (!userId) break;
+          const owner = userId
+            ? await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1)
+            : [];
+          if (!userId || !owner[0]) {
+            logUnfulfilled(stripeObject, stripeObject.customer as string | null);
+            break;
+          }
 
           const session = await findCheckoutSession(stripeObject.id);
           const lineItem = session?.line_items?.data[0];
@@ -163,35 +184,19 @@ export async function POST(req: NextRequest) {
           customerId
         )) as Stripe.Customer;
 
-        let user;
+        // By the reference id the app's own checkouts carry, else (a Stripe
+        // Payment Link, say) by the customer's email. Either way only an
+        // existing account: see logUnfulfilled.
+        const result = userId
+          ? await db.select().from(users).where(eq(users.id, userId)).limit(1)
+          : customer.email
+            ? await db.select().from(users).where(eq(users.email, customer.email)).limit(1)
+            : [];
+        const user = result[0];
 
-        if (userId) {
-          const result = await db
-            .select()
-            .from(users)
-            .where(eq(users.id, userId))
-            .limit(1);
-          user = result[0];
-        } else if (customer.email) {
-          const result = await db
-            .select()
-            .from(users)
-            .where(eq(users.email, customer.email))
-            .limit(1);
-          user = result[0];
-
-          if (!user) {
-            const inserted = await db
-              .insert(users)
-              .values({
-                email: customer.email,
-                name: customer.name || null,
-              })
-              .returning();
-            user = inserted[0];
-          }
-        } else {
-          throw new Error("No user found");
+        if (!user) {
+          logUnfulfilled(stripeObject, customerId);
+          break;
         }
 
         // Update user plan and Stripe customer ID

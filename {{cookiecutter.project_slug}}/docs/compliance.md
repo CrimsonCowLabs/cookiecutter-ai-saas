@@ -122,6 +122,14 @@ by Google, Microsoft or magic link alike.
   before it is even sent. The adapter's `createUser` checks again and refuses
   to insert a user without a passed check. Sign-ins to existing accounts are
   never blocked.
+{% if cookiecutter.include_stripe == "yes" -%}
+- **Payments don't make accounts.** The Stripe webhook fulfils a checkout
+  only for an existing account, found by the app's reference id or, for a
+  checkout started elsewhere (a Stripe Payment Link, say), the customer's
+  email. A paid checkout from someone without an account is not fulfilled:
+  it is logged as `[Webhook] no account for checkout session …` with the
+  session and customer ids, never the email.
+{% endif -%}
 - **No date of birth anywhere.** The date is checked in `/api/age-check` and
   dropped. It is not in the database, the cookies or the logs. The `users`
   table records only `age_check_passed_at`, when the check was passed; it is
@@ -151,6 +159,12 @@ by Google, Microsoft or magic link alike.
 - Don't add a second way to create users. Anything that inserts into
   `users` outside Auth.js (an admin "invite user" form, an import) has to
   run the same check, or it bypasses the gate.
+{% if cookiecutter.include_stripe == "yes" -%}
+- Reconcile unfulfilled checkouts. Watch your logs for `no account for
+  checkout session`, look the session up in the Stripe Dashboard, and either
+  refund it or ask the customer to sign up with the email they paid with and
+  then resend the event from the Dashboard so the webhook fulfils it.
+{% endif -%}
 - Know the limitation: a new user's magic link only works in the browser
   that passed the age screen, within the hour. Opened elsewhere, it sends
   them back to the age screen to answer it there and ask for a new link.

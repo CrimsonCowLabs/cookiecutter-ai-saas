@@ -7,16 +7,23 @@
 // records every email sent. See docs/compliance.md, "Subscriptions and
 // automatic renewal".
 //
+// The same harness also proves the webhook never creates an account: a paid
+// checkout from someone without one is logged and left for the operator (see
+// docs/compliance.md, "Children's privacy (COPPA)").
+//
 // Only ships in projects generated with Stripe.
 //
 // Env vars (see tests/auth/support.mjs for defaults): BASE_URL,
 // NEXTAUTH_SECRET, DATABASE_URL; plus STRIPE_WEBHOOK_SECRET (the one the app
 // verifies events with), FAKE_STRIPE_PORT (see ./fake-stripe.mjs),
-// FAKE_RESEND_PORT (see ./fake-resend.mjs) and NO_RESEND_APP_PORT (below).
+// FAKE_RESEND_PORT (see ./fake-resend.mjs) and NO_RESEND_APP_PORT (below);
+// optionally, SERVER_LOG — the app's log file, checked for what the webhook
+// logs about a checkout it could not fulfil.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import Stripe from "stripe";
 import { config, connectDb, insertTestUser, deleteTestUser } from "../auth/support.mjs";
 import { configuredPlans } from "./support.mjs";
@@ -87,7 +94,9 @@ async function deliver(event, baseUrl = config.baseUrl) {
 /**
  * The checkout.session.completed event for `user` subscribing to `plan`, with
  * the session, customer and subscription it names made retrievable from the
- * fake Stripe API, since the webhook looks each of them up.
+ * fake Stripe API, since the webhook looks each of them up. `user.id` is the
+ * session's client_reference_id; leave it null for a checkout started without
+ * one (a Stripe Payment Link, say).
  */
 function subscriptionCompleted(user, plan) {
   const id = crypto.randomUUID();
@@ -96,7 +105,7 @@ function subscriptionCompleted(user, plan) {
     id: `cs_test_${id}`,
     object: "checkout.session",
     mode: "subscription",
-    client_reference_id: user.id,
+    client_reference_id: user.id ?? null,
     customer: `cus_test_${id}`,
     subscription: `sub_test_${id}`,
     customer_details: { email: user.email },
@@ -147,6 +156,49 @@ test("a completed subscription checkout sends exactly one acknowledgment, with t
       assert.match(email.text, step, `the acknowledgment's cancellation steps should mention ${step.source}`);
     }
   });
+});
+
+// Accounts are created only by Auth.js, behind the age gate (lib/auth.ts), so a
+// paid checkout from someone with no account is logged for the operator to
+// reconcile, never fulfilled by making them one.
+for (const [what, buyer] of [
+  ["no client_reference_id, and an email with no account", () => ({ id: null })],
+  ["a client_reference_id whose account no longer exists", () => ({ id: crypto.randomUUID() })],
+]) {
+  test(`a subscription checkout with ${what} creates no account and records nothing`, async () => {
+    const user = { ...buyer(), email: `compliance-no-account-${crypto.randomUUID()}@example.com` };
+    const event = subscriptionCompleted(user, plan);
+    const session = event.data.object;
+    // Accepted, so Stripe stops redelivering an event that would change nothing.
+    await deliver(event);
+
+    const { rows } = await db.query(`select id from users where email = $1`, [user.email]);
+    if (rows.length) await db.query(`delete from users where email = $1`, [user.email]);
+    assert.equal(rows.length, 0, "the webhook should never create an account; only sign-up does, behind the age gate");
+    assert.equal(await subscriptionRecorded(session.subscription), false, "no subscription should be recorded");
+    assert.equal(emailsTo(user).length, 0, "no acknowledgment should be sent");
+    if (process.env.SERVER_LOG) {
+      const log = fs.readFileSync(process.env.SERVER_LOG, "utf8");
+      assert.ok(log.includes(session.id), `the server log should name the unfulfilled checkout session, ${session.id}`);
+      assert.ok(!log.includes(user.email), "the server log should not contain the customer's email");
+    }
+  });
+}
+
+test("a one-time purchase whose client_reference_id has no account is logged, not recorded", async () => {
+  const id = crypto.randomUUID();
+  const session = { id: `cs_test_${id}`, object: "checkout.session", mode: "payment" };
+  stripe.add({ ...session, line_items: { object: "list", data: [{ quantity: 1, price: { id: "price_test_one_time" } }] } });
+  await deliver({
+    type: "checkout.session.completed",
+    data: { object: { ...session, client_reference_id: crypto.randomUUID(), metadata: { type: "one_time_purchase" } } },
+  });
+  const { rows } = await db.query(`select 1 from purchases where stripe_checkout_session_id = $1`, [session.id]);
+  assert.equal(rows.length, 0, "no purchase should be recorded");
+  if (process.env.SERVER_LOG) {
+    const log = fs.readFileSync(process.env.SERVER_LOG, "utf8");
+    assert.match(log, new RegExp(`no account.*${session.id}`), `the server log should say ${session.id} has no account`);
+  }
 });
 
 test("a one-time purchase sends no acknowledgment", async () => {
