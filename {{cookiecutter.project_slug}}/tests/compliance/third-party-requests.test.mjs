@@ -17,6 +17,7 @@ import {
   exists,
   pagesUnder,
   asSignedInUser,
+  ageCheckCookie,
 } from "./support.mjs";
 
 // The public pages a visitor can reach before signing in. /magic-link, /blog
@@ -55,6 +56,9 @@ test("public and auth pages make no off-origin requests", async () => {
   for (const path of PUBLIC_PAGES) {
     await assertNoOffOriginRequests(path);
   }
+  // Bare /sign-up is the age screen; the sign-up buttons and form only show
+  // once it has been passed.
+  await assertNoOffOriginRequests("/sign-up", { cookie: await ageCheckCookie("1970-01-01") });
 });
 
 test("legal pages make no off-origin requests", async () => {

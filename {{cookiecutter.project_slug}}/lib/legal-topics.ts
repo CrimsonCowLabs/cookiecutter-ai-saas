@@ -13,6 +13,7 @@ export const legalTopics: LegalTopic[] = [
   {
     title: "Children's privacy",
     summary: "Who can create an account, and what happens with a child's data.",
+    href: "/legal/children",
   },
   {
     title: "Fonts & third-party requests",

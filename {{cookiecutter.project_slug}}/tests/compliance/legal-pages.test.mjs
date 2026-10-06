@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { config, links } from "./support.mjs";
+import { config, links, minimumAge as configuredMinimumAge } from "./support.mjs";
 
 /** The string value of `key` inside the `legal.accessibility` block of config.ts. */
 function accessibilityConfig(key) {
@@ -70,4 +70,18 @@ test("the accessibility statement gives the configured contact address and revie
     "the contact address should be a mailto: link"
   );
   assert.match(html, /WCAG 2\.2/, "the statement should name its target standard");
+});
+
+test("the children's privacy notice gives the configured minimum age and a way for parents to reach the operator", async () => {
+  const minimumAge = configuredMinimumAge();
+
+  const { status, html } = await get("/legal/children");
+  assert.equal(status, 200, `/legal/children should load unauthenticated, got ${status}`);
+  assert.ok(links((await get("/legal")).html).includes("/legal/children"), "/legal should link to it");
+  assert.match(html, new RegExp(`at least (<!-- -->)?${minimumAge}\\b`), `it should say accounts need to be at least ${minimumAge}`);
+  assert.match(html, /href="mailto:[^"]+@[^"]+"/, "it should give parents an email address to write to");
+
+  const policy = await get("/privacy-policy");
+  assert.ok(links(policy.html).includes("/legal/children"), "the Privacy Policy should link to it");
+  assert.match(policy.html, new RegExp(`at least (<!-- -->)?${minimumAge}\\b`), "the Privacy Policy should state the minimum age too");
 });

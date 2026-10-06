@@ -20,6 +20,10 @@ const oauthProviders = [
   Google({
     clientId: process.env.GOOGLE_ID!,
     clientSecret: process.env.GOOGLE_SECRET!,
+    // Unset in production, so Google's own issuer applies. The compliance
+    // suite points it at a stand-in sign-in server
+    // (tests/compliance/fake-oidc.mjs) to sign up through Google for real.
+    issuer: process.env.AUTH_GOOGLE_ISSUER,
     // NOTE: this lets a Google sign-in adopt an existing account with the same
     // verified email (e.g. one created by magic link). Convenient, but it means
     // the OAuth provider's email verification is trusted. Set to false if your
@@ -31,9 +35,13 @@ const oauthProviders = [
   MicrosoftEntraID({
     clientId: process.env.MICROSOFT_ENTRA_ID_ID!,
     clientSecret: process.env.MICROSOFT_ENTRA_ID_SECRET!,
-    issuer: process.env.MICROSOFT_ENTRA_ID_TENANT_ID
-      ? `https://login.microsoftonline.com/${process.env.MICROSOFT_ENTRA_ID_TENANT_ID}/v2.0`
-      : "https://login.microsoftonline.com/common/v2.0",
+    // AUTH_MICROSOFT_ENTRA_ID_ISSUER is unset in production; the compliance
+    // suite sets it, as AUTH_GOOGLE_ISSUER above.
+    issuer:
+      process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER ||
+      (process.env.MICROSOFT_ENTRA_ID_TENANT_ID
+        ? `https://login.microsoftonline.com/${process.env.MICROSOFT_ENTRA_ID_TENANT_ID}/v2.0`
+        : "https://login.microsoftonline.com/common/v2.0"),
     allowDangerousEmailAccountLinking: true,
   }),
   // cc:end microsoft

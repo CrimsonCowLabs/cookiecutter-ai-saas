@@ -374,6 +374,10 @@ jobs:
   # baseline) adds to the same suite: the key pages pass axe-core's WCAG 2.2
   # AA rules in both themes, open with a working skip link and show a visible
   # focus outline, and /legal/accessibility shows the configured contact.
+  # Issue #80 (age gate) adds tests/compliance/age-gate.test.mjs: no account
+  # is created through any provider without a passed age check, and no date
+  # of birth is kept. The second run raises legal.minimumAge and reruns it, to
+  # prove the line moves with the config rather than being fixed at 13.
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an
@@ -381,7 +385,7 @@ jobs:
   # against a freshly generated one, with the default answers. It drives the
   # runner's preinstalled Google Chrome through puppeteer-core.
   compliance:
-    name: The legal pages, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app
+    name: The legal pages, age gate, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -403,6 +407,15 @@ jobs:
         env:
           CHROME_PATH: /usr/bin/google-chrome
         run: .generated-compliance/compliance-app/scripts/check_compliance.sh
+
+      - name: Raising the minimum age moves the age screen's line
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        working-directory: .generated-compliance/compliance-app
+        run: |
+          sed -i 's/minimumAge: 13,/minimumAge: 16,/' config.ts
+          grep -q 'minimumAge: 16,' config.ts
+          scripts/check_compliance.sh tests/compliance/age-gate.test.mjs tests/compliance/legal-pages.test.mjs
 
   # Acceptance criteria for issue #27 (make the billing flow work end to
   # end): subscription lifecycle webhooks move users between plans correctly,

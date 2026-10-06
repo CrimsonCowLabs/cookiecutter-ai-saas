@@ -48,7 +48,10 @@ Postgres and Redis with `docker compose`, builds the app, runs it with
 scripts/check_compliance.sh
 ```
 
-It needs Docker, port 3000 free, and Chrome or Chromium (set `CHROME_PATH`
+Name test files to run only those, for example
+`scripts/check_compliance.sh tests/compliance/age-gate.test.mjs`.
+
+It needs Docker, ports 3000 and 3999 free, and Chrome or Chromium (set `CHROME_PATH`
 if it is not in a usual place). Run it on a fresh checkout, not your working
 copy: it writes its own `.env.local`, so it refuses to run when one exists,
 and it deletes the compose volumes when it finishes.
@@ -57,14 +60,90 @@ It checks that:
 
 - `/legal` and every topic page it links to load without signing in, and the
   footer links to `/legal`;
+- no account is created without a passed age check, through any sign-in
+  method the app offers, and no date of birth is kept anywhere (see
+  [Children's privacy](#childrens-privacy-coppa));
 - the home page, the sign-in and sign-up pages, the other public pages, the
   blog (when the project has one), every legal page and the dashboard make
   no request to another server.
-- the home page, the sign-in and sign-up pages, the Privacy Policy and
+- the home page, the sign-in page, the sign-up page in each of its states
+  (age screen, with an error, passed, turned away), the Privacy Policy and
   Terms, every legal page, the dashboard and the account settings pass an
   automated WCAG 2.2 AA audit in both the light and the dark theme, open
   with a working "Skip to content" link, and show a clearly visible focus
   outline on everything the keyboard can reach.
+
+## Children's privacy (COPPA)
+
+**The law and the risk.** The US Children's Online Privacy Protection Act
+(COPPA, 15 U.S.C. 6501–6506, and the FTC's COPPA Rule, 16 CFR Part 312)
+forbids an online service from collecting personal information, an email
+address included, from a child under 13 without first getting verifiable
+parental consent. It applies to a service directed to children, and to a
+general-audience service that has actual knowledge it is collecting from a
+child. The FTC enforces it with civil penalties of up to $53,088 per
+violation (16 CFR 1.98, adjusted for inflation each year), and each child
+can count as a violation. Under the EU's GDPR (Article 8), a child can
+consent alone from 16, or from as young as 13 where a member state has
+lowered it. As of October 2026.
+
+Sign-up used to ask for no age, so an account could be created for anyone,
+by Google, Microsoft or magic link alike.
+
+**What the app does.**
+
+- **An age screen before every new account.** `/sign-up` first shows only a
+  date-of-birth form (`components/auth/age-screen.tsx`); the Google and
+  Microsoft buttons and the magic-link form appear once it is passed. It is
+  neutral, as the FTC's COPPA FAQ asks of age screens: it asks for a full
+  date, starts empty, and doesn't say what age is needed. It is a plain form
+  posted to `/api/age-check`, so it works without JavaScript, and an error is
+  announced to screen readers.
+- **Passed or turned away, in a signed cookie.** Someone at least
+  `legal.minimumAge` gets a signed "passed" cookie that lasts an hour.
+  Someone younger gets a signed "turned away" cookie that lasts a day; until
+  it expires the page tells them, plainly, that an account can't be created,
+  and won't ask again (`lib/age-check.ts`).
+- **Enforced where accounts are made.** Every sign-in passes through the
+  Auth.js `signIn` callback in `lib/auth.ts`. One that would create a new
+  account, from any provider and whether it started on the sign-up or the
+  sign-in page, is sent back to the age screen unless the visitor holds a
+  valid "passed" cookie and no "turned away" one. A magic link is refused
+  before it is even sent. The adapter's `createUser` checks again and refuses
+  to insert a user without a passed check. Sign-ins to existing accounts are
+  never blocked.
+- **No date of birth anywhere.** The date is checked in `/api/age-check` and
+  dropped. It is not in the database, the cookies or the logs. The `users`
+  table records only `age_check_passed_at`, when the check was passed; it is
+  null for accounts created before the age gate existed (they are
+  grandfathered).
+- **A notice.** `/legal/children` and the Privacy Policy's "Children's
+  Privacy" section state the minimum age and tell parents how to reach you.
+- The compliance check signs up through every provider the app offers
+  (Google and Microsoft through a stand-in sign-in server,
+  `tests/compliance/fake-oidc.mjs`) and proves all of the above against the
+  running app, including that the line sits exactly at `legal.minimumAge`.
+
+**What you still have to do.**
+
+- Don't direct the app at children. An age screen is only enough for a
+  general-audience service: if your content, ads or marketing are aimed at
+  under-13s, COPPA requires verifiable parental consent, which this template
+  does not provide.
+- Set `legal.minimumAge` for the markets you serve. 13 is the US line; raise
+  it to 16 (or the age a member state has set) if you serve the EU, since
+  the app has no parental-consent flow. The screen, the notice and the
+  Privacy Policy all follow it.
+- Answer parents. The children's privacy notice gives the Privacy Policy's
+  contact address; if a parent tells you a child under the minimum age has
+  an account, delete the account and everything connected to it, and
+  confirm it to them.
+- Don't add a second way to create users. Anything that inserts into
+  `users` outside Auth.js (an admin "invite user" form, an import) has to
+  run the same check, or it bypasses the gate.
+- Know the limitation: a new user's magic link only works in the browser
+  that passed the age screen, within the hour. Opened elsewhere, it sends
+  them back to the age screen to answer it there and ask for a new link.
 
 ## Fonts and third-party requests
 

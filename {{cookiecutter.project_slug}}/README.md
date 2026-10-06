@@ -254,8 +254,10 @@ not an npm script or an `ansible-playbook` command remembered over SSH — see
 The app ships a `/legal` hub, linked from the footer, that explains how it
 handles common legal risks, and the operator details those pages need (your
 postal address, DMCA agent, accessibility contact) live in `config.ts`'s
-`legal` section as placeholders to replace before launch. Its key pages are
-checked against WCAG 2.2 AA, and `/legal/accessibility` is its
+`legal` section as placeholders to replace before launch. Every new account
+passes a neutral age screen first (COPPA; the minimum age is
+`legal.minimumAge`, 13 by default), and no date of birth is kept. Its key
+pages are checked against WCAG 2.2 AA, and `/legal/accessibility` is its
 accessibility statement.
 [docs/compliance.md](docs/compliance.md) covers each risk, what the app
 already does and what is still up to you. It is not legal advice.

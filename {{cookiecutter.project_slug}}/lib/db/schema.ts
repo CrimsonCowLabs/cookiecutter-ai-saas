@@ -47,6 +47,10 @@ export const users = pgTable("users", {
   // product.
   credits: integer("credits").notNull().default(0),
   isAdmin: boolean("is_admin").notNull().default(false),
+  // When this account's holder passed the age screen (lib/age-check.ts), set
+  // as the account is created. Never their date of birth, which is not kept
+  // anywhere. Null for accounts created before the age gate existed.
+  ageCheckPassedAt: timestamp("age_check_passed_at", { mode: "date" }),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
 });

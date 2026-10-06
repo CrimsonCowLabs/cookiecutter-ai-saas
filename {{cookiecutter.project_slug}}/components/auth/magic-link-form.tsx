@@ -34,6 +34,13 @@ export function MagicLinkForm({ planId, callbackUrl, onSuccess }: MagicLinkFormP
         throw new Error(result.error);
       }
 
+      // An address with no account yet, from a visitor who hasn't passed the
+      // age screen: lib/auth.ts sends them there instead of sending a link.
+      if (result?.url && new URL(result.url).pathname === "/sign-up") {
+        window.location.assign(result.url);
+        return;
+      }
+
       setSuccess(true);
       onSuccess?.();
     } catch (err) {

@@ -13,7 +13,15 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import axe from "axe-core";
-import { config, launchBrowser, withPage, exists, pagesUnder, asSignedInUser } from "./support.mjs";
+import {
+  config,
+  launchBrowser,
+  withPage,
+  exists,
+  pagesUnder,
+  asSignedInUser,
+  ageCheckCookie,
+} from "./support.mjs";
 
 // axe-core's rules for every WCAG 2.0, 2.1 and 2.2 success criterion at
 // levels A and AA. (WCAG 2.2 added only one AA criterion axe can test, so its
@@ -27,11 +35,13 @@ const WCAG_22_AA = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 let themes;
 
 // /magic-link, /contact and /blog only exist for some answers at generation
-// time (see exists()).
+// time (see exists()). Bare "/sign-up" is the age screen; its other states
+// are in AGE_SCREEN_STATES below.
 const PUBLIC_PAGES = [
   "/",
   "/sign-in",
   "/sign-up",
+  "/sign-up?age_error=invalid",
   ...(exists("(auth)/magic-link") ? ["/magic-link"] : []),
   ...(exists("contact") ? ["/contact"] : []),
   "/privacy-policy",
@@ -62,11 +72,25 @@ after(async () => {
   await browser?.close();
 });
 
-/** Every listed page, with the session cookie to load it with (if any). */
+// /sign-up once the age screen has been answered: the sign-up buttons and
+// form for a visitor who passed, and the refusal for one who was turned away.
+// Each is { label, dateOfBirth } — a date far from any minimum age.
+const AGE_SCREEN_STATES = [
+  { label: "/sign-up, age check passed", dateOfBirth: "1970-01-01" },
+  { label: "/sign-up, turned away", dateOfBirth: new Date().toISOString().slice(0, 10) },
+];
+
+/**
+ * Every listed page: fn(path, { cookie, label }), with the cookie to load it
+ * with (if any) and the name to report it by.
+ */
 async function eachPage(fn) {
-  for (const path of [...PUBLIC_PAGES, ...otherPages]) await fn(path, {});
+  for (const path of [...PUBLIC_PAGES, ...otherPages]) await fn(path, { label: path });
+  for (const { label, dateOfBirth } of AGE_SCREEN_STATES) {
+    await fn("/sign-up", { label, cookie: await ageCheckCookie(dateOfBirth) });
+  }
   await asSignedInUser(async (cookie) => {
-    for (const path of SIGNED_IN_PAGES) await fn(path, { cookie });
+    for (const path of SIGNED_IN_PAGES) await fn(path, { label: path, cookie });
   });
 }
 
@@ -89,11 +113,11 @@ function describeViolations(path, theme, violations) {
 }
 
 test("every listed page passes axe's WCAG 2.2 AA rules in every theme", async (t) => {
-  await eachPage(async (path, options) => {
+  await eachPage(async (path, { label, ...options }) => {
     for (const theme of themes) {
-      await t.test(`${path} (${theme})`, () =>
+      await t.test(`${label} (${theme})`, () =>
         withPage(browser, path, options, async ({ page, res }) => {
-          assert.equal(res?.status(), 200, `${path} should load, got ${res?.status()}`);
+          assert.equal(res?.status(), 200, `${label} should load, got ${res?.status()}`);
           await setTheme(page, theme);
           await page.evaluate(axe.source);
           const { violations } = await page.evaluate(
@@ -103,7 +127,7 @@ test("every listed page passes axe's WCAG 2.2 AA rules in every theme", async (t
           assert.deepEqual(
             violations.map((v) => v.id),
             [],
-            `axe found WCAG 2.2 AA violations:\n${describeViolations(path, theme, violations)}`
+            `axe found WCAG 2.2 AA violations:\n${describeViolations(label, theme, violations)}`
           );
         })
       );
@@ -112,8 +136,8 @@ test("every listed page passes axe's WCAG 2.2 AA rules in every theme", async (t
 });
 
 test("the first Tab on every listed page reaches a working skip-to-content link", async (t) => {
-  await eachPage(async (path, options) => {
-    await t.test(path, () =>
+  await eachPage(async (path, { label, ...options }) => {
+    await t.test(label, () =>
       withPage(browser, path, options, async ({ page }) => {
         await page.keyboard.press("Tab");
         const link = await page.evaluate(() => {
@@ -141,10 +165,10 @@ test("the first Tab on every listed page reaches a working skip-to-content link"
         });
         assert.ok(
           link.tag === "A" && link.href.startsWith("#") && /skip to (main )?content/i.test(link.text),
-          `the first Tab on ${path} should focus a "Skip to content" link to an anchor on the page; ` +
+          `the first Tab on ${label} should focus a "Skip to content" link to an anchor on the page; ` +
             `it focused <${link.tag.toLowerCase()} href="${link.href}">${link.text.slice(0, 60)}`
         );
-        assert.ok(link.visible, `the skip link on ${path} should be visible once it has focus`);
+        assert.ok(link.visible, `the skip link on ${label} should be visible once it has focus`);
 
         await page.keyboard.press("Enter");
         const focused = await page.evaluate(() => ({
@@ -154,19 +178,19 @@ test("the first Tab on every listed page reaches a working skip-to-content link"
         assert.equal(
           `#${focused.id}`,
           link.href,
-          `following the skip link on ${path} should move focus to ${link.href}, ` +
+          `following the skip link on ${label} should move focus to ${link.href}, ` +
             `but focus is on <${focused.tag.toLowerCase()} id="${focused.id}">`
         );
-        assert.equal(focused.tag, "MAIN", `${link.href} on ${path} should be the page's <main>`);
+        assert.equal(focused.tag, "MAIN", `${link.href} on ${label} should be the page's <main>`);
       })
     );
   });
 });
 
 test("every element Tab reaches shows a clearly visible focus indicator in every theme", async (t) => {
-  await eachPage(async (path, options) => {
+  await eachPage(async (path, { label, ...options }) => {
     for (const theme of themes) {
-      await t.test(`${path} (${theme})`, () =>
+      await t.test(`${label} (${theme})`, () =>
         withPage(browser, path, options, async ({ page }) => {
           await setTheme(page, theme);
           const problems = [];
@@ -179,7 +203,7 @@ test("every element Tab reaches shows a clearly visible focus indicator in every
           assert.deepEqual(
             problems,
             [],
-            `on ${path} in the ${theme} theme, these elements have no clearly visible focus indicator ` +
+            `on ${label} in the ${theme} theme, these elements have no clearly visible focus indicator ` +
               `(a solid outline at least 2px thick, with 3:1 contrast against what is behind it):\n` +
               problems.join("\n")
           );

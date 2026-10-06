@@ -1,4 +1,5 @@
 import Link from "next/link";
+import config from "@/config";
 import { Main } from "@/components/ui/skip-link";
 
 export default function PrivacyPolicyPage() {
@@ -89,7 +90,26 @@ export default function PrivacyPolicyPage() {
 
           <section className="space-y-3">
             <h2 className="text-xl font-semibold text-base-content">
-              7. Contact
+              7. Children&apos;s Privacy
+            </h2>
+            <p>
+              You must be at least {config.legal.minimumAge} to create an
+              account, and we do not knowingly collect personal information
+              from anyone younger. Before an account is created, we ask for a
+              date of birth, check it and throw it away; we keep only the fact
+              that the check was passed, and when. If you believe your child
+              has given us personal information, contact us at the address
+              below and we will delete it. See{" "}
+              <Link href="/legal/children" className="link link-primary">
+                Children&apos;s privacy
+              </Link>{" "}
+              for the details.
+            </p>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-xl font-semibold text-base-content">
+              8. Contact
             </h2>
             <p>
               If you have questions about this Privacy Policy, contact{" "}

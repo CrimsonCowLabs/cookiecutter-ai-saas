@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **189 files** with
+Every generated project is a complete distributed system — **195 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -118,6 +118,13 @@ and prove what they claim against a running app rather than asserting it:
 
 - **A `/legal` hub**, linked from the footer, next to the Privacy Policy and
   Terms. Each topic page says what the risk is and how the app handles it.
+- **An age gate on every new account (COPPA).** Sign-up starts with a
+  neutral date-of-birth screen, and the Auth.js `signIn` callback refuses a
+  new account from Google, Microsoft or magic link alike without a passed
+  check. Anyone under the configured minimum age (13 by default) is turned
+  away, no date of birth is stored anywhere, and the check proves it by
+  signing up through every provider against the running app.
+  `/legal/children` is the children's privacy notice.
 - **No third-party requests before consent.** Fonts are self-hosted through
   `next/font`, and `scripts/check_compliance.sh` loads the public, auth, legal
   and dashboard pages in a headless Chrome and fails, naming the host, if any

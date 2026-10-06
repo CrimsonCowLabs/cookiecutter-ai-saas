@@ -5,7 +5,10 @@
 # why; this script is only the plumbing that gets a real server and a real
 # Postgres in front of them.
 #
-# Usage: scripts/check_compliance.sh
+# Usage: scripts/check_compliance.sh [test file ...]
+#
+# With no arguments it runs every tests/compliance/*.test.mjs; name files to
+# run only those (CI reruns the age gate this way with the minimum age raised).
 #
 # Same setup as the auth check this template is tested with: postgres and
 # redis come up via docker-compose.yml, the app runs as a plain background
@@ -46,6 +49,12 @@ APP_PORT=3000
 BASE_URL="http://localhost:${APP_PORT}"
 DATABASE_URL="postgresql://postgres:postgres@localhost:${POSTGRES_PORT}/${DB_NAME}"
 REDIS_URL="redis://localhost:${REDIS_PORT}"
+# The age-gate tests sign in through Google and Microsoft by way of a fake
+# identity provider they run on this port (tests/compliance/fake-oidc.mjs);
+# the issuer overrides point the app's providers at it instead of the real
+# ones. Unused providers' settings are harmless.
+FAKE_OIDC_PORT=3999
+FAKE_OIDC="http://localhost:${FAKE_OIDC_PORT}"
 
 cat > "$ENV_FILE" <<ENV
 NEXTAUTH_URL=${BASE_URL}
@@ -53,6 +62,12 @@ NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
 HOSTNAME=0.0.0.0
 DATABASE_URL=${DATABASE_URL}
 REDIS_URL=${REDIS_URL}
+GOOGLE_ID=compliance-test
+GOOGLE_SECRET=compliance-test
+AUTH_GOOGLE_ISSUER=${FAKE_OIDC}/google
+MICROSOFT_ENTRA_ID_ID=compliance-test
+MICROSOFT_ENTRA_ID_SECRET=compliance-test
+AUTH_MICROSOFT_ENTRA_ID_ISSUER=${FAKE_OIDC}/microsoft
 ENV
 
 # Outside the project, so a run leaves nothing behind in the tree.
@@ -101,8 +116,11 @@ curl -sS -o /dev/null --max-time 5 "$BASE_URL/" >/dev/null 2>&1 || {
 pass "app answers on $BASE_URL"
 
 echo "==> Running the compliance tests"
+if [[ $# -gt 0 ]]; then TESTS=(node --test "$@"); else TESTS=(npm run test:compliance); fi
+# SERVER_LOG lets the age-gate tests check no date of birth was logged.
 if ! BASE_URL="$BASE_URL" NEXTAUTH_SECRET="$NEXTAUTH_SECRET" DATABASE_URL="$DATABASE_URL" \
-  npm run test:compliance; then
+  FAKE_OIDC_PORT="$FAKE_OIDC_PORT" SERVER_LOG="$SERVER_LOG" \
+  "${TESTS[@]}"; then
   echo "---- server log (last 50 lines) ----" >&2
   tail -n 50 "$SERVER_LOG" >&2 || true
   fail "compliance tests failed"

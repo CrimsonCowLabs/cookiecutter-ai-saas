@@ -36,6 +36,13 @@ const CHROME_CANDIDATES = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 ];
 
+/** legal.minimumAge, read out of config.ts (the project root is the cwd). */
+export function minimumAge() {
+  const value = Number(fs.readFileSync("config.ts", "utf8").match(/minimumAge:\s*(\d+)/)?.[1]);
+  if (!(value > 0)) throw new Error("config.ts should set legal.minimumAge to a number");
+  return value;
+}
+
 /** Every same-site `href` in `html`, without its query or fragment. */
 export function links(html) {
   return [...html.matchAll(/href="(\/[^"#?]*)/g)].map((m) => m[1]);
@@ -73,6 +80,23 @@ export async function asSignedInUser(fn) {
   } finally {
     await db.end();
   }
+}
+
+/**
+ * A `Cookie:` header value for a visitor who has answered the age screen on
+ * /sign-up with `dateOfBirth` (YYYY-MM-DD): passed, or turned away. See
+ * ./age-gate.test.mjs for the screen itself.
+ */
+export async function ageCheckCookie(dateOfBirth) {
+  const res = await fetch(new URL("/api/age-check", config.baseUrl), {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ dateOfBirth }),
+  });
+  const cookie = res.headers.getSetCookie().find((c) => !/^[^=]+=;|max-age=0/i.test(c));
+  if (!cookie) throw new Error(`answering the age screen with ${dateOfBirth} set no cookie (${res.status})`);
+  return cookie.split(";")[0];
 }
 
 export async function launchBrowser() {
