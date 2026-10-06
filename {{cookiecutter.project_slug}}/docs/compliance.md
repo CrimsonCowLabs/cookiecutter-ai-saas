@@ -70,7 +70,8 @@ It checks that:
   [Subscriptions and automatic renewal](#subscriptions-and-automatic-renewal));
 - a completed subscription checkout sends the subscriber exactly one
   acknowledgment email with the same terms and how to cancel, even when
-  Stripe delivers the event twice; a one-time purchase sends none, and
+  Stripe delivers the event twice, and one whose send fails goes out when
+  Stripe redelivers the event; a one-time purchase sends none, and
   without Resend configured the webhook still succeeds and sends nothing;
 {%- endif %}
 - the home page, the sign-in and sign-up pages, the other public pages, the
@@ -228,16 +229,25 @@ nothing about renewal.
   redelivered event sends nothing more, and a one-time purchase sends
   nothing. Without `RESEND_API_KEY` the app sends nothing; see below. A
   send that fails (Resend down, domain not verified) is logged as
-  `Subscription acknowledgment send failed` and not retried, since the
-  subscription is already recorded: watch your logs for it, and consider
-  keeping Stripe's own confirmation emails on as well (see below) as a
-  backstop.
+  `Subscription acknowledgment send failed for <subscription id>` and the
+  webhook answers the event with a 500, so Stripe redelivers it (in live
+  mode, Stripe keeps retrying for up to three days) and the redelivery
+  sends it. Each send carries a Resend idempotency key for the
+  subscription, so deliveries that overlap still send one email. If the
+  retries run out, the log line is the last word: fix Resend, then resend
+  that subscription's `checkout.session.completed` event from the Stripe
+  Dashboard.
 - **One subscription, one row.** `subscriptions.stripe_subscription_id` is
-  unique, which is what stops a redelivered event from sending a second
-  acknowledgment. On an existing deployment, remove any duplicate rows
-  before applying the schema change (`npm run db:push` or your migration),
-  or it will fail. This keeps the oldest row for each subscription:
+  unique, so a redelivered event finds the row it recorded rather than
+  adding another, and `subscriptions.acknowledged_at` records when the
+  acknowledgment went out (null until then, and always without Resend).
+  On an existing deployment, remove any duplicate rows before applying the
+  schema change (`npm run db:push` or your migration), or it will fail.
+  This keeps the oldest row for each subscription:
   `delete from subscriptions a using subscriptions b where a.stripe_subscription_id = b.stripe_subscription_id and (a.created_at, a.id) > (b.created_at, b.id);`
+  Subscriptions recorded before the column existed start out null, so
+  resending one of their old events from the Dashboard sends another
+  acknowledgment.
 - **The notice.** `/legal/subscriptions` explains renewal, cancellation and
   refunds and lists each plan's terms; the Terms of Service have a
   "Payment and Automatic Renewal" section linking to it.

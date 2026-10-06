@@ -77,8 +77,12 @@ async function asNewUser(fn) {
   }
 }
 
-/** POST `event`, signed the way Stripe signs it, to the app at `baseUrl`. */
-async function deliver(event, baseUrl = config.baseUrl) {
+/**
+ * POST `event`, signed the way Stripe signs it, to the app at `baseUrl`, and
+ * return the response status. Unless `{ expectOk: false }`, assert the
+ * webhook accepted it (a 2xx; anything else and Stripe redelivers it).
+ */
+async function deliver(event, baseUrl = config.baseUrl, { expectOk = true } = {}) {
   const payload = JSON.stringify({ id: `evt_test_${crypto.randomUUID()}`, object: "event", ...event });
   const res = await fetch(new URL("/api/webhook/stripe", baseUrl), {
     method: "POST",
@@ -88,7 +92,8 @@ async function deliver(event, baseUrl = config.baseUrl) {
     },
     body: payload,
   });
-  assert.equal(res.status, 200, `the webhook should accept ${event.type}, got ${res.status}`);
+  if (expectOk) assert.equal(res.status, 200, `the webhook should accept ${event.type}, got ${res.status}`);
+  return res.status;
 }
 
 /**
@@ -133,6 +138,14 @@ async function subscriptionRecorded(subscriptionId) {
   return rows.length > 0;
 }
 
+/** Whether the subscription's row records that its acknowledgment went out. */
+async function acknowledged(subscriptionId) {
+  const { rows } = await db.query(`select acknowledged_at from subscriptions where stripe_subscription_id = $1`, [
+    subscriptionId,
+  ]);
+  return rows[0]?.acknowledged_at != null;
+}
+
 test("a completed subscription checkout sends exactly one acknowledgment, with the renewal terms and how to cancel", async () => {
   const terms = await termsShownFor(plan);
   await asNewUser(async (user) => {
@@ -155,6 +168,50 @@ test("a completed subscription checkout sends exactly one acknowledgment, with t
     for (const step of [/Manage billing/, /billing portal/i, /cancel/i]) {
       assert.match(email.text, step, `the acknowledgment's cancellation steps should mention ${step.source}`);
     }
+  });
+});
+
+test("the acknowledgment is sent with an idempotency key for its subscription, and recorded as sent", async () => {
+  await asNewUser(async (user) => {
+    const event = subscriptionCompleted(user, plan);
+    const subscriptionId = event.data.object.subscription;
+    await deliver(event);
+    const sent = emailsTo(user);
+    assert.equal(sent.length, 1, `one acknowledgment should be sent, got ${sent.length}`);
+    // Resend sends a key's email once, so two deliveries racing each other,
+    // or a crash between sending and recording it, can't send it twice.
+    assert.equal(sent[0].idempotencyKey, `subscription-acknowledgment/${subscriptionId}`);
+    assert.ok(await acknowledged(subscriptionId), "the subscription should record that its acknowledgment was sent");
+  });
+});
+
+test("a failed acknowledgment send fails the event, so Stripe's redelivery sends it", async () => {
+  await asNewUser(async (user) => {
+    const event = subscriptionCompleted(user, plan);
+    const subscriptionId = event.data.object.subscription;
+
+    resend.failNext();
+    const status = await deliver(event, config.baseUrl, { expectOk: false });
+    assert.ok(status >= 500, `the webhook should answer a failed send with a 5xx, so Stripe redelivers the event; got ${status}`);
+    assert.ok(await subscriptionRecorded(subscriptionId), "the subscription should still be recorded");
+    assert.equal(emailsTo(user).length, 0, "no acknowledgment should have been sent yet");
+    assert.equal(await acknowledged(subscriptionId), false, "the subscription should not be recorded as acknowledged");
+
+    // Stripe redelivers it, with Resend back up.
+    await deliver(event);
+    assert.equal(emailsTo(user).length, 1, "the redelivery should send the acknowledgment");
+    assert.ok(await acknowledged(subscriptionId), "the subscription should now be recorded as acknowledged");
+
+    await deliver(event);
+    assert.equal(emailsTo(user).length, 1, "a further redelivery should send nothing more");
+  });
+});
+
+test("two deliveries of the same event at once send one acknowledgment", async () => {
+  await asNewUser(async (user) => {
+    const event = subscriptionCompleted(user, plan);
+    await Promise.all([deliver(event), deliver(event)]);
+    assert.equal(emailsTo(user).length, 1, `exactly one acknowledgment should be sent, got ${emailsTo(user).length}`);
   });
 });
 
@@ -271,6 +328,11 @@ test("without Resend configured, the webhook still records the subscription and 
         "the subscription should have been recorded, so the webhook did handle it"
       );
       assert.equal(emailsTo(user).length, 0, "nothing should be sent without RESEND_API_KEY");
+      assert.equal(
+        await acknowledged(event.data.object.subscription),
+        false,
+        "with nothing sent, the subscription should not be recorded as acknowledged"
+      );
     })
   );
 });

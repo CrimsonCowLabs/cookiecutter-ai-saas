@@ -408,8 +408,9 @@ jobs:
   # tests/compliance/subscription-acknowledgment.test.mjs: a completed
   # subscription checkout emails the subscriber exactly one acknowledgment
   # with the renewal terms and how to cancel (read from a stand-in Resend
-  # API), a one-time purchase sends none, and an app without Resend still
-  # accepts the webhook and sends nothing.
+  # API), a failed send fails the event so Stripe's redelivery sends it, a
+  # one-time purchase sends none, and an app without Resend still accepts
+  # the webhook and sends nothing.
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an

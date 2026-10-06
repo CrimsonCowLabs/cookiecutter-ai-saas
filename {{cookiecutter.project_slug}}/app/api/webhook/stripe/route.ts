@@ -199,15 +199,31 @@ export async function POST(req: NextRequest) {
           break;
         }
 
+        // A redelivery of this event (Stripe retries it when the
+        // acknowledgment below fails) finds the subscription already
+        // recorded, and the user updated before it was. Updating them again
+        // could undo a plan change made in the billing portal since.
+        const alreadyRecorded = stripeObject.subscription
+          ? (
+              await db
+                .select({ id: subscriptions.id })
+                .from(subscriptions)
+                .where(eq(subscriptions.stripeSubscriptionId, stripeObject.subscription as string))
+                .limit(1)
+            ).length > 0
+          : false;
+
         // Update user plan and Stripe customer ID
-        await db
-          .update(users)
-          .set({
-            plan: plan.tier,
-            stripeCustomerId: customerId,
-            updatedAt: new Date(),
-          })
-          .where(eq(users.id, user.id));
+        if (!alreadyRecorded) {
+          await db
+            .update(users)
+            .set({
+              plan: plan.tier,
+              stripeCustomerId: customerId,
+              updatedAt: new Date(),
+            })
+            .where(eq(users.id, user.id));
+        }
 
         // Create subscription record
         if (stripeObject.subscription) {
@@ -217,11 +233,10 @@ export async function POST(req: NextRequest) {
 
           const period = getSubscriptionPeriod(sub);
 
-          // An empty `inserted` means Stripe redelivered an event this
-          // subscription was already recorded for (see the unique
-          // stripe_subscription_id in lib/db/schema.ts), and the subscriber
-          // was already sent the acknowledgment below.
-          const inserted = await db
+          // Unique on stripe_subscription_id (lib/db/schema.ts), so a
+          // redelivered event finds the row it recorded the first time
+          // rather than adding another.
+          await db
             .insert(subscriptions)
             .values({
               userId: user.id,
@@ -232,14 +247,38 @@ export async function POST(req: NextRequest) {
               currentPeriodStart: period.start,
               currentPeriodEnd: period.end,
             })
-            .onConflictDoNothing({ target: subscriptions.stripeSubscriptionId })
-            .returning();
+            .onConflictDoNothing({ target: subscriptions.stripeSubscriptionId });
 
           // California's Automatic Renewal Law: acknowledge the subscription
-          // with its terms and how to cancel (a no-op without Resend; see
+          // with its terms and how to cancel, on whichever delivery of this
+          // event first finds it unacknowledged (a no-op without Resend; see
           // lib/subscription-acknowledgment.ts).
-          if (inserted.length > 0) {
-            await sendSubscriptionAcknowledgment({ to: user.email, plan });
+          const [record] = await db
+            .select({ id: subscriptions.id, acknowledgedAt: subscriptions.acknowledgedAt })
+            .from(subscriptions)
+            .where(eq(subscriptions.stripeSubscriptionId, sub.id))
+            .limit(1);
+          if (record && !record.acknowledgedAt) {
+            const sent = await sendSubscriptionAcknowledgment({
+              to: user.email,
+              plan,
+              subscriptionId: sub.id,
+            });
+            if (sent === "failed") {
+              // Not the 200 every other error gets below: a 5xx makes Stripe
+              // redeliver the event, and the redelivery sends it. Everything
+              // above is safe to run again.
+              return NextResponse.json(
+                { error: "Subscription acknowledgment send failed" },
+                { status: 500 }
+              );
+            }
+            if (sent === "sent") {
+              await db
+                .update(subscriptions)
+                .set({ acknowledgedAt: new Date() })
+                .where(eq(subscriptions.id, record.id));
+            }
           }
         }
 

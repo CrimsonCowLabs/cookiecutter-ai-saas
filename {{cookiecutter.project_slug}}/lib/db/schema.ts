@@ -152,7 +152,7 @@ export const subscriptions = pgTable("subscriptions", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   // Unique so a redelivered checkout.session.completed event can't record the
-  // same subscription twice, or send its acknowledgment email twice.
+  // same subscription twice.
   stripeSubscriptionId: text("stripe_subscription_id").notNull().unique(),
   stripePriceId: text("stripe_price_id").notNull(),
   plan: planEnum("plan").notNull(),
@@ -163,6 +163,11 @@ export const subscriptions = pgTable("subscriptions", {
   currentPeriodEnd: timestamp("current_period_end", {
     mode: "date",
   }).notNull(),
+  // When the subscription acknowledgment email went out (California's
+  // Automatic Renewal Law; lib/subscription-acknowledgment.ts). Null until
+  // it has, and for good without Resend configured: the webhook sends it on
+  // whichever delivery of the event first finds it null.
+  acknowledgedAt: timestamp("acknowledged_at", { mode: "date" }),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
 });
 

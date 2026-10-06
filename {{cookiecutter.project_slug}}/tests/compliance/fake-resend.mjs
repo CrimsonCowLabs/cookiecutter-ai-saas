@@ -13,13 +13,22 @@ import http from "node:http";
 export const FAKE_RESEND_PORT = Number(process.env.FAKE_RESEND_PORT || 3997);
 
 /**
- * Start the fake API. Returns { emails, close }:
+ * Start the fake API. Returns { emails, failNext, close }:
  *
  *   emails — every email sent so far, in order, as the app sent it:
- *     { from, to, subject, text, ... } (`to` may be a string or a list).
+ *     { from, to, subject, text, ... } (`to` may be a string or a list),
+ *     plus `idempotencyKey`, the request's Idempotency-Key header (or null).
+ *   failNext(count = 1) — answer the next `count` sends with a 500, the way
+ *     Resend answers when it is down, recording nothing.
+ *
+ * Like Resend, a send repeating an earlier one's Idempotency-Key is answered
+ * with that earlier send's id and not sent again (or a 409, if its body
+ * differs). Resend forgets keys after 24 hours; a test run never gets there.
  */
 export async function startFakeResend() {
   const emails = [];
+  const byKey = new Map();
+  let failures = 0;
 
   const server = http.createServer((req, res) => {
     let body = "";
@@ -32,14 +41,31 @@ export async function startFakeResend() {
       if (req.method !== "POST" || req.url !== "/emails") {
         return json(404, { name: "not_found", message: `fake Resend: no ${req.method} ${req.url}` });
       }
-      emails.push(JSON.parse(body));
-      json(200, { id: `email_test_${emails.length}` });
+      if (failures > 0) {
+        failures--;
+        return json(500, { name: "internal_server_error", message: "fake Resend: failing on purpose", statusCode: 500 });
+      }
+      const idempotencyKey = req.headers["idempotency-key"] ?? null;
+      const earlier = idempotencyKey && byKey.get(idempotencyKey);
+      if (earlier) {
+        if (earlier.body !== body) {
+          return json(409, { name: "invalid_idempotent_request", message: "fake Resend: same key, different body", statusCode: 409 });
+        }
+        return json(200, { id: earlier.id });
+      }
+      emails.push({ ...JSON.parse(body), idempotencyKey });
+      const id = `email_test_${emails.length}`;
+      if (idempotencyKey) byKey.set(idempotencyKey, { body, id });
+      json(200, { id });
     });
   });
   await new Promise((resolve) => server.listen(FAKE_RESEND_PORT, resolve));
 
   return {
     emails,
+    failNext: (count = 1) => {
+      failures = count;
+    },
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }

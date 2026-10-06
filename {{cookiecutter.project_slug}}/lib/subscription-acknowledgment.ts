@@ -35,20 +35,43 @@ export function subscriptionAcknowledgment(plan: PlanConfig): { subject: string;
 }
 
 /**
- * Email `to` the acknowledgment for `plan`, through Resend. Without
- * RESEND_API_KEY nothing is sent; the operator turns on Stripe's own
- * subscription emails instead (docs/compliance.md). A failed send is logged,
- * never thrown: the subscription it acknowledges is already recorded.
+ * Email `to` the acknowledgment for `plan`'s subscription `subscriptionId`
+ * (Stripe's id), through Resend, and say how it went:
+ *
+ * - "sent": Resend accepted it.
+ * - "skipped": nothing to send. Either RESEND_API_KEY is unset, and the
+ *   operator turns on Stripe's own subscription emails instead
+ *   (docs/compliance.md), or the plan never renews.
+ * - "failed": Resend refused it or could not be reached (logged here). The
+ *   caller should let it be tried again.
+ *
+ * Sent with an idempotency key for the subscription, so Resend sends one
+ * subscription's acknowledgment once however many times this is called for
+ * it within Resend's key lifetime (24 hours): two webhook deliveries racing
+ * each other, or a retry after the send went out but was not recorded.
  */
-export async function sendSubscriptionAcknowledgment({ to, plan }: { to: string; plan: PlanConfig }): Promise<void> {
+export async function sendSubscriptionAcknowledgment({
+  to,
+  plan,
+  subscriptionId,
+}: {
+  to: string;
+  plan: PlanConfig;
+  subscriptionId: string;
+}): Promise<"sent" | "skipped" | "failed"> {
   const apiKey = process.env.RESEND_API_KEY;
   const message = subscriptionAcknowledgment(plan);
-  if (!apiKey || !message) return;
+  if (!apiKey || !message) return "skipped";
 
   try {
-    const { error } = await new Resend(apiKey).emails.send({ from: config.resend.fromNoReply, to, ...message });
-    if (error) console.error("Subscription acknowledgment send failed:", error.message);
+    const { error } = await new Resend(apiKey).emails.send(
+      { from: config.resend.fromNoReply, to, ...message },
+      { idempotencyKey: `subscription-acknowledgment/${subscriptionId}` }
+    );
+    if (!error) return "sent";
+    console.error(`Subscription acknowledgment send failed for ${subscriptionId}:`, error.message);
   } catch (e) {
-    console.error("Subscription acknowledgment send failed:", e);
+    console.error(`Subscription acknowledgment send failed for ${subscriptionId}:`, e);
   }
+  return "failed";
 }
