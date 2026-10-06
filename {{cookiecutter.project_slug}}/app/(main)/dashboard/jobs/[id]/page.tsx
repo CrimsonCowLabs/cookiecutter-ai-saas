@@ -75,7 +75,7 @@ export default async function JobDetailPage({
           <p className="text-sm text-base-content/60 mt-1 break-all">
             {requestedUrl ?? job.id}
           </p>
-          <p className="text-xs text-base-content/40 mt-1">
+          <p className="text-xs text-base-content/70 mt-1">
             Submitted{" "}
             {new Date(job.createdAt).toLocaleString("en-US", {
               month: "short",

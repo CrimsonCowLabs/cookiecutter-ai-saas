@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { Logo } from "@/components/brand/logo";
 import { Navbar } from "@/components/ui/navbar";
 import { Footer } from "@/components/ui/footer";
+import { Main } from "@/components/ui/skip-link";
 
 export const metadata: Metadata = {
   title: "__PROJECT_NAME__ | AI-Powered SaaS Platform",
@@ -88,7 +89,7 @@ function ArrowRight({ className }: { className?: string }) {
 
 function CheckIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
       <polyline points="20 6 9 17 4 12" />
     </svg>
   );
@@ -205,6 +206,8 @@ export default async function LandingPage() {
       {/* Header */}
       <Navbar isAuthenticated={isAuthenticated} />
 
+      <Main>
+
       {/* ─── HERO ─── */}
       <section className="relative z-10 max-w-6xl mx-auto px-6 pt-24 pb-20 lg:pt-32 lg:pb-28">
         <div className="max-w-3xl mx-auto text-center space-y-8">
@@ -241,7 +244,7 @@ export default async function LandingPage() {
             </a>
           </div>
 
-          <div className="flex flex-wrap justify-center items-center gap-6 text-xs text-base-content/40 pt-2">
+          <div className="flex flex-wrap justify-center items-center gap-6 text-xs text-base-content/70 pt-2">
             <span className="flex items-center gap-1.5">
               <CheckIcon className="w-3.5 h-3.5 text-emerald-500" />
               Free to start
@@ -268,7 +271,7 @@ export default async function LandingPage() {
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">
               Everything you need to get started
             </h2>
-            <p className="text-base-content/50 mt-4 max-w-lg mx-auto">
+            <p className="text-base-content/70 mt-4 max-w-lg mx-auto">
               A complete AI platform with real-time processing, smart analytics, and a beautiful dashboard.
             </p>
           </div>
@@ -283,7 +286,7 @@ export default async function LandingPage() {
                   {feature.icon}
                 </div>
                 <h3 className="text-lg font-semibold mb-2">{feature.title}</h3>
-                <p className="text-sm text-base-content/50 leading-relaxed">
+                <p className="text-sm text-base-content/70 leading-relaxed">
                   {feature.description}
                 </p>
               </div>
@@ -302,7 +305,7 @@ export default async function LandingPage() {
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">
               Simple, transparent pricing
             </h2>
-            <p className="text-base-content/50 mt-4 max-w-lg mx-auto">
+            <p className="text-base-content/70 mt-4 max-w-lg mx-auto">
               Start free, upgrade when you need more. No hidden fees.
             </p>
           </div>
@@ -325,13 +328,13 @@ export default async function LandingPage() {
 
                 <div className="mb-6">
                   <h3 className="text-lg font-semibold">{plan.name}</h3>
-                  <p className="text-sm text-base-content/50 mt-1">{plan.description}</p>
+                  <p className="text-sm text-base-content/70 mt-1">{plan.description}</p>
                   <div className="mt-4">
                     <span className="text-4xl font-bold">
                       {plan.price === 0 ? "Free" : `$${plan.price}`}
                     </span>
                     {plan.price > 0 && (
-                      <span className="text-sm text-base-content/50">/{plan.interval}</span>
+                      <span className="text-sm text-base-content/70">/{plan.interval}</span>
                     )}
                   </div>
                 </div>
@@ -341,14 +344,15 @@ export default async function LandingPage() {
                     <li
                       key={feature.name}
                       className={`text-sm flex items-center gap-2 ${
-                        feature.included ? "" : "text-base-content/30"
+                        feature.included ? "" : "text-base-content/70"
                       }`}
                     >
                       {feature.included ? (
                         <CheckIcon className="w-4 h-4 text-emerald-500 shrink-0" />
                       ) : (
-                        <span className="w-4 h-4 flex items-center justify-center text-base-content/20 shrink-0">—</span>
+                        <span className="w-4 h-4 flex items-center justify-center shrink-0" aria-hidden="true">—</span>
                       )}
+                      <span className="sr-only">{feature.included ? "Included:" : "Not included:"}</span>
                       {feature.name}
                     </li>
                   ))}
@@ -387,6 +391,8 @@ export default async function LandingPage() {
           </div>
         </div>
       </section>
+
+      </Main>
 
       {/* Footer */}
       <Footer />

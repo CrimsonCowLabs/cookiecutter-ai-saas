@@ -36,7 +36,7 @@ export function AuthForm({
           <div>
             <OAuthButtons callbackUrl={callbackUrl} planId={planId} />
             {/* cc:begin magic-link */}
-            <div className="divider text-xs uppercase tracking-[0.2em] text-base-content/50">or</div>
+            <div className="divider text-xs uppercase tracking-[0.2em] text-base-content/70">or</div>
             {/* cc:end magic-link */}
           </div>
         )}

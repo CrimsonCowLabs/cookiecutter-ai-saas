@@ -120,7 +120,7 @@ export function JobStatus({ jobId, initialStatus, onComplete }: JobStatusProps) 
               <span className="text-xs font-medium text-success">Live</span>
             </>
           )}
-          <span className="text-xs text-base-content/40 ml-1">{progress.progress}%</span>
+          <span className="text-xs text-base-content/70 ml-1">{progress.progress}%</span>
         </div>
       </div>
       <div className="h-1.5 bg-base-content/10 rounded-full overflow-hidden">

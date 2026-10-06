@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **186 files** with
+Every generated project is a complete distributed system — **189 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -123,6 +123,10 @@ and prove what they claim against a running app rather than asserting it:
   and dashboard pages in a headless Chrome and fails, naming the host, if any
   of them contacts another server. A Google Fonts `<link>` is called out by
   name.
+- **WCAG 2.2 AA on the key pages.** The same check runs axe-core over the
+  landing, auth, legal, dashboard and settings pages in both themes, and
+  fails on any violation, a missing skip-to-content link or an invisible
+  focus outline. `/legal/accessibility` is the accessibility statement.
 - **The operator's legal details** (minimum age, marketing postal address,
   DMCA agent, accessibility contact, consent-text version) in one `legal`
   section of `config.ts`, shipped as placeholders to replace before launch.

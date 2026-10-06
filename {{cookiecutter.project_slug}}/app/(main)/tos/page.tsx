@@ -1,8 +1,9 @@
 import Link from "next/link";
+import { Main } from "@/components/ui/skip-link";
 
 export default function TermsOfServicePage() {
   return (
-    <div className="min-h-screen bg-base-100">
+    <Main className="min-h-screen bg-base-100">
       <div className="mx-auto w-full max-w-3xl px-6 py-16">
         <Link href="/" className="mb-8 inline-flex items-center gap-2 text-sm text-base-content/60 hover:text-base-content">
           <span>&larr;</span>
@@ -126,6 +127,6 @@ export default function TermsOfServicePage() {
           </section>
         </div>
       </div>
-    </div>
+    </Main>
   );
 }

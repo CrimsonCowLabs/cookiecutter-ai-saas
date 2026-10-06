@@ -100,6 +100,56 @@ body {
   min-width: 2.75rem;
 }
 
+/* Accessibility guarantees (WCAG 2.2 AA), held here rather than at each call
+ * site so that new pages get them by default — the same reasoning as the
+ * .btn rule above. These rules are unlayered on purpose: unlayered CSS beats
+ * Tailwind's and DaisyUI's layered rules whatever their specificity.
+ * tests/compliance/accessibility.test.mjs checks what each one is for.
+ */
+
+/* One focus indicator for everything a keyboard can reach (WCAG 2.4.7): a
+ * solid 2px ring in the theme's text colour, which contrasts with every base
+ * background in every theme. It replaces both the browser's thin default
+ * ring and DaisyUI's per-component ones, which draw in the component's own
+ * colour (the primary colour, for .btn-primary) and so can vanish against
+ * the page. */
+:focus-visible {
+  outline: 2px solid var(--color-base-content);
+  outline-offset: 2px;
+}
+/* <Main> takes focus when the skip link is followed, but it is not a
+ * control, and a ring around the whole page would just look like a bug. */
+#main-content:focus-visible {
+  outline: none;
+}
+
+/* See components/ui/skip-link.tsx. Kept off-screen with a transform, not
+ * display:none, so it can still take focus. */
+.skip-link {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  z-index: 100;
+  transform: translateY(-200%);
+  /* Appear at once: .btn would otherwise animate it in. */
+  transition: none;
+}
+.skip-link:focus {
+  transform: none;
+}
+
+/* The primary colour is chosen for buttons and fills, and as text it often
+ * falls short of the 4.5:1 contrast body text needs (WCAG 1.4.3): the default
+ * #c2410c on the dark theme's background is about 3:1. Text in the primary
+ * colour is mixed 30% towards the theme's text colour, which raises its
+ * contrast in both light and dark themes while keeping it recognisably the
+ * brand colour. If the compliance check still reports primary-coloured text
+ * as too faint with your colour, raise that 30%. */
+.text-primary,
+.link-primary {
+  color: color-mix(in oklab, var(--color-primary) 70%, var(--color-base-content));
+}
+
 code, pre, .font-mono {
   font-family: var(--font-mono), ui-monospace, monospace;
 }

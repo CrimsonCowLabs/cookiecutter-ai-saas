@@ -6,6 +6,7 @@ import { Footer } from "@/components/ui/footer";
 import { BlogCard } from "@/components/blog/blog-card";
 import fs from "fs";
 import path from "path";
+import { Main } from "@/components/ui/skip-link";
 
 export const metadata: Metadata = {
   title: "Blog | __PROJECT_NAME__",
@@ -66,11 +67,11 @@ export default function BlogPage() {
 
       <Navbar />
 
-      <main className="relative z-10 max-w-6xl mx-auto px-6 py-16">
+      <Main className="relative z-10 max-w-6xl mx-auto px-6 py-16">
         {/* Back to home */}
         <Link
           href="/"
-          className="inline-flex items-center gap-2 text-sm text-base-content/40 hover:text-base-content transition-colors mb-8"
+          className="inline-flex items-center gap-2 text-sm text-base-content/70 hover:text-base-content transition-colors mb-8"
         >
           <ArrowLeftIcon className="w-4 h-4" />
           Back to Home
@@ -104,7 +105,7 @@ export default function BlogPage() {
             ))}
           </div>
         )}
-      </main>
+      </Main>
 
       <Footer />
     </div>

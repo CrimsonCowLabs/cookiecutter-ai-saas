@@ -6,6 +6,7 @@ import path from "path";
 import { Navbar } from "@/components/ui/navbar";
 import { Footer } from "@/components/ui/footer";
 import { RichText } from "@/components/blog/rich-text";
+import { Main } from "@/components/ui/skip-link";
 
 interface BlogPost {
   slug: string;
@@ -89,12 +90,12 @@ export default async function BlogPostPage({ params }: Props) {
 
       <Navbar />
 
-      <main className="relative z-10">
+      <Main className="relative z-10">
         <article className="max-w-3xl mx-auto px-6 py-16">
           {/* Back link */}
           <Link
             href="/blog"
-            className="inline-flex items-center gap-2 text-sm text-base-content/40 hover:text-base-content transition-colors mb-8"
+            className="inline-flex items-center gap-2 text-sm text-base-content/70 hover:text-base-content transition-colors mb-8"
           >
             <ArrowLeftIcon className="w-4 h-4" />
             Back to Blog
@@ -120,7 +121,7 @@ export default async function BlogPostPage({ params }: Props) {
               {post.title}
             </h1>
 
-            <div className="flex items-center gap-4 mt-6 text-sm text-base-content/50">
+            <div className="flex items-center gap-4 mt-6 text-sm text-base-content/70">
               {post.publishedAt && (
                 <time dateTime={post.publishedAt}>
                   {new Date(post.publishedAt).toLocaleDateString("en-US", {
@@ -164,7 +165,7 @@ export default async function BlogPostPage({ params }: Props) {
             </Link>
           </div>
         </article>
-      </main>
+      </Main>
 
       <Footer />
     </div>

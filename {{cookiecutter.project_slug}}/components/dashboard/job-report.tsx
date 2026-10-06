@@ -58,7 +58,7 @@ export function JobReport({
 
         {question && (
           <div className="border-l-2 border-primary/40 pl-3">
-            <p className="text-xs uppercase tracking-wide text-base-content/50">Question</p>
+            <p className="text-xs uppercase tracking-wide text-base-content/70">Question</p>
             <p className="text-sm">{question}</p>
           </div>
         )}
@@ -129,7 +129,7 @@ export function JobReport({
       )}
 
       {typeof durationSeconds === "number" && (
-        <p className="text-xs text-base-content/50">
+        <p className="text-xs text-base-content/70">
           Generated in {formatDuration(durationSeconds)}
           {report.ai_enhanced ? " with AI" : ""}
         </p>

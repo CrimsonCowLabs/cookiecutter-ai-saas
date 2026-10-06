@@ -148,10 +148,11 @@ export default async function SettingsPage() {
                       <li
                         key={f.name}
                         className={`text-sm flex items-center gap-2 ${
-                          f.included ? "" : "text-base-content/40"
+                          f.included ? "" : "text-base-content/70"
                         }`}
                       >
-                        <span>{f.included ? "\u2713" : "\u2014"}</span>
+                        <span aria-hidden="true">{f.included ? "\u2713" : "\u2014"}</span>
+                        <span className="sr-only">{f.included ? "Included:" : "Not included:"}</span>
                         {f.name}
                       </li>
                     ))}

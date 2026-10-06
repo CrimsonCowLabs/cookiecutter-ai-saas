@@ -2,6 +2,7 @@ import { ReactNode } from "react";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { getSEOTags, renderSchemaTags } from "@/lib/seo";
 import ClientLayout from "@/components/LayoutClient";
+import { SkipLink } from "@/components/ui/skip-link";
 import config from "@/config";
 import "../globals.css";
 
@@ -21,6 +22,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
         {renderSchemaTags()}
       </head>
       <body>
+        <SkipLink />
         <ClientLayout>{children}</ClientLayout>
       </body>
     </html>

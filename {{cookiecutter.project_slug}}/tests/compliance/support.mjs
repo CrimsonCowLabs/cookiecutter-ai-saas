@@ -8,15 +8,15 @@
 // cookie minted there is one this app accepts here too.
 import fs from "node:fs";
 import puppeteer from "puppeteer-core";
-import { config } from "../auth/support.mjs";
-
-export {
+import {
   config,
   connectDb,
   insertTestUser,
   deleteTestUser,
   mintSessionCookie,
 } from "../auth/support.mjs";
+
+export { config };
 
 // Hosts that Google Fonts is served from. A request to either is the exact
 // thing a Munich court fined a site for (LG München I, 3 O 17493/20), and the
@@ -41,6 +41,40 @@ export function links(html) {
   return [...html.matchAll(/href="(\/[^"#?]*)/g)].map((m) => m[1]);
 }
 
+/**
+ * Whether `app/(main)/<dir>` is in this project. Some pages only exist for
+ * some answers at generation time (include_magic_link, include_stripe,
+ * include_marketing_extras); reading the tree rather than probing the URL
+ * means a page that should be there and 404s fails a test instead of being
+ * quietly skipped. Paths are relative to the project root, which is where
+ * `npm run test:compliance` runs from.
+ */
+export const exists = (dir) => fs.existsSync(`app/(main)/${dir}`);
+
+/** `index` plus every page under it that it links to. */
+export async function pagesUnder(index) {
+  const html = await (await fetch(new URL(index, config.baseUrl))).text();
+  return [index, ...new Set(links(html).filter((href) => href.startsWith(`${index}/`)))];
+}
+
+/**
+ * Run `fn(cookie)` as a freshly inserted user, signed in with a session
+ * cookie minted for them, and delete the user again afterwards.
+ */
+export async function asSignedInUser(fn) {
+  const db = await connectDb();
+  try {
+    const user = await insertTestUser(db);
+    try {
+      return await fn(await mintSessionCookie(user));
+    } finally {
+      await deleteTestUser(db, user.id);
+    }
+  } finally {
+    await db.end();
+  }
+}
+
 export async function launchBrowser() {
   const executablePath =
     process.env.CHROME_PATH || CHROME_CANDIDATES.find((p) => fs.existsSync(p));
@@ -60,17 +94,15 @@ export async function launchBrowser() {
 }
 
 /**
- * Load `path` in a fresh page with no consent given, and report every request
- * the page tried to make to another origin. Each such request is aborted
- * before it is sent, so the check itself never leaks anything.
+ * Load `path` in a fresh page with no consent given, hand the loaded page to
+ * `fn`, and close it again once `fn` is done. Every request the page tries to
+ * make to another origin is aborted before it is sent, so nothing a test
+ * does here ever leaks anything, and is recorded in the `offOrigin` list
+ * passed to `fn` (see visit() below for its shape).
  *
- * Returns { status, offOrigin }, where offOrigin is a list of
- * { host, url, kind } — kind is the resource type ("stylesheet", "font",
- * "script", ...) or "preconnect"/"dns-prefetch" for <link> hints, which open
- * a connection (and so send the visitor's IP address) without ever showing up
- * as a request.
+ * Returns whatever `fn` returns.
  */
-export async function visit(browser, path, { cookie } = {}) {
+export async function withPage(browser, path, { cookie } = {}, fn) {
   const base = new URL(config.baseUrl);
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
@@ -94,7 +126,26 @@ export async function visit(browser, path, { cookie } = {}) {
     });
 
     const res = await page.goto(new URL(path, base).href, { waitUntil: "networkidle0" });
+    return await fn({ page, res, offOrigin });
+  } finally {
+    await context.close();
+  }
+}
 
+/**
+ * Load `path` in a fresh page with no consent given, and report every request
+ * the page tried to make to another origin. Each such request is aborted
+ * before it is sent, so the check itself never leaks anything.
+ *
+ * Returns { status, finalPath, offOrigin }, where offOrigin is a list of
+ * { host, url, kind } — kind is the resource type ("stylesheet", "font",
+ * "script", ...) or "preconnect"/"dns-prefetch" for <link> hints, which open
+ * a connection (and so send the visitor's IP address) without ever showing up
+ * as a request.
+ */
+export async function visit(browser, path, options = {}) {
+  const base = new URL(config.baseUrl);
+  return withPage(browser, path, options, async ({ page, res, offOrigin }) => {
     // Anything loaded lazily (images below the fold, intersection-observed
     // embeds) only asks for itself once it is scrolled into view.
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
@@ -112,9 +163,7 @@ export async function visit(browser, path, { cookie } = {}) {
     }
 
     return { status: res?.status() ?? 0, finalPath: new URL(page.url()).pathname, offOrigin };
-  } finally {
-    await context.close();
-  }
+  });
 }
 
 /** One human-readable line per off-origin request, font hosts called out. */

@@ -19,3 +19,4 @@ Single-context: one root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`
 Rules:
 
 - **No off-origin requests before consent.** No page may make the visitor's browser contact another server until the visitor has opted in. Load fonts with `next/font`, self-host assets, and never add a `<link>`, `<script>` or `@import` pointing at another host. `tests/compliance/third-party-requests.test.mjs` enforces this against a running app.
+- **WCAG 2.2 AA on every page.** Render each page's content inside `<Main>` from `components/ui/skip-link.tsx`, and add every page you add to the page lists in `tests/compliance/accessibility.test.mjs`, which runs axe-core in both themes and checks the skip link and focus outlines. Don't remove or override the `:focus-visible` ring in `app/globals.css`, and keep muted text at `text-base-content/60` or stronger.

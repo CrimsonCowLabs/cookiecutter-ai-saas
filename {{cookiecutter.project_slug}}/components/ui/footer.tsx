@@ -14,7 +14,7 @@ export function Footer() {
                 __PROJECT_NAME__
               </span>
             </Link>
-            <p className="text-sm text-base-content/40 mt-3">
+            <p className="text-sm text-base-content/70 mt-3">
               __PROJECT_DESCRIPTION__
             </p>
           </div>
@@ -22,7 +22,7 @@ export function Footer() {
           {/* Product */}
           <div>
             <h4 className="text-sm font-semibold mb-4">Product</h4>
-            <ul className="space-y-2 text-sm text-base-content/50">
+            <ul className="space-y-2 text-sm text-base-content/70">
               <li>
                 <a href="#features" className="hover:text-base-content transition-colors">Features</a>
               </li>
@@ -40,7 +40,7 @@ export function Footer() {
           {/* Company */}
           <div>
             <h4 className="text-sm font-semibold mb-4">Company</h4>
-            <ul className="space-y-2 text-sm text-base-content/50">
+            <ul className="space-y-2 text-sm text-base-content/70">
               {/* cc:begin contact */}
               <li>
                 <Link href="/contact" className="hover:text-base-content transition-colors">Contact</Link>
@@ -61,7 +61,7 @@ export function Footer() {
           {/* Account */}
           <div>
             <h4 className="text-sm font-semibold mb-4">Account</h4>
-            <ul className="space-y-2 text-sm text-base-content/50">
+            <ul className="space-y-2 text-sm text-base-content/70">
               <li>
                 <Link href="/sign-in" className="hover:text-base-content transition-colors">Sign In</Link>
               </li>
@@ -76,10 +76,10 @@ export function Footer() {
         </div>
 
         <div className="border-t border-base-content/5 mt-8 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-xs text-base-content/30">
+          <p className="text-xs text-base-content/70">
             &copy; {new Date().getFullYear()} __PROJECT_NAME__. All rights reserved.
           </p>
-          <p className="text-xs text-base-content/30">
+          <p className="text-xs text-base-content/70">
             Built with Next.js, Tailwind CSS, and DaisyUI
           </p>
         </div>

@@ -97,7 +97,7 @@ export default async function DashboardPage() {
                       <td>
                         <Link href={href} className="block">
                           <p className="font-medium truncate max-w-xs">{label}</p>
-                          <p className="text-xs text-base-content/50">{job.type}</p>
+                          <p className="text-xs text-base-content/70">{job.type}</p>
                         </Link>
                       </td>
                       <td>

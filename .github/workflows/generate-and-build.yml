@@ -370,7 +370,10 @@ jobs:
   # Acceptance criteria for issue #78 (compliance foundation): /legal and its
   # subpages render and the footer links to the hub, and no page a visitor
   # can reach — public, auth, legal or the dashboard — makes their browser
-  # contact another server before consent.
+  # contact another server before consent. Issue #79 (accessibility
+  # baseline) adds to the same suite: the key pages pass axe-core's WCAG 2.2
+  # AA rules in both themes, open with a working skip link and show a visible
+  # focus outline, and /legal/accessibility shows the configured contact.
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an
@@ -378,7 +381,7 @@ jobs:
   # against a freshly generated one, with the default answers. It drives the
   # runner's preinstalled Google Chrome through puppeteer-core.
   compliance:
-    name: The legal pages and no-third-party-requests rule hold against a running app
+    name: The legal pages, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

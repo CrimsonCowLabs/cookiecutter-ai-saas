@@ -10,26 +10,17 @@
 // NEXTAUTH_SECRET, DATABASE_URL; plus CHROME_PATH (see ./support.mjs).
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import {
-  config,
-  connectDb,
-  insertTestUser,
-  deleteTestUser,
-  mintSessionCookie,
   launchBrowser,
   visit,
   describeOffOrigin,
-  links,
+  exists,
+  pagesUnder,
+  asSignedInUser,
 } from "./support.mjs";
 
 // The public pages a visitor can reach before signing in. /magic-link, /blog
-// and /contact only exist for some answers at generation time
-// (include_magic_link, include_marketing_extras); reading the tree rather than
-// probing the URL means a page that should be there and 404s fails below
-// instead of being quietly skipped. Paths are relative to the project root,
-// which is where `npm run test:compliance` runs from.
-const exists = (dir) => fs.existsSync(`app/(main)/${dir}`);
+// and /contact only exist for some answers at generation time (see exists()).
 const PUBLIC_PAGES = [
   "/",
   "/sign-in",
@@ -47,12 +38,6 @@ before(async () => {
 after(async () => {
   await browser?.close();
 });
-
-/** `index` plus every page under it that it links to. */
-async function pagesUnder(index) {
-  const html = await (await fetch(new URL(index, config.baseUrl))).text();
-  return [index, ...new Set(links(html).filter((href) => href.startsWith(`${index}/`)))];
-}
 
 async function assertNoOffOriginRequests(path, options) {
   const { status, finalPath, offOrigin } = await visit(browser, path, options);
@@ -85,16 +70,5 @@ test("blog pages make no off-origin requests", { skip: !exists("blog") && "no bl
 });
 
 test("the dashboard makes no off-origin requests", async () => {
-  const db = await connectDb();
-  try {
-    const user = await insertTestUser(db);
-    try {
-      const cookie = await mintSessionCookie(user);
-      await assertNoOffOriginRequests("/dashboard", { cookie });
-    } finally {
-      await deleteTestUser(db, user.id);
-    }
-  } finally {
-    await db.end();
-  }
+  await asSignedInUser((cookie) => assertNoOffOriginRequests("/dashboard", { cookie }));
 });

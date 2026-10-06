@@ -7,7 +7,16 @@
 // Env vars (see tests/auth/support.mjs for defaults): BASE_URL.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { config, links } from "./support.mjs";
+
+/** The string value of `key` inside the `legal.accessibility` block of config.ts. */
+function accessibilityConfig(key) {
+  const block = fs.readFileSync("config.ts", "utf8").match(/accessibility:\s*\{([^}]*)\}/)?.[1];
+  const value = block?.match(new RegExp(`${key}:\\s*"([^"]*)"`))?.[1];
+  assert.ok(value, `config.ts should set legal.accessibility.${key} to a string`);
+  return value;
+}
 
 async function get(path) {
   const res = await fetch(new URL(path, config.baseUrl), { redirect: "manual" });
@@ -46,4 +55,19 @@ test("every subpage the hub links to loads, explains itself and disclaims legal 
     }
     assert.match(html, /not legal advice/i, `${path} should say it is not legal advice`);
   }
+});
+
+test("the accessibility statement gives the configured contact address and review date", async () => {
+  const { status, html } = await get("/legal/accessibility");
+  assert.equal(status, 200, `/legal/accessibility should load unauthenticated, got ${status}`);
+  assert.ok(links((await get("/legal")).html).includes("/legal/accessibility"), "/legal should link to it");
+  for (const key of ["contactEmail", "reviewDate"]) {
+    const value = accessibilityConfig(key);
+    assert.ok(html.includes(value), `/legal/accessibility should show legal.accessibility.${key} ("${value}")`);
+  }
+  assert.ok(
+    html.includes(`href="mailto:${accessibilityConfig("contactEmail")}"`),
+    "the contact address should be a mailto: link"
+  );
+  assert.match(html, /WCAG 2\.2/, "the statement should name its target standard");
 });

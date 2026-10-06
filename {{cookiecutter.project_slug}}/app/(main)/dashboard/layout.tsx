@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { DrawerAutoClose } from "@/components/dashboard/drawer-auto-close";
 import { MenuIcon } from "@/components/ui/icons";
+import { Main } from "@/components/ui/skip-link";
 import config from "@/config";
 // cc:begin stripe
 import { ResumePendingPlan } from "@/components/dashboard/resume-pending-plan";
@@ -70,27 +71,28 @@ export default async function DashboardLayout({
         {/* Mobile topbar: the sidebar itself is off-canvas below `md`, so
             this is the only way to reach navigation/sign-out on a phone. */}
         <div className="sticky top-0 z-30 flex items-center gap-3 border-b border-base-300 bg-base-100 px-4 py-3 md:hidden">
-          <label
-            htmlFor={DRAWER_ID}
-            aria-label="Open menu"
-            className="btn btn-square btn-ghost"
-          >
+          {/* ARIA forbids aria-label on a <label>, so its name is
+              visually hidden text instead. */}
+          <label htmlFor={DRAWER_ID} className="btn btn-square btn-ghost">
             <MenuIcon className="w-5 h-5" />
+            <span className="sr-only">Open menu</span>
           </label>
           <Link href="/dashboard" className="font-bold">
             __PROJECT_NAME__
           </Link>
         </div>
 
-        <main className="flex-1 overflow-auto">
+        <Main className="flex-1 overflow-auto">
           <div className="max-w-6xl mx-auto p-6">
             {children}
           </div>
-        </main>
+        </Main>
       </div>
 
       <div className="drawer-side z-40">
-        <label htmlFor={DRAWER_ID} aria-label="Close menu" className="drawer-overlay"></label>
+        {/* The dimmed backdrop: clicking it closes the menu. It is a pointer
+            convenience only, so it is hidden from assistive technology. */}
+        <label htmlFor={DRAWER_ID} aria-hidden="true" className="drawer-overlay"></label>
         <Sidebar
           navItems={navItems}
           userName={session.user?.name}

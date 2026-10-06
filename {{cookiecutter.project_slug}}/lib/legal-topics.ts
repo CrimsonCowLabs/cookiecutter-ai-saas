@@ -38,5 +38,6 @@ export const legalTopics: LegalTopic[] = [
   {
     title: "Accessibility",
     summary: "How this app is made usable for everyone, and how to report a barrier.",
+    href: "/legal/accessibility",
   },
 ];

@@ -56,7 +56,7 @@ export function BlogCard({ post }: BlogCardProps) {
         </h2>
 
         {post.excerpt && (
-          <p className="text-sm text-base-content/50 mt-2 line-clamp-2">
+          <p className="text-sm text-base-content/70 mt-2 line-clamp-2">
             {post.excerpt}
           </p>
         )}
@@ -65,7 +65,7 @@ export function BlogCard({ post }: BlogCardProps) {
           {post.publishedAt && (
             <time
               dateTime={post.publishedAt}
-              className="text-xs text-base-content/40"
+              className="text-xs text-base-content/70"
             >
               {new Date(post.publishedAt).toLocaleDateString("en-US", {
                 year: "numeric",

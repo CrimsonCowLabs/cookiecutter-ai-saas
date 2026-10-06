@@ -72,7 +72,7 @@ export function NewJobForm() {
 
       <label className="flex flex-col">
         <span className="mb-2 block text-sm font-semibold text-base-content/80">
-          Question <span className="font-normal text-base-content/50">(optional)</span>
+          Question <span className="font-normal text-base-content/70">(optional)</span>
         </span>
         <textarea
           value={question}

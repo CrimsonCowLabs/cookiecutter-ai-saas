@@ -1,5 +1,6 @@
 import { ReactNode } from "react";
 import Link from "next/link";
+import { Main } from "@/components/ui/skip-link";
 
 /**
  * The shell every /legal page shares: the look of the Privacy Policy and
@@ -17,7 +18,7 @@ export function LegalPage({
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-base-100">
+    <Main className="min-h-screen bg-base-100">
       <div className="mx-auto w-full max-w-3xl px-6 py-16">
         <Link href={back.href} className="mb-8 inline-flex items-center gap-2 text-sm text-base-content/60 hover:text-base-content">
           <span>&larr;</span>
@@ -37,7 +38,7 @@ export function LegalPage({
           following it does not by itself make an app compliant with any law.
         </p>
       </div>
-    </div>
+    </Main>
   );
 }
 
