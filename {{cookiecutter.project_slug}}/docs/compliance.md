@@ -51,7 +51,7 @@ scripts/check_compliance.sh
 Name test files to run only those, for example
 `scripts/check_compliance.sh tests/compliance/age-gate.test.mjs`.
 
-It needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3001, 3997, 3998{% endif %} and 3999 free,
+It needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3001{% endif %}{% if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}, 3997{% endif %}{% if cookiecutter.include_stripe == "yes" %}, 3998{% endif %} and 3999 free,
 and Chrome or Chromium (set `CHROME_PATH` if it is not in a usual place). Run it on a fresh checkout, not your working
 copy: it writes its own `.env.local`, so it refuses to run when one exists,
 and it deletes the compose volumes when it finishes.
@@ -73,6 +73,15 @@ It checks that:
   Stripe delivers the event twice, and one whose send fails goes out when
   Stripe redelivers the event; a one-time purchase sends none, and
   without Resend configured the webhook still succeeds and sends nothing;
+{%- endif %}
+{%- if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}
+- a signed unsubscribe link shows a confirmation page, and both that page's
+  form and an email app's one-click request suppress the address; a
+  tampered link is refused and repeating a request changes nothing; and,
+  against a stand-in Resend API, `sendMarketingEmail` refuses to send with a
+  placeholder postal address, skips suppressed recipients and sends every
+  other message with the footer and both unsubscribe headers (see
+  [Marketing email](#marketing-email-can-spam));
 {%- endif %}
 - the home page, the sign-in and sign-up pages, the other public pages, the
   blog (when the project has one), every legal page and the dashboard make
@@ -304,6 +313,118 @@ nothing about renewal.
 - If you add a free trial, a discount that later rises to the full price, or
   another plan, its terms must say so: extend `lib/renewal-terms.ts` and
   check the result on the landing page and in Checkout.
+
+{% endif -%}
+{% if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" -%}
+## Marketing email (CAN-SPAM)
+
+**The law and the risk.** The US CAN-SPAM Act (15 U.S.C. 7701–7713, and the
+FTC's CAN-SPAM Rule, 16 CFR Part 316) covers every commercial email, one
+whose main purpose is to advertise or promote a product or service, sent to
+anyone, not only bulk mail. Each one must not use false or misleading
+header information or a deceptive subject line, must identify itself as an
+advertisement (unless the recipient asked for it), must give the sender's
+valid physical postal address, and must offer a working way to opt out that
+needs nothing more than a reply or a visit to one web page, keeps working
+for at least 30 days after sending, and is honoured within 10 business
+days. Once someone opts out, you may not email them marketing again or sell
+or transfer their address. The FTC enforces it with civil penalties of up
+to $53,088 per email (16 CFR 1.98), and the business is liable even when a
+contractor sends the mail. Separately, Gmail and Yahoo have required bulk
+senders since February 2024 to support one-click unsubscribe (RFC 8058) and
+to honour it within two days. As of October 2026.
+
+Transactional and relationship email (sign-in links, replies to the contact
+form, billing and account notices) is outside most of these rules, as long
+as it isn't dressed up as an advertisement.
+
+The app used to send only transactional email, and had no unsubscribe or
+suppression mechanism for anything else.
+
+**What the app does.**
+
+- **One way to send marketing.** `sendMarketingEmail` in
+  `lib/marketing-email.ts` is the only supported way to send commercial
+  email. It takes a recipient, a subject, a sender name and a body, and:
+  1. refuses to send at all while `legal.marketingPostalAddress` is still a
+     `REPLACE_WITH_...` placeholder;
+  2. skips a recipient who has opted out;
+  3. adds a footer with an unsubscribe link and your postal address;
+  4. sets the `List-Unsubscribe` header (the unsubscribe URL and a
+     `mailto:`) and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, so
+     email apps show their own unsubscribe button;
+  5. sends through Resend.
+- **Opt-outs outlive accounts.** The `email_suppressions` table holds each
+  opted-out address, normalised, with when and how it opted out. It is
+  separate from `users`, so deleting an account doesn't undo an opt-out, and
+  signing up again with the same address doesn't either.
+- **Links that keep working.** Each unsubscribe link carries a token signed
+  with HMAC using `NEXTAUTH_SECRET`. It doesn't expire, so the link in a
+  years-old email still works; a token that has been tampered with is
+  refused. Rotating `NEXTAUTH_SECRET` breaks every link already sent.
+- **Unsubscribing takes one step.** Opening the link shows a page with a
+  single button to confirm, which works without JavaScript and without
+  signing in. The same address also accepts the one-click `POST` that email
+  apps send. Either way the address is suppressed at once, doing it twice
+  changes nothing, and the response never says whether the address has an
+  account.
+- **Transactional email is untouched.** Whichever of magic-link sign-in,
+  the contact form and the subscription acknowledgment this project has
+  still send directly through Resend and ignore suppressions.
+- **A notice.** `/legal/email-preferences` explains which emails are
+  marketing and which are transactional, and how to opt out; the Privacy
+  Policy links to it.
+
+Sending a newsletter:
+
+```ts
+import { sendMarketingEmail } from "@/lib/marketing-email";
+
+for (const user of subscribers) {
+  await sendMarketingEmail({
+    to: user.email,
+    subject: "What's new in {{ cookiecutter.project_name }} this month",
+    senderName: "{{ cookiecutter.project_name }}",
+    body: "Here is what we shipped this month…",
+  });
+}
+```
+
+**What you still have to do.**
+
+- Set `legal.marketingPostalAddress` in `config.ts`. Until you do, the
+  module refuses to send anything. It must be a valid physical postal
+  address where you can receive mail: your business's street address, a PO
+  box registered with the US Postal Service, or a private mailbox at a
+  commercial mail receiving agency (a UPS Store mailbox, or a virtual
+  mailbox service that is a registered CMRA), registered under Postal
+  Service rules (USPS Form 1583). If you don't want to publish your home
+  address, rent a PO box or a CMRA mailbox.
+- Send every commercial email through `sendMarketingEmail`. A message sent
+  any other way, from your own code, a Resend broadcast or another email
+  tool, gets no footer, no headers and no suppression check. If you use a
+  separate email-marketing service, import `email_suppressions` into it
+  and keep the two in sync.
+- Write honest messages. The module can't check that the subject line
+  matches the content, or that the email says it is an advertisement; say
+  so clearly in the body unless the recipient asked to receive it.
+- Use a sending address on a domain you have verified in Resend, and a
+  sender name that says who you are.
+- Serve the app over `https` and set `NEXTAUTH_URL` to its `https://`
+  address. The unsubscribe links are built from it, and email apps only
+  offer one-click unsubscribe for an `https` link (RFC 8058).
+- Act on emailed unsubscribe requests. The `mailto:` in the
+  `List-Unsubscribe` header sends them to `resend.supportEmail` with the
+  subject "unsubscribe"; nothing reads that mailbox for you, so add each
+  sender to `email_suppressions` by hand (or with a script) within 10
+  business days.
+- Keep `NEXTAUTH_SECRET` stable. Changing it invalidates every unsubscribe link
+  in email already sent, which can break the 30-day rule.
+- Don't sell, rent or hand over the addresses of people who opted out, and
+  never delete rows from `email_suppressions` to "clean" the list.
+- Outside the US, consent comes first: the EU and UK (the ePrivacy rules and
+  PECR) and Canada (CASL) generally require opt-in consent before marketing
+  email, which this module does not record.
 
 {% endif -%}
 ## Fonts and third-party requests

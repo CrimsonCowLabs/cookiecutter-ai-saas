@@ -85,3 +85,16 @@ test("the children's privacy notice gives the configured minimum age and a way f
   assert.ok(links(policy.html).includes("/legal/children"), "the Privacy Policy should link to it");
   assert.match(policy.html, new RegExp(`at least (<!-- -->)?${minimumAge}\\b`), "the Privacy Policy should state the minimum age too");
 });
+
+// cc:begin resend
+test("the email preferences page is linked from the hub and the Privacy Policy", async () => {
+  const { status, html } = await get("/legal/email-preferences");
+  assert.equal(status, 200, `/legal/email-preferences should load unauthenticated, got ${status}`);
+  assert.ok(links((await get("/legal")).html).includes("/legal/email-preferences"), "/legal should link to it");
+  assert.match(html, /unsubscribe/i, "it should explain how to unsubscribe");
+  assert.match(html, /transactional/i, "it should say which emails are transactional");
+
+  const policy = await get("/privacy-policy");
+  assert.ok(links(policy.html).includes("/legal/email-preferences"), "the Privacy Policy should link to it");
+});
+// cc:end resend

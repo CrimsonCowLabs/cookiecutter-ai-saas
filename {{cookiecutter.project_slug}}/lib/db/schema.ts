@@ -165,8 +165,8 @@ export const subscriptions = pgTable("subscriptions", {
   }).notNull(),
   // When the subscription acknowledgment email went out (California's
   // Automatic Renewal Law; lib/subscription-acknowledgment.ts). Null until
-  // it has, and for good without Resend configured: the webhook sends it on
-  // whichever delivery of the event first finds it null.
+  // it has, and for good when no email provider is configured: the webhook
+  // sends it on whichever delivery of the event first finds it null.
   acknowledgedAt: timestamp("acknowledged_at", { mode: "date" }),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
 });
@@ -219,6 +219,23 @@ export const contactSubmissions = pgTable(
     typeIdx: index("contact_submissions_type_idx").on(table.type),
   })
 );
+
+// cc:begin resend
+// Addresses that opted out of marketing email (CAN-SPAM; lib/marketing-email.ts
+// checks it before every send, lib/unsubscribe.ts records it). Keyed by the
+// normalised address and deliberately not tied to `users`, so an opt-out
+// outlives the account's deletion and still holds if the address signs up
+// again. Never delete a row to "resubscribe" someone without their new,
+// explicit opt-in.
+export const emailSuppressions = pgTable("email_suppressions", {
+  email: text("email").primaryKey(),
+  suppressedAt: timestamp("suppressed_at", { mode: "date" }).notNull().defaultNow(),
+  // How the opt-out arrived: "unsubscribe-page" (the confirmation page's
+  // button), "one-click" (a mail client's RFC 8058 List-Unsubscribe-Post), or
+  // whatever an operator records by hand (an emailed request, say).
+  source: text("source").notNull(),
+});
+// cc:end resend
 
 // ─── Relations ───────────────────────────────────────────
 

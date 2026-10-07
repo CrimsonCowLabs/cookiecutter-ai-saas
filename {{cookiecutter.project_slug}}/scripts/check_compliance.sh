@@ -15,7 +15,7 @@
 # `next start`, signed-in pages are reached with a session cookie the tests
 # mint themselves, and the tests talk to Postgres directly.
 #
-# Needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3001, 3997, 3998{% endif %} and 3999
+# Needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3001{% endif %}{% if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}, 3997{% endif %}{% if cookiecutter.include_stripe == "yes" %}, 3998{% endif %} and 3999
 # free, and a Chrome or Chromium binary (set CHROME_PATH if it is not in a
 # usual place; see tests/compliance/support.mjs).
 #
@@ -64,12 +64,17 @@ FAKE_OIDC="http://localhost:${FAKE_OIDC_PORT}"
 FAKE_STRIPE_PORT=3998
 # The acknowledgment tests sign the webhook events they post with this
 # placeholder, read every email the app sends by way of a fake Resend API on
-# FAKE_RESEND_PORT (tests/compliance/fake-resend.mjs; RESEND_BASE_URL points
-# the app's Resend client at it), and start a second copy of the app on
-# NO_RESEND_APP_PORT with Resend unconfigured.
+# FAKE_RESEND_PORT (below; RESEND_BASE_URL points the app's Resend client at
+# it), and start a second copy of the app on NO_RESEND_APP_PORT with Resend
+# unconfigured.
 STRIPE_WEBHOOK_SECRET="whsec_0000000000000000000000000000000000000000"
-FAKE_RESEND_PORT=3997
 NO_RESEND_APP_PORT=3001
+{%- endif %}
+{%- if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}
+# The fake Resend API (tests/compliance/fake-resend.mjs) listens here. The
+# marketing-email tests load lib/marketing-email.ts themselves and point it
+# here too.
+FAKE_RESEND_PORT=3997
 {%- endif %}
 
 cat > "$ENV_FILE" <<ENV
@@ -149,7 +154,10 @@ if ! BASE_URL="$BASE_URL" NEXTAUTH_SECRET="$NEXTAUTH_SECRET" DATABASE_URL="$DATA
   FAKE_OIDC_PORT="$FAKE_OIDC_PORT" SERVER_LOG="$SERVER_LOG" \
 {%- if cookiecutter.include_stripe == "yes" %}
   FAKE_STRIPE_PORT="$FAKE_STRIPE_PORT" STRIPE_WEBHOOK_SECRET="$STRIPE_WEBHOOK_SECRET" \
-  FAKE_RESEND_PORT="$FAKE_RESEND_PORT" NO_RESEND_APP_PORT="$NO_RESEND_APP_PORT" \
+  NO_RESEND_APP_PORT="$NO_RESEND_APP_PORT" \
+{%- endif %}
+{%- if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}
+  FAKE_RESEND_PORT="$FAKE_RESEND_PORT" \
 {%- endif %}
   "${TESTS[@]}"; then
   echo "---- server log (last 50 lines) ----" >&2

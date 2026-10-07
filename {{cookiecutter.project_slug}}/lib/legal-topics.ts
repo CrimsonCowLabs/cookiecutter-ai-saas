@@ -27,6 +27,9 @@ export const legalTopics: LegalTopic[] = [
   {
     title: "Email preferences",
     summary: "Which emails we send, and how to stop the ones you don't want.",
+    // cc:begin resend
+    href: "/legal/email-preferences",
+    // cc:end resend
   },
   // cc:begin stripe
   {
