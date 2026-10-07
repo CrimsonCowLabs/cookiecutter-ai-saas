@@ -42,11 +42,13 @@ Object.assign(process.env, {
 // resolves the "@/" imports through tsconfig.json.
 registerEsm();
 registerCjs();
-// config.ts's `export default`, as CommonJS hands it to an ESM import. The
-// same object the module reads, so a test can change its postal address.
+// Each module's exports, as CommonJS hands them to an ESM import: always on
+// `.default` (Node 22 also offers them as named exports, Node 20 does not).
+// config.ts's own `export default` sits one level deeper. It is the same
+// object the module reads, so a test can change its postal address.
 const appConfig = (await import("../../config.ts")).default.default;
-const { sendMarketingEmail } = await import("../../lib/marketing-email.ts");
-const { db: moduleDb } = await import("../../lib/db/index.ts");
+const { sendMarketingEmail } = (await import("../../lib/marketing-email.ts")).default;
+const { db: moduleDb } = (await import("../../lib/db/index.ts")).default;
 
 const POSTAL_ADDRESS = "123 Test Street, Suite 4, Testville, CA 90000, USA";
 const placeholder = appConfig.legal.marketingPostalAddress;
