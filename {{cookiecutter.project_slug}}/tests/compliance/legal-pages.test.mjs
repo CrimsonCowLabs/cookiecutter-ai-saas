@@ -10,13 +10,24 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { config, links, minimumAge as configuredMinimumAge } from "./support.mjs";
 
-/** The string value of `key` inside the `legal.accessibility` block of config.ts. */
-function accessibilityConfig(key) {
-  const block = fs.readFileSync("config.ts", "utf8").match(/accessibility:\s*\{([^}]*)\}/)?.[1];
-  const value = block?.match(new RegExp(`${key}:\\s*"([^"]*)"`))?.[1];
-  assert.ok(value, `config.ts should set legal.accessibility.${key} to a string`);
-  return value;
+/**
+ * The string value of `key` inside the `legal.<block>` block of config.ts,
+ * escaped the way React writes it into HTML, so an operator's real value
+ * ("Smith & Jones LLP", "O'Brien") still matches the rendered page.
+ */
+function legalConfig(block, key) {
+  const body = fs.readFileSync("config.ts", "utf8").match(new RegExp(`${block}:\\s*\\{([^}]*)\\}`))?.[1];
+  const value = body?.match(new RegExp(`${key}:\\s*"([^"]*)"`))?.[1];
+  assert.ok(value, `config.ts should set legal.${block}.${key} to a string`);
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#x27;");
 }
+
+const accessibilityConfig = (key) => legalConfig("accessibility", key);
 
 async function get(path) {
   const res = await fetch(new URL(path, config.baseUrl), { redirect: "manual" });
@@ -70,6 +81,28 @@ test("the accessibility statement gives the configured contact address and revie
     "the contact address should be a mailto: link"
   );
   assert.match(html, /WCAG 2\.2/, "the statement should name its target standard");
+});
+
+test("the copyright page names the configured DMCA agent and is linked from the Terms of Service", async () => {
+  const { status, html } = await get("/legal/copyright");
+  assert.equal(status, 200, `/legal/copyright should load unauthenticated, got ${status}`);
+  assert.ok(links((await get("/legal")).html).includes("/legal/copyright"), "/legal should link to it");
+  for (const key of ["name", "postalAddress", "phone", "email"]) {
+    const value = legalConfig("dmcaAgent", key);
+    assert.ok(html.includes(value), `/legal/copyright should show legal.dmcaAgent.${key} ("${value}")`);
+  }
+  assert.ok(
+    html.includes(`href="mailto:${legalConfig("dmcaAgent", "email")}"`),
+    "the agent's email address should be a mailto: link"
+  );
+  assert.match(html, /what a takedown notice must contain/i, "it should list what a takedown notice must contain");
+  assert.match(html, /under penalty of perjury/i, "the notice list should include the sworn statement");
+  assert.match(html, /counter-notice/i, "it should explain counter-notices");
+  assert.match(html, /repeat infringer/i, "it should state the repeat-infringer policy");
+
+  const terms = await get("/tos");
+  assert.ok(links(terms.html).includes("/legal/copyright"), "the Terms of Service should link to it");
+  assert.match(terms.html, /repeat infringer/i, "the Terms of Service should state the repeat-infringer policy");
 });
 
 test("the children's privacy notice gives the configured minimum age and a way for parents to reach the operator", async () => {

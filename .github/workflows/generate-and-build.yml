@@ -433,6 +433,9 @@ jobs:
   # lib/marketing-email.ts refuses to send without a real postal address,
   # skips suppressed recipients, and sends with the footer and both
   # unsubscribe headers (read from a stand-in Resend API).
+  # Issue #84 (copyright/DMCA) adds to legal-pages.test.mjs: /legal/copyright
+  # shows the configured legal.dmcaAgent and the Terms of Service link to it;
+  # the axe audit picks it up with the other /legal pages.
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an

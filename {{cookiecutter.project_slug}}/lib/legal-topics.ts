@@ -41,6 +41,7 @@ export const legalTopics: LegalTopic[] = [
   {
     title: "Copyright & DMCA",
     summary: "How to report content that infringes your copyright.",
+    href: "/legal/copyright",
   },
   {
     title: "Accessibility",

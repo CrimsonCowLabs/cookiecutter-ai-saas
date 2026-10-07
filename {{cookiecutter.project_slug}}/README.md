@@ -260,7 +260,11 @@ postal address, DMCA agent, accessibility contact) live in `config.ts`'s
 passes a neutral age screen first (COPPA; the minimum age is
 `legal.minimumAge`, 13 by default), and no date of birth is kept. Its key
 pages are checked against WCAG 2.2 AA, and `/legal/accessibility` is its
-accessibility statement.{% if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %} Marketing email goes only through `sendMarketingEmail`
+accessibility statement. `/legal/copyright` names your DMCA agent and
+explains takedown notices, counter-notices and the repeat-infringer policy,
+and the Terms link to it; the compliance guide walks through registering
+the agent with the US Copyright Office before you add any user
+uploads.{% if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %} Marketing email goes only through `sendMarketingEmail`
 (`lib/marketing-email.ts`), which refuses to send until `legal.marketingPostalAddress`
 is set, skips anyone who has unsubscribed, and adds the unsubscribe link,
 postal address and one-click unsubscribe headers (CAN-SPAM);
