@@ -247,6 +247,15 @@ nothing about renewal.
 - **Cancel online.** Settings → Manage billing opens the Stripe billing
   portal, where the customer cancels. Access lasts until the end of the
   paid period.
+- **Never subscribed twice.** Each user checks out as their own Stripe
+  customer, created and stored before their first checkout
+  (`lib/checkout.ts`), so the billing portal shows their whole history. A
+  user whose subscription isn't cancelled who starts another subscription
+  checkout, from the settings or from the checkout the app opens after
+  sign-up, is sent to the billing portal to change plan instead, and a
+  repeated or double-submitted checkout leaves only the newest one payable.
+  `tests/billing/integration/checkout.test.mjs` proves this against a
+  running app (`scripts/check_billing.sh`).
 - **The acknowledgment.** When Resend is configured (`RESEND_API_KEY`), the
   Stripe webhook emails every new subscriber once, on
   `checkout.session.completed`, from `config.resend.fromNoReply`
@@ -301,8 +310,11 @@ nothing about renewal.
 - Turn on cancellation in the customer portal (Settings → Billing → Customer
   portal: allow customers to cancel subscriptions). Without it, Manage
   billing has no cancel button and the app's promise of online cancellation
-  is false. Don't add a step that makes cancelling harder than subscribing,
-  such as a required call or chat.
+  is false. Turn on switching plans (add every plan's product) and updating
+  the payment method there too: a subscriber who picks another plan in the
+  app is sent to the portal to make the change. Don't add a step that
+  makes cancelling harder than subscribing, such as a required call or
+  chat.
 - Make sure the acknowledgment is sent. Set `RESEND_API_KEY` and verify
   your sending domain in Resend, and the app sends it. If you run without
   Resend, the app sends nothing, so turn on Stripe's own subscription

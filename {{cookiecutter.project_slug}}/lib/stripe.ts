@@ -47,10 +47,9 @@ interface CreateCheckoutParams {
   termsUrl: string;
   couponId?: string | null;
   clientReferenceId?: string;
-  user?: {
-    customerId?: string;
-    email?: string;
-  };
+  // Always the user's own customer, never just their email: see
+  // lib/checkout.ts, the only caller, on why.
+  customerId: string;
 }
 
 interface CreateCustomerPortalParams {
@@ -59,7 +58,7 @@ interface CreateCustomerPortalParams {
 }
 
 export const createCheckout = async ({
-  user,
+  customerId,
   clientReferenceId,
   successUrl,
   cancelUrl,
@@ -71,20 +70,13 @@ export const createCheckout = async ({
     const terms = renewalTerms(plan);
     if (!terms) throw new Error(`${plan.tier} does not renew, so it has no subscription to check out`);
 
-    const userParam: {
-      customer?: string;
-      customer_email?: string;
-    } = {};
-
-    if (user?.customerId) {
-      userParam.customer = user.customerId;
-    } else if (user?.email) {
-      userParam.customer_email = user.email;
-    }
-
     const stripeSession = await getStripe().checkout.sessions.create({
       mode: "subscription",
-      ...userParam,
+      customer: customerId,
+      // Collecting a tax ID for an existing customer saves the business name
+      // (and address) entered with it onto that customer, which Stripe
+      // requires be allowed explicitly.
+      customer_update: { name: "auto", address: "auto" },
       allow_promotion_codes: true,
       tax_id_collection: { enabled: true },
       client_reference_id: clientReferenceId,
@@ -130,6 +122,58 @@ export const createCustomerPortal = async ({
   return portalSession.url;
 };
 
+/**
+ * A new Stripe customer for the app's user `userId`. The idempotency key
+ * means a retry after a failure to store the id (lib/checkout.ts) gets the
+ * same customer back rather than a second one, for as long as Stripe keeps
+ * the key (24 hours).
+ */
+export const createCustomer = async ({
+  userId,
+  email,
+}: {
+  userId: string;
+  email: string;
+}): Promise<string> => {
+  const customer = await getStripe().customers.create(
+    { email, metadata: { userId } },
+    { idempotencyKey: `customer-for-user-${userId}` }
+  );
+  return customer.id;
+};
+
+// Every status but these is a subscription the customer still has, paid up
+// or not: the portal, not a second checkout, is where to change it.
+const ENDED_SUBSCRIPTION_STATUSES: Stripe.Subscription.Status[] = ["canceled", "incomplete_expired"];
+
+/** Whether `customerId` has a subscription in Stripe that hasn't ended. */
+export const hasLiveSubscription = async (customerId: string): Promise<boolean> => {
+  const subscriptions = await getStripe().subscriptions.list({
+    customer: customerId,
+    status: "all",
+    limit: 100,
+  });
+  return subscriptions.data.some((sub) => !ENDED_SUBSCRIPTION_STATUSES.includes(sub.status));
+};
+
+/**
+ * Expire every subscription Checkout Session `customerId` still has open, so
+ * none of them can be paid any more. Throws if one can't be expired (it was
+ * completed in the meantime, say).
+ */
+export const expireOpenSubscriptionCheckouts = async (customerId: string): Promise<void> => {
+  const open = await getStripe().checkout.sessions.list({
+    customer: customerId,
+    status: "open",
+    limit: 100,
+  });
+  for (const session of open.data) {
+    if (session.mode === "subscription") {
+      await getStripe().checkout.sessions.expire(session.id);
+    }
+  }
+};
+
 interface CreateOneTimeCheckoutParams {
   priceId: string;
   quantity: number;
@@ -140,6 +184,7 @@ interface CreateOneTimeCheckoutParams {
   metadata: Record<string, string>;
 }
 
+/** Call through lib/checkout.ts's oneTimeCheckout, which finds `customerId`. */
 export const createOneTimeCheckout = async ({
   priceId,
   quantity,

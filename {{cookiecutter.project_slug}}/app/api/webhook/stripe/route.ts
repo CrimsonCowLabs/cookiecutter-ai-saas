@@ -213,13 +213,16 @@ export async function POST(req: NextRequest) {
             ).length > 0
           : false;
 
-        // Update user plan and Stripe customer ID
+        // Update the user's plan. Their Stripe customer is the one the app
+        // created before checkout (lib/checkout.ts), and stays that one: the
+        // customer here is only stored for a user who had none, as after a
+        // Payment Link checkout.
         if (!alreadyRecorded) {
           await db
             .update(users)
             .set({
               plan: plan.tier,
-              stripeCustomerId: customerId,
+              stripeCustomerId: sql`coalesce(${users.stripeCustomerId}, ${customerId})`,
               updatedAt: new Date(),
             })
             .where(eq(users.id, user.id));

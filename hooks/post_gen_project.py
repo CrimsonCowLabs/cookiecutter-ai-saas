@@ -175,6 +175,7 @@ def handle_stripe():
     if INCLUDE_STRIPE == "no":
         print("Removing Stripe files...")
         remove_file("lib/stripe.ts")
+        remove_file("lib/checkout.ts")
         # lib/plans.ts stays: app/actions/jobs.ts reads plan limits to rate
         # limit job submission, which has nothing to do with billing.
         remove_directory("app/api/webhook/stripe")
@@ -193,6 +194,9 @@ def handle_stripe():
         remove_directory("app/(main)/legal/subscriptions")
         remove_file("tests/compliance/renewal-terms.test.mjs")
         remove_file("tests/compliance/fake-stripe.mjs")
+        # Starts checkouts through the settings page and the fake Stripe API,
+        # neither of which exists without billing.
+        remove_file("tests/billing/integration/checkout.test.mjs")
         remove_file("lib/subscription-acknowledgment.ts")
         remove_file("tests/compliance/subscription-acknowledgment.test.mjs")
 
