@@ -60,8 +60,6 @@ It checks that:
 
 - `/legal` and every topic page it links to load without signing in, and the
   footer links to `/legal`;
-- the copyright page shows every detail of the configured DMCA agent, and
-  the Terms of Service link to it (see [Copyright](#copyright-dmca));
 - no account is created without a passed age check, through any sign-in
   method the app offers, and no date of birth is kept anywhere (see
   [Children's privacy](#childrens-privacy-coppa));
@@ -87,7 +85,9 @@ It checks that:
 {%- endif %}
 - the home page, the sign-in and sign-up pages, the other public pages, the
   blog (when the project has one), every legal page and the dashboard make
-  no request to another server.
+  no request to another server;
+- the copyright page shows every detail of the configured DMCA agent, and
+  the Terms of Service link to it (see [Copyright](#copyright-dmca));
 - the home page, the sign-in page, the sign-up page in each of its states
   (age screen, with an error, passed, turned away), the Privacy Policy and
   Terms, every legal page, the dashboard and the account settings pass an
@@ -579,8 +579,9 @@ on. Whenever you amend the designation (a new agent, address, phone or
 email), update `legal.dmcaAgent` and deploy the same day, so the page and
 the directory always agree.
 
-Sources: 17 U.S.C. §512 and §504(c); 37 CFR 201.38; the Copyright Office's
-DMCA Designated Agent Directory FAQ and "Designating an Agent" tutorial.
+The fee, the 3-year term and the reminder emails are as the Copyright
+Office's DMCA Designated Agent Directory FAQ and its "Designating an Agent"
+tutorial describe them (37 CFR 201.38). As of October 2026.
 
 ## Accessibility
 

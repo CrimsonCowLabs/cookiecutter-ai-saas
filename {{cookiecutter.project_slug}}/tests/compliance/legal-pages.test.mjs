@@ -7,35 +7,13 @@
 // Env vars (see tests/auth/support.mjs for defaults): BASE_URL.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import { config, links, minimumAge as configuredMinimumAge } from "./support.mjs";
-
-/**
- * The string value of `key` inside the `legal.<block>` block of config.ts,
- * escaped the way React writes it into HTML, so an operator's real value
- * ("Smith & Jones LLP", "O'Brien") still matches the rendered page.
- *
- * The value may be any string literal an operator would write: double- or
- * single-quoted with escapes (a multi-line postal address as "…\n…"), or a
- * template literal without `${}`. It is evaluated as the literal it is, so
- * "\n" becomes the newline the page actually renders.
- */
-function legalConfig(block, key) {
-  const body = fs.readFileSync("config.ts", "utf8").match(new RegExp(`${block}:\\s*\\{([^}]*)\\}`))?.[1];
-  const literal = body?.match(
-    new RegExp(`${key}:\\s*("(?:[^"\\\\\\n]|\\\\.)*"|'(?:[^'\\\\\\n]|\\\\.)*'|\`[^\`$\\\\]*\`)`)
-  )?.[1];
-  assert.ok(literal, `config.ts should set legal.${block}.${key} to a string`);
-  const value = new Function(`return ${literal};`)();
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#x27;");
-}
-
-const accessibilityConfig = (key) => legalConfig("accessibility", key);
+import {
+  config,
+  legalConfig,
+  links,
+  minimumAge as configuredMinimumAge,
+  unescapeHtml,
+} from "./support.mjs";
 
 async function get(path) {
   const res = await fetch(new URL(path, config.baseUrl), { redirect: "manual" });
@@ -80,12 +58,13 @@ test("the accessibility statement gives the configured contact address and revie
   const { status, html } = await get("/legal/accessibility");
   assert.equal(status, 200, `/legal/accessibility should load unauthenticated, got ${status}`);
   assert.ok(links((await get("/legal")).html).includes("/legal/accessibility"), "/legal should link to it");
+  const page = unescapeHtml(html);
   for (const key of ["contactEmail", "reviewDate"]) {
-    const value = accessibilityConfig(key);
-    assert.ok(html.includes(value), `/legal/accessibility should show legal.accessibility.${key} ("${value}")`);
+    const value = legalConfig("accessibility", key);
+    assert.ok(page.includes(value), `/legal/accessibility should show legal.accessibility.${key} ("${value}")`);
   }
   assert.ok(
-    html.includes(`href="mailto:${accessibilityConfig("contactEmail")}"`),
+    page.includes(`href="mailto:${legalConfig("accessibility", "contactEmail")}"`),
     "the contact address should be a mailto: link"
   );
   assert.match(html, /WCAG 2\.2/, "the statement should name its target standard");
@@ -95,14 +74,15 @@ test("the copyright page names the configured DMCA agent and is linked from the 
   const { status, html } = await get("/legal/copyright");
   assert.equal(status, 200, `/legal/copyright should load unauthenticated, got ${status}`);
   assert.ok(links((await get("/legal")).html).includes("/legal/copyright"), "/legal should link to it");
+  const page = unescapeHtml(html);
   for (const key of ["name", "postalAddress", "phone", "email"]) {
     const value = legalConfig("dmcaAgent", key);
     // As the element's whole text, not just somewhere (an href included).
-    assert.ok(html.includes(`>${value}<`), `/legal/copyright should show legal.dmcaAgent.${key} ("${value}")`);
+    assert.ok(page.includes(`>${value}<`), `/legal/copyright should show legal.dmcaAgent.${key} ("${value}")`);
   }
   const email = legalConfig("dmcaAgent", "email").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   assert.match(
-    html,
+    page,
     new RegExp(`<a [^>]*href="mailto:${email}"[^>]*>${email}</a>`),
     "the agent's email address should be a mailto: link showing the address"
   );

@@ -15,7 +15,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { config, connectDb } from "../auth/support.mjs";
-import { unsubscribeToken } from "./support.mjs";
+import { unescapeHtml, unsubscribeToken } from "./support.mjs";
 
 let db;
 before(async () => {
@@ -62,7 +62,7 @@ const postOneClick = (token) =>
   });
 
 /** The text a visitor would read on `html`, roughly. */
-const text = (html) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, " ");
+const text = (html) => unescapeHtml(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
 
 /** `token` with one character of its signature changed. */
 const tampered = (token) => token.slice(0, -1) + (token.endsWith("A") ? "B" : "A");
