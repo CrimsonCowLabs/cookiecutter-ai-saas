@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, subscriptions } from "@/lib/db/schema";
 import {
@@ -15,29 +15,35 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * Run `fn` with `userId`'s Stripe customer, creating and storing it first if
- * the user has none yet, and holding a lock on the user's row throughout.
+ * the user has none yet, as the only checkout under way for that user.
  *
- * The lock is what keeps a user to one customer and one checkout at a time:
- * two requests at once (a double-submitted form, two tabs) each wait their
- * turn here, so the second finds the customer the first stored, and sees
- * whatever checkout the first opened. It is held across Stripe API calls,
- * which costs one database connection for as long as they take; only writes
- * to this user's row (the webhook's, another checkout) ever wait on it.
+ * A per-user advisory lock, held until the transaction ends, is what keeps a
+ * user to one customer and one checkout at a time: of two requests at once
+ * (a double-submitted form, two tabs), the second is turned away rather than
+ * queued, so it never holds a database connection waiting on the first's
+ * Stripe calls. The browser follows the first one's redirect regardless.
+ * Being advisory, it never blocks the webhook's writes to the user's row.
  *
- * Resolves to null for an unknown user, and for any Stripe failure (logged).
- * A failure in `fn` still keeps a newly stored customer rather than rolling
- * it back.
+ * Resolves to null for an unknown user, while another checkout for the user
+ * is under way, and for any Stripe failure (logged). A failure in `fn` still
+ * keeps a newly stored customer rather than rolling it back.
  */
 async function asCustomer<T>(
   userId: string,
   fn: (customerId: string, tx: Tx) => Promise<T | null>
 ): Promise<T | null> {
   return db.transaction(async (tx) => {
+    const {
+      rows: [{ locked }],
+    } = await tx.execute<{ locked: boolean }>(
+      sql`select pg_try_advisory_xact_lock(hashtextextended(${"checkout:" + userId}, 0)) as locked`
+    );
+    if (!locked) return null;
+
     const [user] = await tx
       .select({ email: users.email, stripeCustomerId: users.stripeCustomerId })
       .from(users)
-      .where(eq(users.id, userId))
-      .for("update");
+      .where(eq(users.id, userId));
     if (!user) return null;
 
     let customerId = user.stripeCustomerId;
@@ -48,10 +54,14 @@ async function asCustomer<T>(
         console.error(e);
         return null;
       }
-      await tx
+      // Only if still empty: the webhook may have stored one meanwhile (see
+      // its checkout.session.completed handler), and that one stays.
+      const [stored] = await tx
         .update(users)
-        .set({ stripeCustomerId: customerId, updatedAt: new Date() })
-        .where(eq(users.id, userId));
+        .set({ stripeCustomerId: sql`coalesce(${users.stripeCustomerId}, ${customerId})`, updatedAt: new Date() })
+        .where(eq(users.id, userId))
+        .returning({ stripeCustomerId: users.stripeCustomerId });
+      customerId = stored?.stripeCustomerId ?? customerId;
     }
 
     try {

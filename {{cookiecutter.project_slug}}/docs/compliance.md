@@ -252,8 +252,10 @@ nothing about renewal.
   (`lib/checkout.ts`), so the billing portal shows their whole history. A
   user whose subscription isn't cancelled who starts another subscription
   checkout, from the settings or from the checkout the app opens after
-  sign-up, is sent to the billing portal to change plan instead, and a
-  repeated or double-submitted checkout leaves only the newest one payable.
+  sign-up, is sent to the billing portal to change plan instead. A
+  checkout requested while another for the same user is under way (a
+  double-submitted form) is turned away, and a repeated one leaves only the
+  newest payable.
   `tests/billing/integration/checkout.test.mjs` proves this against a
   running app (`scripts/check_billing.sh`).
 - **The acknowledgment.** When Resend is configured (`RESEND_API_KEY`), the
@@ -315,6 +317,16 @@ nothing about renewal.
   app is sent to the portal to make the change. Don't add a step that
   makes cancelling harder than subscribing, such as a required call or
   chat.
+- Sell subscriptions only through the app's own checkout, not a Stripe
+  Payment Link, pricing table or Buy Button. Those make a Stripe customer
+  of their own, so an existing user who pays through one has two, and the
+  billing portal the app opens, as their own customer, won't show that
+  subscription or let them cancel it there. The webhook still grants the
+  plan, and logs `[Webhook] checkout session … was paid as Stripe customer
+  …, not their own …` with the user and both customer ids. When you see it,
+  cancel that subscription in the Stripe Dashboard, refunding what's
+  unused, and have the user subscribe again from the app; or, if they
+  agree, leave it and cancel it for them when they ask.
 - Make sure the acknowledgment is sent. Set `RESEND_API_KEY` and verify
   your sending domain in Resend, and the app sends it. If you run without
   Resend, the app sends nothing, so turn on Stripe's own subscription

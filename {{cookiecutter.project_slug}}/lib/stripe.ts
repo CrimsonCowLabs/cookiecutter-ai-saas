@@ -17,7 +17,9 @@ export function getStripe(): Stripe {
     if (!secretKey) {
       throw new Error("STRIPE_SECRET_KEY is not set");
     }
-    client = new Stripe(secretKey, { typescript: true, ...apiBase() });
+    // 15s, not Stripe's default 80s: lib/checkout.ts holds a user's checkout
+    // lock, and a database connection, across these calls.
+    client = new Stripe(secretKey, { typescript: true, timeout: 15_000, ...apiBase() });
   }
   return client;
 }

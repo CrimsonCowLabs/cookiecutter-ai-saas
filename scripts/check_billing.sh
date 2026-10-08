@@ -132,7 +132,7 @@ pass "app answers on $BASE_URL"
 
 echo "==> Running the billing integration tests"
 BASE_URL="$BASE_URL" STRIPE_WEBHOOK_SECRET="$STRIPE_WEBHOOK_SECRET" DATABASE_URL="$DATABASE_URL" \
-  NEXTAUTH_SECRET="$NEXTAUTH_SECRET" FAKE_STRIPE_PORT="$FAKE_STRIPE_PORT" \
+  NEXTAUTH_SECRET="$NEXTAUTH_SECRET" FAKE_STRIPE_PORT="$FAKE_STRIPE_PORT" SERVER_LOG="$PWD/server.log" \
   npm run test:billing:integration
 pass "billing integration tests passed"
 

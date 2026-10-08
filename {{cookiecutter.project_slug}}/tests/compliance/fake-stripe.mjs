@@ -36,8 +36,8 @@ const TIMEOUT_MS = 15_000;
 const CUSTOMER_LATENCY_MS = 100;
 
 /**
- * Start the fake API. Returns { nextCheckout, add, customers, checkouts,
- * portals, close }:
+ * Start the fake API. Returns { nextCheckout, add, holdNextCheckout,
+ * customers, checkouts, portals, close }:
  *
  *   nextCheckout() — resolves with the parameters of the next Checkout
  *     Session the app creates, as Stripe receives them: a flat object of
@@ -48,6 +48,9 @@ const CUSTOMER_LATENCY_MS = 100;
  *     (GET /v1/<resource>/<id>), as Stripe would return it. A subscription
  *     added with a `customer` is also listed for that customer.
  *
+ *   holdNextCheckout() — keep the next Checkout Session the app asks for
+ *     waiting, for a test of what happens meanwhile: { reached, release }.
+ *
  *   customers, checkouts, portals — every Customer, Checkout Session and
  *     billing portal session the app has created so far, in order:
  *     { id, params } plus, for a checkout, its `status` ("open" until
@@ -55,6 +58,7 @@ const CUSTOMER_LATENCY_MS = 100;
  */
 export async function startFakeStripe() {
   const waiting = [];
+  const held = [];
   const objects = new Map();
   const customers = [];
   const checkouts = [];
@@ -108,6 +112,7 @@ export async function startFakeStripe() {
         return json(200, { id: session.id, object: "checkout.session", status: session.status });
       }
       if (route === "POST /v1/checkout/sessions") {
+        await held.shift()?.();
         const id = `cs_test_${++created}`;
         checkouts.push({ id, params, status: "open" });
         waiting.shift()?.(params);
@@ -142,6 +147,19 @@ export async function startFakeStripe() {
     },
     add(...added) {
       for (const object of added) objects.set(object.id, object);
+    },
+    // Hold the next Checkout Session the app creates until release() is
+    // called; `reached` resolves once the app's request has arrived.
+    holdNextCheckout() {
+      let arrived;
+      let release;
+      const reached = new Promise((resolve) => (arrived = resolve));
+      const released = new Promise((resolve) => (release = resolve));
+      held.push(() => {
+        arrived();
+        return released;
+      });
+      return { reached, release };
     },
     customers,
     checkouts,
