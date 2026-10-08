@@ -18,6 +18,9 @@ import {
   pagesUnder,
   asSignedInUser,
   ageCheckCookie,
+  // cc:begin resend
+  unsubscribeToken,
+  // cc:end resend
 } from "./support.mjs";
 
 // The public pages a visitor can reach before signing in. /magic-link, /blog
@@ -60,6 +63,17 @@ test("public and auth pages make no off-origin requests", async () => {
   // once it has been passed.
   await assertNoOffOriginRequests("/sign-up", { cookie: await ageCheckCookie("1970-01-01") });
 });
+
+// cc:begin resend
+test("the unsubscribe page makes no off-origin requests", async () => {
+  // Opened from an email, by someone who may never have visited the site.
+  const path = `/unsubscribe?token=${unsubscribeToken("third-party-test@example.invalid")}`;
+  const { status, finalPath, offOrigin } = await visit(browser, path);
+  assert.equal(status, 200, `/unsubscribe should load, got ${status}`);
+  assert.equal(finalPath, "/unsubscribe", `/unsubscribe should not redirect (ended on ${finalPath})`);
+  assert.deepEqual(offOrigin, [], describeOffOrigin("/unsubscribe", offOrigin));
+});
+// cc:end resend
 
 test("legal pages make no off-origin requests", async () => {
   for (const path of await pagesUnder("/legal")) {

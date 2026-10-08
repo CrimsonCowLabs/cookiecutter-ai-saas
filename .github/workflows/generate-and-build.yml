@@ -135,13 +135,27 @@ jobs:
             test ! -e "$G/lib/renewal-terms.ts" && test ! -e "$G/components/billing"
             test ! -e "$G/app/(main)/legal/subscriptions" && test ! -e "$G/tests/compliance/renewal-terms.test.mjs"
             test ! -e "$G/lib/subscription-acknowledgment.ts" && test ! -e "$G/tests/compliance/subscription-acknowledgment.test.mjs"
-            test ! -e "$G/tests/compliance/fake-resend.mjs"
             ! grep -rqiE 'renew|subscription|STRIPE_API_BASE|RESEND_BASE_URL' "$G/app" "$G/components" "$G/lib/legal-topics.ts" "$G/scripts/check_compliance.sh" "$G/docs/compliance.md"
           else
             test -e "$G/lib/renewal-terms.ts" && test -e "$G/app/(main)/legal/subscriptions/page.tsx"
             # New subscribers are acknowledged by email, so Resend's key ships
             # whatever the magic-link and marketing-extras answers.
             test -e "$G/lib/subscription-acknowledgment.ts" && grep -q '^RESEND_API_KEY=' "$G/.env.example"
+          fi
+          # Marketing email and unsubscribing ship whenever anything sends
+          # email (magic link, the contact form or Stripe), and not otherwise.
+          if [ "${{ matrix.include_magic_link }}" = no ] && [ "${{ matrix.include_marketing_extras }}" = no ] && [ "${{ matrix.include_stripe }}" = no ]; then
+            test ! -e "$G/lib/marketing-email.ts" && test ! -e "$G/lib/unsubscribe.ts"
+            test ! -e "$G/app/(main)/unsubscribe" && test ! -e "$G/app/api/unsubscribe"
+            test ! -e "$G/tests/compliance/unsubscribe.test.mjs" && test ! -e "$G/tests/compliance/marketing-email.test.mjs"
+            test ! -e "$G/tests/compliance/fake-resend.mjs" && test ! -e "$G/app/(main)/legal/email-preferences"
+            ! grep -rqiE 'email-preferences|sendMarketingEmail' "$G/lib/legal-topics.ts" "$G/app/(main)/privacy-policy" "$G/tests/compliance/legal-pages.test.mjs" "$G/AGENTS.md" "$G/README.md" "$G/docs/compliance.md"
+            ! grep -rqiE 'email_suppressions|unsubscribe' "$G/lib/db/schema.ts" "$G/middleware.ts" "$G/tests/compliance/support.mjs" "$G/tests/compliance/accessibility.test.mjs" "$G/tests/compliance/third-party-requests.test.mjs" "$G/scripts/check_compliance.sh"
+          else
+            test -e "$G/lib/marketing-email.ts" && test -e "$G/app/(main)/unsubscribe/page.tsx" && test -e "$G/app/api/unsubscribe/route.ts"
+            test -e "$G/tests/compliance/unsubscribe.test.mjs" && test -e "$G/tests/compliance/fake-resend.mjs"
+            test -e "$G/app/(main)/legal/email-preferences/page.tsx" && grep -q 'sendMarketingEmail' "$G/AGENTS.md" "$G/docs/compliance.md"
+            grep -q 'email_suppressions' "$G/lib/db/schema.ts" && grep -q '^FAKE_RESEND_PORT=3997$' "$G/scripts/check_compliance.sh"
           fi
           if [ "${{ matrix.include_marketing_extras }}" = no ]; then
             test ! -e "$G/app/(main)/blog" && test ! -e "$G/app/(main)/contact" && test ! -e "$G/app/api/contact"
@@ -411,6 +425,14 @@ jobs:
   # API), a failed send fails the event so Stripe's redelivery sends it, a
   # one-time purchase sends none, and an app without Resend still accepts
   # the webhook and sends nothing.
+  # Issue #83 (marketing email, CAN-SPAM) adds
+  # tests/compliance/unsubscribe.test.mjs: a marketing email's signed link
+  # opens a one-button confirmation page, the form and RFC 8058 one-click
+  # POSTs each record one suppression, repeats change nothing and tampered
+  # links are refused; and tests/compliance/marketing-email.test.mjs:
+  # lib/marketing-email.ts refuses to send without a real postal address,
+  # skips suppressed recipients, and sends with the footer and both
+  # unsubscribe headers (read from a stand-in Resend API).
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an

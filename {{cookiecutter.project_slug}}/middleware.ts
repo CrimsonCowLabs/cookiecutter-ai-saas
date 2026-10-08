@@ -31,6 +31,10 @@ export default auth((req) => {
     "/privacy-policy",
     "/tos",
     "/legal",
+    // cc:begin resend
+    "/unsubscribe",
+    "/api/unsubscribe",
+    // cc:end resend
     "/api/auth",
     "/api/webhook",
   ];

@@ -21,6 +21,9 @@ import {
   pagesUnder,
   asSignedInUser,
   ageCheckCookie,
+  // cc:begin resend
+  unsubscribeToken,
+  // cc:end resend
 } from "./support.mjs";
 
 // axe-core's rules for every WCAG 2.0, 2.1 and 2.2 success criterion at
@@ -46,6 +49,14 @@ const PUBLIC_PAGES = [
   ...(exists("contact") ? ["/contact"] : []),
   "/privacy-policy",
   "/tos",
+  // cc:begin resend
+  // A marketing email's unsubscribe link: the confirmation, after it, and a
+  // tampered link. (/legal/email-preferences comes in with the other /legal
+  // pages.)
+  `/unsubscribe?token=${unsubscribeToken("a11y-test@example.invalid")}`,
+  "/unsubscribe?status=done",
+  "/unsubscribe?status=invalid",
+  // cc:end resend
 ];
 const SIGNED_IN_PAGES = [
   "/dashboard",

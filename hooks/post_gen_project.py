@@ -192,6 +192,27 @@ def handle_stripe():
         remove_file("tests/compliance/fake-stripe.mjs")
         remove_file("lib/subscription-acknowledgment.ts")
         remove_file("tests/compliance/subscription-acknowledgment.test.mjs")
+
+
+def sends_email():
+    """Whether anything in the project sends email, and so ships Resend:
+    magic link, the contact form or the subscription acknowledgment."""
+    return INCLUDE_MAGIC_LINK == "yes" or INCLUDE_MARKETING_EXTRAS == "yes" or INCLUDE_STRIPE == "yes"
+
+
+def handle_resend():
+    """Remove marketing email and unsubscribing if nothing sends email."""
+    if not sends_email():
+        print("Removing marketing email files...")
+        # The email_suppressions table and the middleware's public paths for
+        # these go with the "resend" markers.
+        remove_file("lib/marketing-email.ts")
+        remove_file("lib/unsubscribe.ts")
+        remove_directory("app/(main)/unsubscribe")
+        remove_directory("app/api/unsubscribe")
+        remove_directory("app/(main)/legal/email-preferences")
+        remove_file("tests/compliance/marketing-email.test.mjs")
+        remove_file("tests/compliance/unsubscribe.test.mjs")
         remove_file("tests/compliance/fake-resend.mjs")
 
 
@@ -253,9 +274,9 @@ def marker_decisions():
         "stripe": stripe,
         "no-stripe": not stripe,
         "magic-link": magic_link,
-        # RESEND_API_KEY serves magic link, the contact form and the
-        # subscription acknowledgment email.
-        "resend": magic_link or extras or stripe,
+        # RESEND_API_KEY serves magic link, the contact form, the
+        # subscription acknowledgment email and marketing email.
+        "resend": sends_email(),
         # One provider is answered and only that one's variables ship. The
         # worker's settings.py still reads all four, with defaults, the way
         # lib/plans.ts survives include_stripe=no: it is provider-agnostic code,
@@ -333,6 +354,7 @@ def main():
     handle_stripe()
     handle_marketing_extras()
     handle_magic_link()
+    handle_resend()
     apply_markers()
     make_scripts_executable()
 

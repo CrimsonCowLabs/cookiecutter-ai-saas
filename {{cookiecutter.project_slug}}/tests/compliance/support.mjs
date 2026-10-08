@@ -6,6 +6,9 @@
 // tests/auth/support.mjs): scripts/check_compliance.sh boots the app with the
 // same NEXTAUTH_SECRET and DATABASE_URL that scripts/check_auth.sh does, so a
 // cookie minted there is one this app accepts here too.
+// cc:begin resend
+import crypto from "node:crypto";
+// cc:end resend
 import fs from "node:fs";
 import puppeteer from "puppeteer-core";
 import {
@@ -70,6 +73,21 @@ export function configuredPlans() {
   return plans;
 }
 // cc:end stripe
+
+// cc:begin resend
+/**
+ * The token in `email`'s unsubscribe links, signed the way lib/unsubscribe.ts
+ * signs it, with the NEXTAUTH_SECRET the app was booted with.
+ */
+export function unsubscribeToken(email) {
+  const address = email.trim().toLowerCase();
+  const signature = crypto
+    .createHmac("sha256", config.nextAuthSecret)
+    .update(`unsubscribe:${address}`)
+    .digest("base64url");
+  return `${Buffer.from(address).toString("base64url")}.${signature}`;
+}
+// cc:end resend
 
 /** Every same-site `href` in `html`, without its query or fragment. */
 export function links(html) {

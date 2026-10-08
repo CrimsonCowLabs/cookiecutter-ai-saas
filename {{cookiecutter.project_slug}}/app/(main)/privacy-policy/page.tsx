@@ -55,6 +55,18 @@ export default function PrivacyPolicyPage() {
               We use your information to operate the service, process jobs,
               deliver results, provide support, and improve product quality.
             </p>
+            {/* cc:begin resend */}
+            <p>
+              If we send you marketing email, every message has a link to
+              unsubscribe, and once you do we stop. Emails that are part of
+              using the service, such as sign-in links and billing notices,
+              are not marketing. See{" "}
+              <Link href="/legal/email-preferences" className="link link-primary">
+                Email preferences
+              </Link>{" "}
+              for which is which.
+            </p>
+            {/* cc:end resend */}
           </section>
 
           <section className="space-y-3">

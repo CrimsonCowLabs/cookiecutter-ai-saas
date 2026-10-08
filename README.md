@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **203 files** with
+Every generated project is a complete distributed system — **210 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -137,6 +137,15 @@ and prove what they claim against a running app rather than asserting it:
   Stripe's own confirmation emails instead. `/legal/subscriptions` covers
   renewal, cancellation and refunds. A project without Stripe has none of it
   and makes no subscription claims.
+- **Marketing email that can always be unsubscribed from (CAN-SPAM).**
+  `sendMarketingEmail` is the one way to send commercial email: it refuses
+  to send until the postal address is set, skips anyone who has opted out,
+  and adds the unsubscribe footer, the postal address and one-click
+  `List-Unsubscribe` headers (RFC 8058). Unsubscribe links are signed, never
+  expire and need no sign-in, and opt-outs are kept apart from accounts so
+  they survive deletion and re-sign-up. The check proves it against a
+  stand-in Resend API. `/legal/email-preferences` says which emails are
+  marketing and how to opt out; transactional email is unchanged.
 - **No third-party requests before consent.** Fonts are self-hosted through
   `next/font`, and `scripts/check_compliance.sh` loads the public, auth, legal
   and dashboard pages in a headless Chrome and fails, naming the host, if any
