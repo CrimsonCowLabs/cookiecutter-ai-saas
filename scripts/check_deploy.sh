@@ -361,9 +361,11 @@ client_curl() {
 [[ "$(client_curl -o /dev/null -w '%{http_code}' https://localhost/)" == 200 ]] \
   || fail "the stack does not answer a client at $CLIENT_IP"
 
-# Caddy's access log, as the proxy recorded the request.
+# Caddy's access log, as the proxy recorded the request. It is a file on the
+# host (the compose file bind-mounts logs/caddy), not container output, and
+# Caddy writes it 0640 as root — th_exec runs as root, so it can read it.
 await "Caddy to log the request from $CLIENT_IP" \
-  th_exec "docker logs ${SLUG}-caddy-1 2>&1 | grep -qF '\"remote_ip\":\"$CLIENT_IP\"'"
+  th_exec "grep -qF '\"remote_ip\":\"$CLIENT_IP\"' $APP_DIR/logs/caddy/access.log"
 pass "Caddy's access log records the client's own address ($CLIENT_IP), not a gateway's"
 
 # And X-Forwarded-For as it reached the app, read back from the one place the
