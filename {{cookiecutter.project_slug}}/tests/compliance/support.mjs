@@ -46,6 +46,37 @@ export function minimumAge() {
   return value;
 }
 
+/**
+ * The string value of `key` inside the `legal.<block>` block of config.ts.
+ *
+ * The value may be any string literal an operator would write: double- or
+ * single-quoted with escapes (a multi-line postal address as "…\n…"), or a
+ * template literal without `${}`. It is evaluated as the literal it is, so
+ * "\n" becomes the newline the page actually renders.
+ */
+export function legalConfig(block, key) {
+  const body = fs.readFileSync("config.ts", "utf8").match(new RegExp(`${block}:\\s*\\{([^}]*)\\}`))?.[1];
+  const literal = body?.match(
+    new RegExp(`${key}:\\s*("(?:[^"\\\\\\n]|\\\\.)*"|'(?:[^'\\\\\\n]|\\\\.)*'|\`[^\`$\\\\]*\`)`)
+  )?.[1];
+  if (!literal) throw new Error(`config.ts should set legal.${block}.${key} to a string`);
+  return new Function(`return ${literal};`)();
+}
+
+/**
+ * `html` with the character references React writes for text and attribute
+ * values turned back into the characters, so a value with `&`, `'` or `"` in
+ * it can be compared as written.
+ */
+export function unescapeHtml(html) {
+  return html
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
 // cc:begin stripe
 /**
  * config.stripe.plans, read out of config.ts (the project root is the cwd):

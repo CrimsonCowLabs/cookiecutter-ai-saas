@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **210 files** with
+Every generated project is a complete distributed system — **211 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -155,6 +155,13 @@ and prove what they claim against a running app rather than asserting it:
   landing, auth, legal, dashboard and settings pages in both themes, and
   fails on any violation, a missing skip-to-content link or an invisible
   focus outline. `/legal/accessibility` is the accessibility statement.
+- **Ready for the DMCA safe harbor.** `/legal/copyright` names the
+  configured copyright agent and explains takedown notices, counter-notices
+  and the repeat-infringer policy, the Terms of Service link to it, and the
+  check proves the agent's details are shown. The operator guide walks
+  through registering the agent with the US Copyright Office ($6, renewed
+  every 3 years) before any user uploads are added; the template has none
+  today.
 - **The operator's legal details** (minimum age, marketing postal address,
   DMCA agent, accessibility contact, consent-text version) in one `legal`
   section of `config.ts`, shipped as placeholders to replace before launch.

@@ -110,7 +110,26 @@ export default function TermsOfServicePage() {
 
           <section className="space-y-3">
             <h2 className="text-xl font-semibold text-base-content">
-              6. Disclaimer
+              6. Copyright and Repeat Infringers
+            </h2>
+            <p>
+              You must not use the service to infringe anyone&apos;s copyright.
+              If you believe material on the service infringes yours, send a
+              notice to our designated copyright agent; if material of yours
+              was removed and you believe that was a mistake, you can send a
+              counter-notice. We respond to valid notices under the Digital
+              Millennium Copyright Act, and in appropriate circumstances we
+              close the accounts of users who are repeat infringers. See{" "}
+              <Link href="/legal/copyright" className="link link-primary">
+                Copyright &amp; DMCA
+              </Link>{" "}
+              for our agent&apos;s details and what a notice must contain.
+            </p>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-xl font-semibold text-base-content">
+              7. Disclaimer
             </h2>
             <p>
               __PROJECT_NAME__ provides the service &quot;as is&quot; without warranties of
@@ -121,7 +140,7 @@ export default function TermsOfServicePage() {
 
           <section className="space-y-3">
             <h2 className="text-xl font-semibold text-base-content">
-              7. Limitation of Liability
+              8. Limitation of Liability
             </h2>
             <p>
               To the maximum extent permitted by law, we are not liable for any
@@ -132,7 +151,7 @@ export default function TermsOfServicePage() {
 
           <section className="space-y-3">
             <h2 className="text-xl font-semibold text-base-content">
-              8. Changes
+              9. Changes
             </h2>
             <p>
               We may update these Terms from time to time. Continued use of the
@@ -142,7 +161,7 @@ export default function TermsOfServicePage() {
 
           <section className="space-y-3">
             <h2 className="text-xl font-semibold text-base-content">
-              9. Contact
+              10. Contact
             </h2>
             <p>
               If you have questions about these Terms, contact{" "}

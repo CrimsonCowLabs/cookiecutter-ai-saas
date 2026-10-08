@@ -26,7 +26,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import Stripe from "stripe";
 import { config, connectDb, insertTestUser, deleteTestUser } from "../auth/support.mjs";
-import { configuredPlans } from "./support.mjs";
+import { configuredPlans, unescapeHtml } from "./support.mjs";
 import { startFakeStripe } from "./fake-stripe.mjs";
 import { startFakeResend } from "./fake-resend.mjs";
 
@@ -50,7 +50,7 @@ async function termsShownFor(plan) {
   const html = await (await fetch(new URL("/", config.baseUrl))).text();
   const shown = html.match(new RegExp(`id="renewal-terms-${plan.tier}"[^>]*>([^<]+)<`))?.[1];
   assert.ok(shown, `the landing page should show ${plan.name}'s renewal terms`);
-  return shown.replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+  return unescapeHtml(shown);
 }
 
 let stripe;

@@ -21,7 +21,7 @@ every one before you launch.
 |---------|------------|
 | `minimumAge` | Visitors younger than this cannot create an account. 13 by default, the US line under COPPA; some EU countries set 14, 15 or 16 under the GDPR. |
 | `marketingPostalAddress` | The physical postal address every marketing email must carry under CAN-SPAM. Your street address, a PO box registered with the US Postal Service, or a private mailbox registered with a commercial mail receiving agency under Postal Service rules. |
-| `dmcaAgent` | Name, postal address, phone and email of your designated copyright (DMCA) agent, exactly as registered with the US Copyright Office. |
+| `dmcaAgent` | Name, postal address, phone and email of your designated copyright (DMCA) agent, exactly as registered with the US Copyright Office (see [Registering a designated agent](#registering-a-designated-agent)). |
 | `accessibility.contactEmail` | Where visitors report an accessibility barrier. |
 | `accessibility.reviewDate` | When you last reviewed the accessibility statement, as `YYYY-MM-DD`. |
 | `consentTextVersion` | The version of the consent text visitors agree to. Changing it invalidates every stored consent, so everyone is asked again; change it whenever you change what you collect. |
@@ -85,7 +85,9 @@ It checks that:
 {%- endif %}
 - the home page, the sign-in and sign-up pages, the other public pages, the
   blog (when the project has one), every legal page and the dashboard make
-  no request to another server.
+  no request to another server;
+- the copyright page shows every detail of the configured DMCA agent, and
+  the Terms of Service link to it (see [Copyright](#copyright-dmca));
 - the home page, the sign-in page, the sign-up page in each of its states
   (age screen, with an error, passed, turned away), the Privacy Policy and
   Terms, every legal page, the dashboard and the account settings pass an
@@ -463,6 +465,123 @@ turnover, whichever is higher (GDPR Article 83(5)). As of October 2026.
   `tests/compliance/third-party-requests.test.mjs` so it is checked too.
 - Run `scripts/check_compliance.sh` after changing a layout, a page's
   `<head>` or a third-party integration.
+
+## Copyright (DMCA)
+
+**The law and the risk.** When a service stores material at a user's
+direction, and that material infringes someone's copyright, the service can
+be held liable for it. The Digital Millennium Copyright Act's safe harbor
+(17 U.S.C. §512(c)) protects a service provider from money damages for
+infringing material its users store, but only if it has designated an
+agent to receive takedown notices, registered that agent with the US
+Copyright Office and published the agent's details on its site
+(§512(c)(2)); removes or disables material promptly once it receives a
+valid notice; and has adopted, published and reasonably carried out a
+policy of terminating repeat infringers' accounts (§512(i)). Without the
+safe harbor, a copyright owner can claim statutory damages of $750 to
+$30,000 per work infringed, and up to $150,000 per work when the
+infringement is wilful (17 U.S.C. §504(c)), plus attorney's fees. As of
+October 2026.
+
+The template has no user uploads today: nothing a visitor writes is stored
+and shown to anyone else. The safe harbor starts to matter the moment you
+add user content of any kind, such as file uploads, comments, profiles,
+shared reports or anything else one user publishes to others. Register
+your agent before that ships, not after the first notice arrives; a
+designation only protects you from the day it is registered.
+
+**What the app does.**
+
+- **A copyright page.** `/legal/copyright` names your designated agent and
+  gives their postal address, phone number and email, all from
+  `legal.dmcaAgent` in `config.ts`. It lists what a valid takedown notice
+  has to contain (§512(c)(3)), explains how the person whose material was
+  removed can send a counter-notice and what happens next (§512(g)), and
+  states the repeat-infringer policy.
+- **The Terms of Service.** The Terms have a copyright section that states
+  the repeat-infringer policy and links to `/legal/copyright`.
+- **It is checked.** The compliance check loads `/legal/copyright` and
+  fails unless it shows every one of the configured agent's details, and
+  fails unless the Terms link to it.
+
+**What you still have to do.**
+
+- Register a designated agent with the US Copyright Office (below) before
+  you launch any feature that lets users publish content, and copy the
+  agent's details into `legal.dmcaAgent` exactly as registered.
+- Renew the designation every 3 years, and amend it whenever any of the
+  details change (below).
+- Have a way to act on notices. The app has no takedown tooling: when a
+  notice arrives, check it has everything the page lists, remove or
+  disable the material promptly, tell the user who posted it, and keep a
+  record. A notice that identifies the work, the material and the sender
+  but misses something else still obliges you to contact the sender
+  promptly to help complete it (§512(c)(3)(B)(ii)). On a valid
+  counter-notice, promptly send the complainant a copy and tell them you
+  will restore the material in 10 business days (§512(g)(2)(B)), then
+  restore it in 10 to 14 business days unless they tell you they have
+  filed a lawsuit.
+- Actually apply the repeat-infringer policy: keep a record of the notices
+  against each account, and close accounts that the policy says to close.
+  The page defines a repeat infringer as an account with more than one
+  valid notice not answered by a successful counter-notice; the safe harbor
+  needs you to carry out whatever policy you publish (§512(i)), so change
+  that definition to one you will really enforce.
+- Keep the page true. If you change how you handle notices or the policy,
+  change `/legal/copyright` and the Terms with it.
+
+### Registering a designated agent
+
+The Copyright Office keeps a public online directory of designated agents,
+the DMCA Designated Agent Directory. Registration is online only; the
+Office no longer accepts paper designations. The rules are in 37 CFR
+201.38, and the Office's own walkthroughs and FAQ are at
+<https://www.copyright.gov/dmca-directory/>.
+
+1. **Create an account.** Go to <https://dmca.copyright.gov/login.html>
+   and register a user account. The account records a primary contact at
+   your business for the Office's messages to you, and the Office strongly
+   recommends adding a secondary contact, who must be a different person.
+   These contacts are not published.
+2. **Add the service provider.** Choose "Add Service Provider" and give
+   your business's full legal name and its physical street address. A PO
+   box is not allowed here without the Office's prior approval. Each
+   separate legal entity (a parent and its subsidiary, say) is a separate
+   service provider with its own designation.
+3. **List alternate names.** Add every name the public might search for
+   you under: trading names, the app's name, its domain and URL
+   (`{{ cookiecutter.domain_name }}`), and the names of any mobile or
+   desktop apps.
+4. **Enter the designated agent.** The agent can be a person ("Jane Doe"),
+   a position ("Copyright Agent"), a department, or a third-party takedown
+   service. Give the agent's postal address, phone number and email
+   address; these are published. Unlike the service provider's address, the
+   agent's address may be a PO box, so you don't have to publish a home
+   address.
+5. **Certify and pay.** Read and accept the attestation, then pay through
+   Pay.gov by debit or credit card or from a bank account (ACH). The fee is
+   $6 per designation. A card payment clears within minutes, ACH within
+   three business days; the designation is registered and appears in the
+   public directory once payment clears, and the Office emails you to
+   confirm.
+6. **Copy the details into the app.** Set `legal.dmcaAgent.name`,
+   `postalAddress`, `phone` and `email` in `config.ts` to exactly what you
+   registered, deploy, and check that `/legal/copyright` shows them.
+
+**Renewing every 3 years.** A designation expires and becomes invalid 3
+years after it was registered or last renewed, and an expired designation
+loses you the safe harbor. Any amendment renews it, and if nothing has
+changed you renew by resubmitting it without changes; each amendment or
+resubmission costs $6 and restarts the 3 years. The system emails your
+account's contacts 90, 60 and 30 days and one week before the deadline,
+but put the date in your own calendar too, in case the contact has moved
+on. Whenever you amend the designation (a new agent, address, phone or
+email), update `legal.dmcaAgent` and deploy the same day, so the page and
+the directory always agree.
+
+The fee, the 3-year term and the reminder emails are as the Copyright
+Office's DMCA Designated Agent Directory FAQ and its "Designating an Agent"
+tutorial describe them (37 CFR 201.38). As of October 2026.
 
 ## Accessibility
 
