@@ -24,6 +24,9 @@ import {
   // cc:begin resend
   unsubscribeToken,
   // cc:end resend
+  // cc:begin analytics
+  consentCookie,
+  // cc:end analytics
 } from "./support.mjs";
 
 // axe-core's rules for every WCAG 2.0, 2.1 and 2.2 success criterion at
@@ -58,6 +61,14 @@ const PUBLIC_PAGES = [
   "/unsubscribe?status=invalid",
   // cc:end resend
 ];
+// cc:begin analytics
+// Every page above shows the analytics consent banner, since the check gives
+// no consent; these are the states after a choice. Each is { label, path,
+// cookie }.
+const CONSENT_STATES = [
+  { label: "/legal/analytics, analytics rejected", path: "/legal/analytics", cookie: consentCookie("denied") },
+];
+// cc:end analytics
 const SIGNED_IN_PAGES = [
   "/dashboard",
   ...(exists("dashboard/settings") ? ["/dashboard/settings"] : []),
@@ -100,6 +111,9 @@ async function eachPage(fn) {
   for (const { label, dateOfBirth } of AGE_SCREEN_STATES) {
     await fn("/sign-up", { label, cookie: await ageCheckCookie(dateOfBirth) });
   }
+  // cc:begin analytics
+  for (const { label, path, cookie } of CONSENT_STATES) await fn(path, { label, cookie });
+  // cc:end analytics
   await asSignedInUser(async (cookie) => {
     for (const path of SIGNED_IN_PAGES) await fn(path, { label: path, cookie });
   });
@@ -223,6 +237,85 @@ test("every element Tab reaches shows a clearly visible focus indicator in every
     }
   });
 });
+
+// cc:begin analytics
+/**
+ * Press Tab until the focused element's text is `label` (and, with `inside`,
+ * it is inside that element), up to MAX_TAB_STOPS times. Returns whether it
+ * got there.
+ */
+async function tabTo(page, label, inside) {
+  for (let i = 0; i < MAX_TAB_STOPS; i++) {
+    await page.keyboard.press("Tab");
+    const here = await page.evaluate((inside) => {
+      const el = document.activeElement;
+      if (inside && !el?.closest(inside)) return null;
+      return el?.textContent.trim();
+    }, inside);
+    if (here === label) return true;
+  }
+  return false;
+}
+
+/** The analytics decision in the consent cookie, or null. */
+const decision = (page) =>
+  page.evaluate(() => {
+    const raw = document.cookie.split("; ").find((c) => c.startsWith("consent="));
+    return raw ? JSON.parse(decodeURIComponent(raw.slice("consent=".length))).analytics : null;
+  });
+
+const inBanner = (page) =>
+  page.evaluate(() => !!document.activeElement?.closest("#consent-banner"));
+
+const focusedText = (page) => page.evaluate(() => document.activeElement?.textContent.trim());
+
+async function shiftTab(page) {
+  await page.keyboard.down("Shift");
+  await page.keyboard.press("Tab");
+  await page.keyboard.up("Shift");
+}
+
+test("the consent banner works fully by keyboard and never traps focus", async (t) => {
+  for (const [key, label, expected] of [
+    ["Enter", "Accept", "granted"],
+    ["Space", "Reject", "denied"],
+  ]) {
+    await t.test(`${key} on "${label}"`, () =>
+      withPage(browser, "/", {}, async ({ page }) => {
+        assert.ok(await tabTo(page, label, "#consent-banner"), `Tab should reach the banner's "${label}" button`);
+
+        // Onwards past the banner, and back: it is not a focus trap.
+        let left = false;
+        for (let i = 0; i < 5 && !left; i++) {
+          await page.keyboard.press("Tab");
+          left = !(await inBanner(page));
+        }
+        assert.ok(left, "Tab should move focus on past the banner, to the page");
+        await shiftTab(page);
+        assert.ok(await inBanner(page), "Shift+Tab should come back into the banner");
+        for (let i = 0; i < 5 && (await focusedText(page)) !== label; i++) await shiftTab(page);
+        assert.equal(await focusedText(page), label, `Shift+Tab should get back to "${label}"`);
+
+        await page.keyboard.press(key);
+        assert.equal(await page.$("#consent-banner"), null, `${key} on "${label}" should close the banner`);
+        assert.equal(await decision(page), expected, `${key} on "${label}" should record "${expected}"`);
+      })
+    );
+  }
+
+  await t.test('"Privacy choices" reopens the banner by keyboard, and focus comes back', () =>
+    withPage(browser, "/", { cookie: consentCookie("denied") }, async ({ page }) => {
+      assert.ok(await tabTo(page, "Privacy choices", "footer"), 'Tab should reach "Privacy choices" in the footer');
+      await page.keyboard.press("Enter");
+      assert.ok(await inBanner(page), '"Privacy choices" should move focus to the banner');
+      assert.ok(await tabTo(page, "Accept", "#consent-banner"), 'Tab should go on from there to "Accept"');
+      await page.keyboard.press("Enter");
+      assert.equal(await decision(page), "granted", "the new choice should be recorded");
+      assert.equal(await focusedText(page), "Privacy choices", 'focus should return to "Privacy choices" once the choice is made');
+    })
+  );
+});
+// cc:end analytics
 
 /**
  * Runs in the page: describe document.activeElement's focus indicator, and

@@ -46,6 +46,11 @@ export default function FontsPage() {
           Stylesheets, scripts and images are served from this domain too.
           Nothing that would contact another server, such as analytics, ads,
           embedded videos or social media widgets, loads before you agree to it.
+          {/* cc:begin analytics */}
+          {" "}Even once you agree to analytics, your browser sends it only to
+          this site, which passes it on; see{" "}
+          <Link href="/legal/analytics" className="link link-primary">Analytics &amp; recording</Link>.
+          {/* cc:end analytics */}
         </p>
         <p>
           <strong className="text-base-content">Leaving is your choice.</strong>{" "}

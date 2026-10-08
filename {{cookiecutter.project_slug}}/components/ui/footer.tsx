@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { Logo } from "@/components/brand/logo";
+// cc:begin analytics
+import { PrivacyChoicesLink } from "@/components/consent/privacy-choices-link";
+// cc:end analytics
 
 export function Footer() {
   return (
@@ -55,6 +58,9 @@ export function Footer() {
               <li>
                 <Link href="/legal" className="hover:text-base-content transition-colors">Legal</Link>
               </li>
+              {/* cc:begin analytics */}
+              <PrivacyChoicesLink />
+              {/* cc:end analytics */}
             </ul>
           </div>
 

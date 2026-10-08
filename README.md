@@ -42,12 +42,13 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **211 files** with
+Every generated project is a complete distributed system — **212 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
-deletes at generation time, so don't expect the same number from two different
-answer sets.
+deletes at generation time, and `analytics=posthog` keeps the consent and
+analytics files the default `none` deletes, so don't expect the same number
+from two different answer sets.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -151,6 +152,18 @@ and prove what they claim against a running app rather than asserting it:
   and dashboard pages in a headless Chrome and fails, naming the host, if any
   of them contacts another server. A Google Fonts `<link>` is called out by
   name.
+- **Analytics only with consent (optional).** With `analytics=posthog`, an
+  app-owned banner offers "Accept" and "Reject" with equal weight, works by
+  keyboard and never traps focus. One consent module decides what may run;
+  the choice is kept in a first-party cookie with the consent-text version,
+  so bumping the version asks everyone again, and a Global Privacy Control
+  signal counts as "Reject". PostHog loads only after "Accept", through a
+  first-party `/ingest` proxy with IP capture off, and "Privacy choices" in
+  the footer or `/legal/analytics` withdraws consent, which shuts it down
+  and clears its storage. The check proves no analytics request is made
+  before consent, after "Reject" or under GPC, and that one is made after
+  "Accept". With the default `none` there is no dependency, banner or
+  provider code, and `/legal/analytics` says nothing is tracked.
 - **WCAG 2.2 AA on the key pages.** The same check runs axe-core over the
   landing, auth, legal, dashboard and settings pages in both themes, and
   fails on any violation, a missing skip-to-content link or an invisible
@@ -190,6 +203,7 @@ None of it is legal advice, and the pages and guide say so.
 | `auth_providers` | google_microsoft | google_microsoft, google_only, microsoft_only | OAuth providers |
 | `include_magic_link` | yes | yes, no | Email magic-link sign-in via Resend, independent of the OAuth choice. `no` drops its form, `/magic-link` page and provider; `RESEND_API_KEY` stays only if the contact form or Stripe is kept |
 | `llm_provider` | ollama | ollama, openai, anthropic, openrouter | AI model provider. Sets `LLM_PROVIDER` and ships only that provider's credentials, in `.env.example`, the vault example and the env file a deploy renders. The worker's `settings.py` reads all four with defaults, so switching later means adding that provider's variables back, not changing code |
+| `analytics` | none | none, posthog | Consent-gated product analytics. `posthog` adds a consent banner, a "Privacy choices" footer link, a first-party `/ingest` proxy and the `posthog-js` dependency, all idle until `POSTHOG_KEY` is set at runtime and a visitor accepts. `none` ships no analytics dependency, banner or provider code |
 | `python_version` | 3.14 | any version | Python for worker Dockerfile. `poetry.lock` is resolved for 3.14; any other value drops it and you must run `poetry lock` in `workers/app` once |
 | `node_version` | 20 | any version | Node.js for Dockerfiles |
 | `redis_port` | 6379 | any port | Local Redis port mapping |

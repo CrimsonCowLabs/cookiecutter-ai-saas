@@ -53,6 +53,12 @@ export interface LegalConfig {
   // The version of the consent text visitors agree to. Changing it makes
   // every existing consent invalid, so everyone is asked again.
   consentTextVersion: string;
+  // cc:begin analytics
+  // How long analytics events are kept, in words ("12 months"), as the
+  // /legal/analytics page tells visitors. Set the PostHog project's data
+  // retention to match.
+  analyticsRetention: string;
+  // cc:end analytics
 }
 
 export interface ConfigProps {

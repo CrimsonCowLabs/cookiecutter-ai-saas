@@ -15,7 +15,7 @@
 # `next start`, signed-in pages are reached with a session cookie the tests
 # mint themselves, and the tests talk to Postgres directly.
 #
-# Needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3001{% endif %}{% if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}, 3997{% endif %}{% if cookiecutter.include_stripe == "yes" %}, 3998{% endif %} and 3999
+# Needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3001{% endif %}{% if cookiecutter.analytics == "posthog" %}, 3996{% endif %}{% if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}, 3997{% endif %}{% if cookiecutter.include_stripe == "yes" %}, 3998{% endif %} and 3999
 # free, and a Chrome or Chromium binary (set CHROME_PATH if it is not in a
 # usual place; see tests/compliance/support.mjs).
 #
@@ -76,6 +76,14 @@ NO_RESEND_APP_PORT=3001
 # here too.
 FAKE_RESEND_PORT=3997
 {%- endif %}
+{%- if cookiecutter.analytics == "posthog" %}
+# The analytics-consent tests see what the app's first-party proxy (/ingest)
+# forwards to PostHog by way of a fake PostHog they run on this port
+# (tests/compliance/fake-posthog.mjs); POSTHOG_HOST and POSTHOG_ASSETS_HOST
+# point the proxy at it. The project key is a placeholder that only has to be
+# present: without one the app shows no consent banner and loads nothing.
+FAKE_POSTHOG_PORT=3996
+{%- endif %}
 
 cat > "$ENV_FILE" <<ENV
 NEXTAUTH_URL=${BASE_URL}
@@ -95,6 +103,11 @@ STRIPE_API_BASE=http://localhost:${FAKE_STRIPE_PORT}
 STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
 RESEND_API_KEY=re_test_0000000000000000000000000000
 RESEND_BASE_URL=http://localhost:${FAKE_RESEND_PORT}
+{%- endif %}
+{%- if cookiecutter.analytics == "posthog" %}
+POSTHOG_KEY=phc_test0000000000000000000000000000000000000
+POSTHOG_HOST=http://localhost:${FAKE_POSTHOG_PORT}
+POSTHOG_ASSETS_HOST=http://localhost:${FAKE_POSTHOG_PORT}
 {%- endif %}
 ENV
 
@@ -158,6 +171,9 @@ if ! BASE_URL="$BASE_URL" NEXTAUTH_SECRET="$NEXTAUTH_SECRET" DATABASE_URL="$DATA
 {%- endif %}
 {%- if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}
   FAKE_RESEND_PORT="$FAKE_RESEND_PORT" \
+{%- endif %}
+{%- if cookiecutter.analytics == "posthog" %}
+  FAKE_POSTHOG_PORT="$FAKE_POSTHOG_PORT" \
 {%- endif %}
   "${TESTS[@]}"; then
   echo "---- server log (last 50 lines) ----" >&2

@@ -23,6 +23,7 @@ export const legalTopics: LegalTopic[] = [
   {
     title: "Analytics & recording",
     summary: "What is measured about your visit, and the choices you have.",
+    href: "/legal/analytics",
   },
   {
     title: "Email preferences",

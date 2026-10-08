@@ -54,6 +54,16 @@ STRIPE_WEBHOOK_SECRET={{ vault_stripe_webhook_secret | default('') }}
 # ─── Resend (Email: magic link sign-in, contact form, subscription acknowledgment) ─
 RESEND_API_KEY={{ vault_resend_api_key | default('') }}
 # cc:end resend
+# cc:begin analytics
+
+# ─── Analytics (PostHog, only with the visitor's consent) ─
+# Empty key = no consent banner and no analytics. For an EU project, set
+# posthog_host and posthog_assets_host (with -e or in group_vars/all.yml) to
+# https://eu.i.posthog.com and https://eu-assets.i.posthog.com.
+POSTHOG_KEY={{ vault_posthog_key | default('') }}
+POSTHOG_HOST={{ posthog_host | default('https://us.i.posthog.com') }}
+POSTHOG_ASSETS_HOST={{ posthog_assets_host | default('https://us-assets.i.posthog.com') }}
+# cc:end analytics
 
 # ─── LLM Provider ──────────────────────────────────
 # Only the provider answered at generation time is rendered here, matching the

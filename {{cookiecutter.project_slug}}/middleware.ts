@@ -35,6 +35,10 @@ export default auth((req) => {
     "/unsubscribe",
     "/api/unsubscribe",
     // cc:end resend
+    // cc:begin analytics
+    // The first-party analytics proxy (app/ingest/[...path]/route.ts).
+    "/ingest",
+    // cc:end analytics
     "/api/auth",
     "/api/webhook",
   ];

@@ -38,6 +38,10 @@
     "anthropic",
     "openrouter"
   ],
+  "analytics": [
+    "none",
+    "posthog"
+  ],
   "_copy_without_render": [
     "ansible/*",
     "*.ts",
