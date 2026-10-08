@@ -30,9 +30,14 @@ SSH_PORT=2222
 # A port the firewall is never told about, published so that something outside
 # the host can try to reach a listener on it. See the reachability check below.
 BLOCKED_PORT=8080
+# The same, for a container that publishes a port through Docker. Docker used to
+# write its own iptables rules for that, ahead of ufw's, which is exactly the
+# hole this second port is here to prove closed.
+DOCKER_BLOCKED_PORT=8081
 
 trap throwaway_host_stop EXIT
-throwaway_host_start "provision-check-$$" "$SSH_PORT" "$BLOCKED_PORT:$BLOCKED_PORT"
+throwaway_host_start "provision-check-$$" "$SSH_PORT" \
+  "$BLOCKED_PORT:$BLOCKED_PORT" "$DOCKER_BLOCKED_PORT:$DOCKER_BLOCKED_PORT"
 
 # What the playbook decided at generation time. Read it out of the generated
 # tree rather than re-deriving it here, which is only the same thing until
@@ -75,11 +80,12 @@ pass "sshd is key-only with root login disabled"
 # Criterion: the firewall exposes only what is needed.
 ufw_status="$(th_exec "ufw status verbose")"
 grep -q "^Status: active" <<<"$ufw_status" || fail "ufw is not active: $ufw_status"
-grep -q "^Default: deny (incoming)" <<<"$ufw_status" \
-  || fail "ufw does not deny incoming by default: $ufw_status"
+grep -q "^Default: deny (incoming), allow (outgoing), deny (routed)" <<<"$ufw_status" \
+  || fail "ufw does not deny incoming and routed traffic by default: $ufw_status"
 # The (v6) suffix on the IPv6 copy of each rule is dropped by taking the port
-# field alone, so this is the set of ports, not the set of rules.
-allowed="$(awk '/ALLOW/ {print $1}' <<<"$ufw_status" | sort -u | paste -sd, -)"
+# field alone, so this is the set of ports, not the set of rules. ALLOW IN, not
+# ALLOW: the forwarding rule below is ALLOW FWD and is not an open port.
+allowed="$(awk '/ALLOW IN/ {print $1}' <<<"$ufw_status" | sort -u | paste -sd, -)"
 # Hardcoded on purpose, unlike the values read out of group_vars above: this is
 # the criterion ("only what is needed"), not an echo of the configuration. Widen
 # firewall_tcp_ports and this check should fail and be argued with, not follow.
@@ -87,6 +93,19 @@ expected="$SSH_PORT/tcp,443/tcp,443/udp,80/tcp"
 [[ "$allowed" == "$expected" ]] \
   || fail "ufw allows '$allowed', expected exactly '$expected'"
 pass "ufw is active, denies inbound by default and allows only $expected"
+
+# Forwarding is what containers need from the firewall now that Docker writes
+# none of its own rules: traffic that starts on a container network — every
+# bridge compose creates (br-+) and Docker's default one — may leave it.
+# Nothing is forwarded *to* a container that it did not ask for; that would be
+# a published port by another name. Comments and the (v6) twins are dropped, so
+# this is the set of rules rather than their spelling.
+routed="$(grep 'ALLOW FWD' <<<"$ufw_status" | sed -e 's/ *#.*//' -e 's/ (v6)//g' \
+  | tr -s ' ' | sort -u | paste -sd'|' -)"
+expected_routed="Anywhere ALLOW FWD Anywhere on br-+|Anywhere ALLOW FWD Anywhere on docker0"
+[[ "$routed" == "$expected_routed" ]] \
+  || fail "ufw forwards '$routed', expected exactly '$expected_routed'"
+pass "ufw forwards only traffic that starts on a container network"
 
 # A rule table is a claim; this is the claim tested. A listener goes up on a
 # port no rule mentions, and the outside has to be unable to reach it — proving
@@ -149,6 +168,74 @@ th_exec "id -nG $DEPLOY_USER | tr ' ' '\n' | grep -qx docker" \
   || fail "$DEPLOY_USER cannot drive Docker"
 pass "Docker and the compose plugin are installed and $DEPLOY_USER is in the docker group"
 
+# ── Docker answers to the firewall ───────────────────────────────────────────
+# Docker no longer writes iptables rules, so ufw is the one thing deciding what
+# reaches this host — and ufw has taken over the two jobs Docker's rules used to
+# do: NAT for containers talking out, and forwarding between them. Each half of
+# that is checked as behaviour, against a stand-in for the stack: a user-defined
+# bridge network, which is what compose creates for a project, holding a web
+# server that publishes a port no ufw rule mentions.
+PROBE_IMAGE=python:3.13-alpine
+
+# Rules Docker wrote are recognisable without knowing what Docker version wrote
+# them: every one is in a DOCKER* chain, jumps to one, or names a bridge
+# interface Docker made. ufw's own rules for containers name bridges too, but
+# only by wildcard or inside ufw's chains (ufw-*), so they do not match.
+docker_rules() {
+  th_exec "iptables-save; ip6tables-save" \
+    | grep -E '^:DOCKER|^-A ([^u]|u[^f]|uf[^w]).*(DOCKER|docker0|br-[0-9a-f]{12})' || true
+}
+
+start_probe() {
+  th_exec "docker network inspect probe-net >/dev/null 2>&1 || docker network create probe-net" >/dev/null
+  # unless-stopped, like every long-running service in the stack, so that it
+  # comes back when the playbook restarts Docker.
+  th_exec "docker run -d --name probe-web --restart unless-stopped --network probe-net \
+             -p $DOCKER_BLOCKED_PORT:80 $PROBE_IMAGE python3 -m http.server 80" >/dev/null
+}
+
+# The four things containers need from the network, given a probe running.
+check_container_networking() {
+  local when="$1"
+
+  # Docker's own iptables rules are what used to make a published port
+  # reachable regardless of ufw. A container is running and publishing, so this
+  # is the moment Docker would have written them.
+  local rules
+  rules="$(docker_rules)"
+  [[ -z "$rules" ]] || fail "Docker has written iptables rules $when: $rules"
+  pass "Docker has written no iptables or ip6tables rules $when, with a container publishing a port"
+
+  # Inside the host the published port answers, which makes the refusal from
+  # outside a firewall's answer rather than an absent listener's.
+  await "the probe container's published port to answer on the host" \
+    th_exec "curl -sS --max-time 5 -o /dev/null http://127.0.0.1:$DOCKER_BLOCKED_PORT/"
+  if curl -sS --max-time 5 -o /dev/null "http://127.0.0.1:$DOCKER_BLOCKED_PORT/" 2>/dev/null; then
+    fail "a container's published port $DOCKER_BLOCKED_PORT answers from outside the host $when, but no ufw rule allows it"
+  fi
+  pass "a container publishing unallowed port $DOCKER_BLOCKED_PORT is reachable inside the host and not outside $when"
+
+  # By name, on the same network: the app reaching postgres and redis. This is
+  # Docker's embedded DNS and the forwarding rule together.
+  th_exec "docker run --rm --network probe-net $PROBE_IMAGE wget -q -O /dev/null -T 10 http://probe-web/" \
+    || fail "a container cannot reach another on the same network by name $when"
+  pass "containers on one network reach each other by name $when"
+
+  # Out to the internet over HTTPS: the app and worker calling Stripe, the LLM
+  # APIs and Resend. This is the masquerade rule ufw now carries. Docker's own
+  # package host stands in, because provisioning already depends on reaching it.
+  th_exec "docker run --rm --network probe-net $PROBE_IMAGE wget -q -O /dev/null -T 20 https://download.docker.com/" \
+    || fail "a container cannot make an outbound HTTPS request $when"
+  pass "containers make outbound HTTPS requests $when"
+}
+
+echo "==> Checking container networking under ufw"
+th_exec "docker pull -q $PROBE_IMAGE" >/dev/null || fail "the host could not pull $PROBE_IMAGE"
+start_probe
+check_container_networking "after provisioning"
+# Gone before the second run, so that it meets the host a deploy would.
+th_exec "docker rm -f probe-web && docker network rm probe-net" >/dev/null
+
 # Where deploys land.
 owner_mode="$(th_exec "stat -c '%U %a' $APP_DIR")"
 [[ "$owner_mode" == "$DEPLOY_USER 755" ]] \
@@ -174,6 +261,48 @@ if ! grep -qE 'changed=0 +unreachable=0 +failed=0' <<<"$recap"; then
   fail "re-running the playbook changed something: $recap"
 fi
 pass "re-running the playbook changes nothing ($recap)"
+
+# ── Third run: a host provisioned before Docker was taken off iptables ───────
+# Docker does not remove the rules it wrote when it is told to stop writing
+# them, so a host provisioned by an earlier version of this playbook keeps its
+# hole until something takes them out. Recreate that host — Docker managing
+# iptables, a network and a published port made under it — and the playbook has
+# to leave it exactly as closed as a fresh one.
+#
+# The address pool stays as the playbook set it. An old host would not have one,
+# but the pool is the block Docker's defaults start in, so its networks were
+# already inside it; what differs between the two hosts is only who writes the rules.
+echo "==> Run 3: a host whose Docker still manages iptables"
+th_exec "python3 - <<'PY'
+import json
+path = '/etc/docker/daemon.json'
+config = json.load(open(path))
+for key in ('iptables', 'ip6tables'):
+    config.pop(key, None)
+json.dump(config, open(path, 'w'), indent=2)
+PY
+systemctl restart docker"
+start_probe
+[[ -n "$(docker_rules)" ]] \
+  || fail "Docker wrote no iptables rules even when allowed to, so run 3 would prove nothing"
+await "the probe to be reachable from outside, as on an old host" \
+  curl -sS --max-time 5 -o /dev/null "http://127.0.0.1:$DOCKER_BLOCKED_PORT/"
+pass "the old host is recreated: Docker's rules are in place and the published port is open"
+
+# Every run starts by probing whether root still answers, and on this host a
+# refused root login is three strikes in fail2ban's ledger: run 2's probe and
+# this one would be six, and the jail would ban this machine halfway through.
+# So for this run alone the jail ignores the address it sees the check arrive
+# from, which is the host's default gateway. The ledger is otherwise left as it
+# was, for the fail2ban checks at the end.
+CONTROL_IP="$(th_exec "ip route show default" | awk '{print $3; exit}')"
+[[ -n $CONTROL_IP ]] || fail "could not work out the address the check reaches the host from"
+th_exec "fail2ban-client set sshd addignoreip $CONTROL_IP" >/dev/null
+
+run_playbook | tee "$TH_WORK/run3.log"
+check_container_networking "on a host that used to let Docker manage iptables"
+
+th_exec "fail2ban-client set sshd delignoreip $CONTROL_IP" >/dev/null
 
 # ── The two checks that spend the host's patience ────────────────────────────
 # Both of these deliberately fail authentication, and fail2ban is watching, so

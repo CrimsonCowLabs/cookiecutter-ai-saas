@@ -1,0 +1,54 @@
+#!/bin/sh
+# NAT for containers, applied by ufw.
+#
+# Installed by ansible/provision.yml — edits here are overwritten by the next run.
+# ufw runs this with `start` after loading its own rules and with `stop` before
+# taking them down, on boot, on `ufw enable` and `ufw disable`, and on every
+# `ufw reload`.
+#
+# Docker writes no iptables rules on this host (daemon.json sets "iptables" and
+# "ip6tables" to false), so that ufw alone decides what reaches it. One of the
+# jobs Docker's rules did was masquerading: a container's address is private,
+# and a packet leaving the host with it as the source gets no reply. This is
+# that rule, owned by ufw instead.
+#
+# It lives here rather than in a *nat section of before.rules because ufw never
+# flushes the nat table: each reload would add another copy. This script owns
+# its chain, empties it on every start and adds the jump to it only if missing,
+# so any number of reloads leaves exactly one of each.
+#
+# IPv4 only. The compose networks are IPv4-only, so no container has an IPv6
+# address to translate.
+
+set -e
+
+CHAIN=ufw-docker-postrouting
+
+case "$1" in
+start)
+    iptables -t nat -N "$CHAIN" 2>/dev/null || true
+    iptables -t nat -F "$CHAIN"
+    # Between containers, addresses stay as they are: Postgres and Redis see
+    # the app's own address, as they did under Docker's rules.
+    iptables -t nat -A "$CHAIN" -o br-+ -j RETURN
+    iptables -t nat -A "$CHAIN" -o docker0 -j RETURN
+    # Everything else from Docker's address pool leaves as the host. The
+    # addrtype test leaves the host's own traffic alone, which matters only
+    # where the host's address happens to fall inside the pool.
+    iptables -t nat -A "$CHAIN" -s {{ docker_address_pool | quote }} \
+        -m addrtype ! --src-type LOCAL -j MASQUERADE
+    iptables -t nat -C POSTROUTING -j "$CHAIN" 2>/dev/null \
+        || iptables -t nat -A POSTROUTING -j "$CHAIN"
+    ;;
+stop|flush-all)
+    iptables -t nat -D POSTROUTING -j "$CHAIN" 2>/dev/null || true
+    iptables -t nat -F "$CHAIN" 2>/dev/null || true
+    iptables -t nat -X "$CHAIN" 2>/dev/null || true
+    ;;
+status)
+    ;;
+*)
+    echo "usage: $0 {start|stop|flush-all|status}" >&2
+    exit 1
+    ;;
+esac

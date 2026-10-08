@@ -404,8 +404,9 @@ jobs:
           grep -q '^[[:space:]]*email dev@acme-example.com$' "$C"
 
   # Acceptance criteria 2-4: bringing up the production stack is sufficient for
-  # working TLS, HTTP redirects to it, and nothing but the proxy is on the
-  # host's ports. See scripts/check_tls_stack.sh for why localhost stands in for
+  # working TLS, HTTP redirects to it, and nothing but the proxy faces the
+  # network — Caddy on the host's network, the app published on loopback only
+  # (issue #97). See scripts/check_tls_stack.sh for why localhost stands in for
   # the real domain.
   tls-stack:
     name: Production stack serves HTTPS
@@ -612,6 +613,15 @@ jobs:
   # ready state from one command, SSH is key-only with no root login, the
   # firewall exposes only what is needed, unattended upgrades and log rotation
   # are active, and a second run changes nothing.
+  #
+  # Issue #97 adds: Docker writes no iptables or ip6tables rules, so ufw
+  # governs every inbound port — a container publishing an unallowed port is
+  # unreachable from outside — while containers still reach each other by name
+  # and the internet over HTTPS through ufw's forwarding and NAT rules. A host
+  # whose Docker used to manage iptables is closed up the same way by a re-run.
+  # The stack-level half (Caddy logging the client's real address and passing
+  # it on in X-Forwarded-For, the app's port on loopback only) is in the deploy
+  # job, where the stack runs.
   #
   # scripts/check_provisioning.sh does the end-to-end run; this job adds what is
   # true of the generated files before anything is run against a host.

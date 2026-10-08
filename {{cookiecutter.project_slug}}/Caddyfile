@@ -1,13 +1,17 @@
 # Reverse proxy and TLS for {{ cookiecutter.project_name }}.
 #
-# Caddy runs inside docker-compose.prod.yml and is the only service that
-# publishes ports, so `docker compose -f docker-compose.prod.yml up -d` is all
-# it takes to serve HTTPS. Caddy obtains a certificate from Let's Encrypt on
-# first boot, renews it before it expires, and redirects HTTP to HTTPS itself.
+# Caddy runs inside docker-compose.prod.yml, on the host's own network, and is
+# the only thing in the stack listening on a public address, so
+# `docker compose -f docker-compose.prod.yml up -d` is all it takes to serve
+# HTTPS. Caddy obtains a certificate from Let's Encrypt on first boot, renews it
+# before it expires, and redirects HTTP to HTTPS itself.
+#
+# Host networking is what lets it see each client's real address rather than a
+# Docker gateway's: see the caddy service in docker-compose.prod.yml.
 #
 # Before the first deploy, point the domain's A/AAAA record at this host.
 # Issuance is a challenge against that name, so it fails until DNS resolves and
-# ports 80 and 443 reach this container.
+# ports 80 and 443 reach this host.
 {#- Every Jinja tag in this file trims its own newline (`{%-`, `-%}`). That is
     load-bearing, not tidiness: a bare `{% %}` leaves the blank line its tag
     occupied, and CI diffs the rendered file against `caddy fmt`, which rejects
@@ -49,11 +53,12 @@
 # rather than asking Let's Encrypt for a name that does not resolve yet.
 # Everything else — the redirect, TLS termination, the proxy hop — is unchanged.
 {$SITE_ADDRESS:https://{{ cookiecutter.domain_name }}} {
-	# `app` is the compose service name and 3000 the port inside that
-	# container. It publishes no host port, so this proxy is the only route in.
-	# Caddy sets X-Forwarded-For/-Proto/-Host itself, which is what lets
-	# NextAuth (trustHost: true in lib/auth.config.ts) build https:// callbacks.
-	reverse_proxy app:3000
+	# The app publishes port 3000 on the host's loopback only, so this proxy
+	# is the only route in from outside. Caddy sets X-Forwarded-For/-Proto/-Host
+	# itself, which is what lets NextAuth (trustHost: true in
+	# lib/auth.config.ts) build https:// callbacks — and X-Forwarded-For carries
+	# the client's real address, which the contact form rate-limits by.
+	reverse_proxy 127.0.0.1:3000
 
 	# Access log, so requests show up in `docker compose logs caddy`.
 	log
