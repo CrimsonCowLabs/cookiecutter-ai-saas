@@ -514,8 +514,13 @@ designation only protects you from the day it is registered.
 - Have a way to act on notices. The app has no takedown tooling: when a
   notice arrives, check it has everything the page lists, remove or
   disable the material promptly, tell the user who posted it, and keep a
-  record. Restore material after a valid counter-notice in 10 to 14
-  business days unless the complainant tells you they have filed a lawsuit.
+  record. A notice that identifies the work, the material and the sender
+  but misses something else still obliges you to contact the sender
+  promptly to help complete it (§512(c)(3)(B)(ii)). On a valid
+  counter-notice, promptly send the complainant a copy and tell them you
+  will restore the material in 10 business days (§512(g)(2)(B)), then
+  restore it in 10 to 14 business days unless they tell you they have
+  filed a lawsuit.
 - Actually apply the repeat-infringer policy: keep a record of the notices
   against each account, and close accounts that the policy says to close.
   The page defines a repeat infringer as an account with more than one

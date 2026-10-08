@@ -14,11 +14,19 @@ import { config, links, minimumAge as configuredMinimumAge } from "./support.mjs
  * The string value of `key` inside the `legal.<block>` block of config.ts,
  * escaped the way React writes it into HTML, so an operator's real value
  * ("Smith & Jones LLP", "O'Brien") still matches the rendered page.
+ *
+ * The value may be any string literal an operator would write: double- or
+ * single-quoted with escapes (a multi-line postal address as "…\n…"), or a
+ * template literal without `${}`. It is evaluated as the literal it is, so
+ * "\n" becomes the newline the page actually renders.
  */
 function legalConfig(block, key) {
   const body = fs.readFileSync("config.ts", "utf8").match(new RegExp(`${block}:\\s*\\{([^}]*)\\}`))?.[1];
-  const value = body?.match(new RegExp(`${key}:\\s*"([^"]*)"`))?.[1];
-  assert.ok(value, `config.ts should set legal.${block}.${key} to a string`);
+  const literal = body?.match(
+    new RegExp(`${key}:\\s*("(?:[^"\\\\\\n]|\\\\.)*"|'(?:[^'\\\\\\n]|\\\\.)*'|\`[^\`$\\\\]*\`)`)
+  )?.[1];
+  assert.ok(literal, `config.ts should set legal.${block}.${key} to a string`);
+  const value = new Function(`return ${literal};`)();
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -89,11 +97,14 @@ test("the copyright page names the configured DMCA agent and is linked from the 
   assert.ok(links((await get("/legal")).html).includes("/legal/copyright"), "/legal should link to it");
   for (const key of ["name", "postalAddress", "phone", "email"]) {
     const value = legalConfig("dmcaAgent", key);
-    assert.ok(html.includes(value), `/legal/copyright should show legal.dmcaAgent.${key} ("${value}")`);
+    // As the element's whole text, not just somewhere (an href included).
+    assert.ok(html.includes(`>${value}<`), `/legal/copyright should show legal.dmcaAgent.${key} ("${value}")`);
   }
-  assert.ok(
-    html.includes(`href="mailto:${legalConfig("dmcaAgent", "email")}"`),
-    "the agent's email address should be a mailto: link"
+  const email = legalConfig("dmcaAgent", "email").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(
+    html,
+    new RegExp(`<a [^>]*href="mailto:${email}"[^>]*>${email}</a>`),
+    "the agent's email address should be a mailto: link showing the address"
   );
   assert.match(html, /what a takedown notice must contain/i, "it should list what a takedown notice must contain");
   assert.match(html, /under penalty of perjury/i, "the notice list should include the sworn statement");

@@ -86,12 +86,18 @@ export default function CopyrightPage() {
             Your physical or electronic signature, as the copyright owner or
             someone authorised to act for them.
           </li>
-          <li>The copyrighted work you say is being infringed.</li>
+          <li>
+            The copyrighted work you say is being infringed or, if one notice
+            covers several works, a representative list of them.
+          </li>
           <li>
             The material you say is infringing, with enough detail for us to
             find it, such as its web address (URL).
           </li>
-          <li>Your name, postal address, phone number and email address.</li>
+          <li>
+            Enough information for us to contact you, such as your name,
+            postal address, phone number and, if you have one, email address.
+          </li>
           <li>
             A statement that you believe in good faith that the use is not
             authorised by the copyright owner, its agent or the law.
@@ -103,9 +109,11 @@ export default function CopyrightPage() {
           </li>
         </ol>
         <p>
-          A notice that leaves out these parts may not be acted on. When we
-          receive a valid notice we remove or disable the material promptly
-          and tell the user who posted it.
+          If your notice identifies the work, the material and how to contact
+          you but leaves out something else on this list, we will promptly
+          contact you to help you complete it; a notice missing more than that
+          may not be acted on. When we receive a valid notice we remove or
+          disable the material promptly and tell the user who posted it.
         </p>
       </LegalSection>
 
@@ -136,10 +144,11 @@ export default function CopyrightPage() {
           </li>
         </ol>
         <p>
-          We send a copy of a valid counter-notice to the person who sent the
-          original notice, and put the material back between 10 and 14
-          business days after we received the counter-notice, unless before
-          then they tell us they have filed a court action to keep it down.
+          We promptly send a copy of a valid counter-notice to the person who
+          sent the original notice and tell them we will put the material
+          back in 10 business days. We put it back between 10 and 14 business
+          days after we received the counter-notice, unless before then they
+          tell us they have filed a court action to keep it down.
         </p>
       </LegalSection>
 
