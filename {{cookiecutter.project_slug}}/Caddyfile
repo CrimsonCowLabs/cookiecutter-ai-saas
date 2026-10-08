@@ -60,8 +60,94 @@
 	# the client's real address, which the contact form rate-limits by.
 	reverse_proxy 127.0.0.1:3000
 
-	# Access log, so requests show up in `docker compose logs caddy`.
-	log
+	# ── Scanner probes ──────────────────────────────────────────────────────
+	# Bots walk every public address asking for leaked secrets and for admin
+	# pages of software this app does not run. None of these paths can mean
+	# anything to a Next.js app, so they are answered here — an empty 404, then
+	# the connection is closed — and never cost the app a render or a log line.
+	#
+	# `*.php` covers most of WordPress on its own; the WordPress, phpMyAdmin
+	# and CGI prefixes stay listed because they also catch the non-.php files
+	# under them. Matching is case-insensitive, so /.ENV is blocked too.
+	# Nothing here may overlap a real route: /.well-known/ (ACME, security.txt)
+	# is deliberately absent, and a page whose path merely contains "php" or
+	# "env" is not matched.
+	@scanner path /.env* /.git /.git/* /.aws/* /.ssh/* /wp-login.php /wp-admin* /wp-content/* /wp-includes/* /xmlrpc.php /phpmyadmin* /pma/* /cgi-bin/* /server-status /server-info *.php
+	handle @scanner {
+		# The marker a ban jail matches on: `"blocked":"scanner"` in this
+		# request's access-log line. A 404 alone would not do — the app
+		# returns plenty of honest 404s.
+		log_append blocked scanner
+		respond 404 {
+			close
+		}
+	}
+
+	# ── Request body caps ───────────────────────────────────────────────────
+	# Several route handlers read the whole body into memory before looking
+	# at it (`req.json()`, `req.formData()`, `req.arrayBuffer()`), and some of
+	# them take anonymous traffic. Caddy counts the bytes as they stream past
+	# and answers 413 once a body goes over its cap, so an oversized upload
+	# is refused before Node buffers it.
+	#
+	# Everything gets the generous cap. Nothing in the app accepts uploads;
+	# the largest legitimate bodies are Stripe webhook events (well under a
+	# megabyte) and server actions, which Next itself limits to 1 MB. Raise
+	# this if you add file uploads, or give the upload route its own cap.
+	request_body {
+		max_size 10MB
+	}
+
+	# Small form posts get a tight cap. The contact form's longest valid
+	# submission (a 5000-character message plus the other fields, see
+	# lib/validations.ts) is around 20 KB even in four-byte UTF-8; the age
+	# check posts a date and two short fields; one-click unsubscribe posts a
+	# single fixed field. A route absent from this build (no contact form, say)
+	# simply never matches.
+	@small_form path /api/contact /api/age-check /api/unsubscribe
+	request_body @small_form {
+		max_size 64KB
+	}
+
+	# The analytics proxy (app/ingest/[...path]/route.ts) is unauthenticated
+	# and forwards whatever it is sent. posthog-js posts batches of events,
+	# compressed, and session recording is off (lib/analytics.ts), so a batch
+	# stays far below this.
+	@ingest path /ingest /ingest/*
+	request_body @ingest {
+		max_size 1MB
+	}
+
+	# A body cut off at its cap surfaces here as an error, not as a response
+	# from the app, so this only ever fires for Caddy's own refusals: a 413
+	# the app itself returned does not pass through it. It marks the line the
+	# same way the scanner block does.
+	handle_errors 413 {
+		log_append blocked body_too_large
+		respond 413 {
+			close
+		}
+	}
+
+	# ── Access log ──────────────────────────────────────────────────────────
+	# One JSON object per request, written to /var/log/caddy inside the
+	# container, which docker-compose.prod.yml bind-mounts from logs/caddy
+	# beside the compose file so the host — and a ban jail on it — can read
+	# it. Every request Caddy refused carries a `blocked` field ("scanner" or
+	# "body_too_large"); nothing else does.
+	#
+	# Bounded on disk: the file rolls at 10 MiB and at most five rolled files
+	# (gzipped) are kept, none older than 30 days. 0640 because the log holds
+	# client addresses and full request URIs, sign-in links' tokens included.
+	log {
+		output file /var/log/caddy/access.log {
+			mode 0640
+			roll_size 10MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		format json
+	}
 }
 
 # Nothing is compressed here on purpose. Next.js compresses its own output

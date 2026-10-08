@@ -503,6 +503,35 @@ curl -k https://localhost/
 The redirect, TLS termination and the proxy hop are the production path; only
 the issuer differs.
 
+#### What Caddy refuses, and the access log
+
+Caddy turns away obvious junk before it reaches the app:
+
+- **Scanner probes** — `/.env*`, `/.git/*`, `/.aws/*`, WordPress and phpMyAdmin
+  paths, `/cgi-bin/*`, `/server-status`, anything ending in `.php` — get an
+  empty 404 and a closed connection. The app never sees them. The list is the
+  `@scanner` matcher in `Caddyfile`; keep real routes out of it.
+- **Oversized bodies** get a 413: over 64 KB on `/api/contact`,
+  `/api/age-check` and `/api/unsubscribe`, over 1 MB on the analytics proxy
+  (`/ingest`), over 10 MB anywhere else. If you add file uploads, raise the
+  global cap or give the upload route its own `request_body` block.
+
+The access log is JSON, one request per line, at `logs/caddy/access.log` next to
+the compose file on the host — `/app/{{ cookiecutter.project_slug }}/logs/caddy/`
+after a deploy, unless you changed `app_dir`. It rolls at 10 MiB and keeps five
+gzipped rolls for at most 30 days, so it stays under about 60 MB. It goes only
+there, not to `docker compose logs caddy`. Every request Caddy refused carries a
+`blocked` field — `"scanner"` or `"body_too_large"` — and nothing else does,
+which is what a ban jail should match:
+
+```bash
+sudo jq -c 'select(.blocked) | [.ts, .request.client_ip, .blocked, .request.uri]' \
+  logs/caddy/access.log
+```
+
+The file is root's and mode 0640, because it holds client addresses and full
+request URIs, sign-in link tokens included.
+
 ## The CLI
 
 Operating a deployed instance otherwise means remembering `docker compose`
@@ -731,7 +760,7 @@ ansible/
   group_vars/all.yml    # Deploy account, ports, log caps, deploy and backup settings
   vault.yml.example     # Every production secret, to fill in and encrypt
   templates/            # .env-production and the backup units, rendered on the host
-Caddyfile               # TLS and HTTP->HTTPS for {{ cookiecutter.domain_name }}
+Caddyfile               # TLS, HTTP->HTTPS, probe blocking and body caps for {{ cookiecutter.domain_name }}
 ```
 
 ## License

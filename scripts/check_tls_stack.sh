@@ -146,4 +146,11 @@ https_status="$(curl -sS --cacert "$ROOT_CA" -o /dev/null -w '%{http_code}' http
   || fail "expected 200 over HTTPS from the proxied app, got $https_status"
 pass "HTTPS serves the proxied app (200) with a certificate that verifies"
 
+# ── The access log reaches the host ──────────────────────────────────────────
+# The compose file bind-mounts logs/caddy; what Caddy logs inside the container
+# is checked by scripts/check_caddy_edge.sh. Here: the file lands on the host.
+# It is root's and 0640, so only its size is visible from this account.
+await "Caddy's access log on the host" test -s logs/caddy/access.log
+pass "Caddy's access log is on the host at logs/caddy/access.log"
+
 echo "==> TLS stack check passed"

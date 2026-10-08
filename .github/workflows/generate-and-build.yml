@@ -300,6 +300,17 @@ jobs:
             *) grep -q '^GOOGLE_ID=' "$G/.env.example"; grep -q 'MICROSOFT' "$G/.env.example" ;;
           esac
 
+      # Issue #98. The Caddyfile has no flag-dependent Jinja today, but it is
+      # checked under every combination anyway, so one added later cannot
+      # break `caddy fmt` for a combination nobody tried. Then it is run
+      # against a stub upstream: scanner paths blocked before the app, bodies
+      # over their cap refused with 413, event streams unbuffered, and every
+      # refusal marked in the JSON access log.
+      - name: Caddyfile is formatted, valid and refuses junk at the edge
+        run: |
+          scripts/check_caddyfile.sh "$G/Caddyfile"
+          scripts/check_caddy_edge.sh "$G/Caddyfile"
+
       - name: Install dependencies (frozen)
         working-directory: .generated/matrix-app
         run: npm ci --no-audit --no-fund
@@ -384,6 +395,8 @@ jobs:
           scripts/check_caddyfile.sh "$C"
           grep -qF '{$SITE_ADDRESS:https://app.proxy-test.dev}' "$C"
           grep -q '^[[:space:]]*email ops@proxy-test.dev$' "$C"
+          # The flag matrix runs this on files without a global block.
+          scripts/check_caddy_edge.sh "$C"
 
       - name: A reserved example domain leaves the ACME account anonymous
         run: |
