@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **212 files** with
+Every generated project is a complete distributed system — **214 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -257,6 +257,7 @@ None of it is legal advice, and the pages and guide say so.
 │   ├── queue/jobs.ts              # BullMQ dispatch + cancel
 │   ├── redis.ts                   # ioredis singleton
 │   ├── stripe.ts                  # Checkout + portal helpers
+│   ├── checkout.ts                # One Stripe customer, one live subscription per user
 │   ├── rate-limit.ts              # Redis sliding-window limiter
 │   ├── audit.ts                   # Silent audit logging
 │   ├── feature-flags.ts           # ENV-backed toggles

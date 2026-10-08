@@ -695,6 +695,7 @@ lib/
   queue/                # BullMQ queue helpers
   redis.ts              # ioredis singleton
   stripe.ts             # Stripe helpers
+  checkout.ts           # One Stripe customer and one live subscription per user
 workers/
   app/                  # Python worker
     tracing.py          # Opt-in LangSmith tracing (off by default)

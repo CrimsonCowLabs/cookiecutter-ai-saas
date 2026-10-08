@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Prove the Stripe webhook fixes for issue #27 actually hold, against a
+# Prove the Stripe webhook fixes for issue #27, and the one-customer,
+# one-live-subscription checkout rules of issue #72, actually hold, against a
 # really running instance of a generated project — not mocks, and not the
 # route handler imported in-process. See tests/billing/integration/*.test.mjs
 # for what is asserted and why; this script is only the plumbing that gets a
@@ -53,12 +54,16 @@ grep -qF "\"${POSTGRES_PORT}:5432\"" docker-compose.yml \
 # is set explicitly on both sides below rather than relying on a shared
 # default, so a future change to either file fails a test instead of silently
 # passing against a secret nobody checked. STRIPE_SECRET_KEY never has to be
-# a real key: every live Stripe API call the webhook makes either isn't
-# reached in these tests or is caught and tolerated (see lib/stripe.ts's
-# findCheckoutSession) — it only has to be present, because getStripe()
-# throws if it's unset at all (see lib/stripe.ts's own comment on that).
+# a real key: STRIPE_API_BASE points the app's Stripe client at a stand-in
+# API (tests/compliance/fake-stripe.mjs) on FAKE_STRIPE_PORT, which the
+# checkout tests start; a call the webhook makes while nothing listens there
+# is caught and tolerated (see lib/stripe.ts's findCheckoutSession). The key
+# only has to be present, because getStripe() throws if it's unset at all
+# (see lib/stripe.ts's own comment on that). NEXTAUTH_SECRET is the value
+# tests/auth/support.mjs mints the checkout tests' session cookies with.
 STRIPE_SECRET_KEY="sk_test_0000000000000000000000000000000000000000"
 STRIPE_WEBHOOK_SECRET="whsec_0000000000000000000000000000000000000000"
+FAKE_STRIPE_PORT=3998
 NEXTAUTH_SECRET="0000000000000000000000000000000000000000000000000000000000000000"
 APP_PORT=3000
 BASE_URL="http://localhost:${APP_PORT}"
@@ -75,6 +80,7 @@ HOSTNAME=0.0.0.0
 DATABASE_URL=${DATABASE_URL}
 STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
 STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+STRIPE_API_BASE=http://localhost:${FAKE_STRIPE_PORT}
 ENV
 
 SERVER_PID=""
@@ -124,9 +130,10 @@ await() {
 await "the app to answer" curl -sS -o /dev/null --max-time 5 "$BASE_URL/"
 pass "app answers on $BASE_URL"
 
-echo "==> Running the billing webhook integration tests"
+echo "==> Running the billing integration tests"
 BASE_URL="$BASE_URL" STRIPE_WEBHOOK_SECRET="$STRIPE_WEBHOOK_SECRET" DATABASE_URL="$DATABASE_URL" \
+  NEXTAUTH_SECRET="$NEXTAUTH_SECRET" FAKE_STRIPE_PORT="$FAKE_STRIPE_PORT" SERVER_LOG="$PWD/server.log" \
   npm run test:billing:integration
-pass "billing webhook integration tests passed"
+pass "billing integration tests passed"
 
 echo "==> Billing check passed"

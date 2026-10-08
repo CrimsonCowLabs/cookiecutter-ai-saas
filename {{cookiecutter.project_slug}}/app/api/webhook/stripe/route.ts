@@ -72,6 +72,28 @@ function logUnfulfilled(session: Stripe.Checkout.Session, customerId?: string | 
   );
 }
 
+/**
+ * A subscription paid for as a Stripe customer other than the user's own: a
+ * checkout the app didn't open (a Payment Link, pricing table or Buy
+ * Button), for which Stripe made a customer of its own. The plan is granted,
+ * but the billing portal, opened as the user's own customer, won't show
+ * that subscription, so it is left for the operator (see docs/compliance.md,
+ * "Subscriptions and automatic renewal").
+ */
+function logSecondCustomer(
+  session: Stripe.Checkout.Session,
+  userId: string,
+  ownCustomerId: string,
+  customerId: string
+) {
+  console.error(
+    `[Webhook] checkout session ${session.id} for user ${userId} was paid as` +
+      ` Stripe customer ${customerId}, not their own ${ownCustomerId}; the` +
+      " billing portal won't show that subscription. Plan granted; see" +
+      " docs/compliance.md to resolve it."
+  );
+}
+
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
@@ -213,13 +235,19 @@ export async function POST(req: NextRequest) {
             ).length > 0
           : false;
 
-        // Update user plan and Stripe customer ID
+        // Update the user's plan. Their Stripe customer is the one the app
+        // created before checkout (lib/checkout.ts), and stays that one: the
+        // customer here is only stored for a user who had none, as after a
+        // Payment Link checkout.
+        if (user.stripeCustomerId && user.stripeCustomerId !== customerId) {
+          logSecondCustomer(stripeObject, user.id, user.stripeCustomerId, customerId);
+        }
         if (!alreadyRecorded) {
           await db
             .update(users)
             .set({
               plan: plan.tier,
-              stripeCustomerId: customerId,
+              stripeCustomerId: sql`coalesce(${users.stripeCustomerId}, ${customerId})`,
               updatedAt: new Date(),
             })
             .where(eq(users.id, user.id));

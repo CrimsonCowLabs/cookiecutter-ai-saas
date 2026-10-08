@@ -10,9 +10,10 @@
 // and sometimes even after one.
 //
 // This branch calls findCheckoutSession() (lib/stripe.ts), which hits the
-// real Stripe API — but that function catches its own errors and returns
-// null on any failure, so it tolerates the dummy STRIPE_SECRET_KEY
-// scripts/check_billing.sh sets without needing real credentials. With a
+// Stripe API scripts/check_billing.sh points the app at (a stand-in that
+// only ./checkout.test.mjs starts, and that knows no such session) — but
+// that function catches its own errors and returns null on any failure, so
+// it needs neither real credentials nor the stand-in. With a
 // null session, the handler falls back to quantity 1 and a null price id —
 // which is exactly what these tests assert on, deterministically.
 //

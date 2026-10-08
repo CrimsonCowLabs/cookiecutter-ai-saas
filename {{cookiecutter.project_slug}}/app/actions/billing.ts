@@ -5,31 +5,28 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
-import { createCheckout, createCustomerPortal } from "@/lib/stripe";
+import { createCustomerPortal } from "@/lib/stripe";
+import { subscriptionCheckout } from "@/lib/checkout";
 import { audit } from "@/lib/audit";
 import { getPlanConfig } from "@/lib/plans";
 import config from "@/config";
 import type { PlanConfig, PlanTier } from "@/types/config";
 
 /**
- * The Stripe Checkout URL for `user` to subscribe to `plan`. Every
- * subscription checkout goes through here, so each one carries the plan's
- * renewal terms (see lib/stripe.ts's createCheckout).
+ * Where to send user `userId` to subscribe to `plan`: a Stripe Checkout that
+ * carries the plan's renewal terms (see lib/stripe.ts's createCheckout), or,
+ * for a user already subscribed, the billing portal instead (see
+ * lib/checkout.ts's subscriptionCheckout, which every subscription checkout
+ * goes through).
  */
-function checkoutFor(
-  user: { id: string; email?: string | null; stripeCustomerId?: string | null },
-  plan: PlanConfig
-): Promise<string | null> {
-  return createCheckout({
+function checkoutFor(userId: string, plan: PlanConfig): Promise<string | null> {
+  return subscriptionCheckout({
+    userId,
     plan,
     successUrl: `${process.env.NEXTAUTH_URL}/dashboard?upgraded=true`,
     cancelUrl: `${process.env.NEXTAUTH_URL}/dashboard/settings`,
     termsUrl: `${process.env.NEXTAUTH_URL}/tos`,
-    clientReferenceId: user.id,
-    user: {
-      customerId: user.stripeCustomerId ?? undefined,
-      email: user.email ?? undefined,
-    },
+    returnUrl: `${process.env.NEXTAUTH_URL}/dashboard/settings`,
   });
 }
 
@@ -37,34 +34,21 @@ export async function createCheckoutAction(tier: PlanTier) {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not authenticated");
 
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-  });
-
-  const url = await checkoutFor(
-    { ...session.user, id: session.user.id, stripeCustomerId: user?.stripeCustomerId },
-    getPlanConfig(tier)
-  );
+  const url = await checkoutFor(session.user.id, getPlanConfig(tier));
 
   if (url) redirect(url);
 }
 
 /**
- * Returns checkout URL instead of redirecting.
+ * Returns checkout URL (or the billing portal's, for a user already
+ * subscribed) instead of redirecting.
  * Use this from client components where redirect() doesn't work.
  */
 export async function getCheckoutUrl(tier: PlanTier): Promise<string | null> {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not authenticated");
 
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-  });
-
-  return checkoutFor(
-    { ...session.user, id: session.user.id, stripeCustomerId: user?.stripeCustomerId },
-    getPlanConfig(tier)
-  );
+  return checkoutFor(session.user.id, getPlanConfig(tier));
 }
 
 /**
@@ -78,7 +62,9 @@ export async function getCheckoutUrl(tier: PlanTier): Promise<string | null> {
  * Silently does nothing for a missing/unknown tier, a free tier (no priceId
  * to check out), or a tier the user is already on: the dashboard runs this
  * unprompted on every visit while the pending-plan cookie is set, so it must
- * never re-charge someone for a plan they already hold.
+ * never re-charge someone for a plan they already hold. A user subscribed to
+ * another plan goes to the billing portal to change it, like any other
+ * subscription checkout (see checkoutFor).
  */
 export async function startCheckoutAction(formData: FormData) {
   const planId = formData.get("planId");
@@ -95,7 +81,7 @@ export async function startCheckoutAction(formData: FormData) {
   });
   if (!user || user.plan === plan.tier) return;
 
-  const url = await checkoutFor(user, plan);
+  const url = await checkoutFor(user.id, plan);
 
   if (url) redirect(url);
 }

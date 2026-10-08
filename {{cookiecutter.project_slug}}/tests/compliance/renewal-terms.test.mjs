@@ -12,6 +12,8 @@
 // FAKE_STRIPE_PORT (see ./fake-stripe.mjs).
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import { connectDb, insertTestUser, deleteTestUser, mintSessionCookie } from "../auth/support.mjs";
 import { config, configuredPlans, launchBrowser, withPage, asSignedInUser, links } from "./support.mjs";
 import { startFakeStripe } from "./fake-stripe.mjs";
 
@@ -160,6 +162,43 @@ test("the checkout the app opens by itself after sign-up, for a plan picked befo
       }
     });
   } finally {
+    await stripe.close();
+  }
+});
+
+test("the checkout the app opens by itself after sign-up sends someone already subscribed to the billing portal instead", async () => {
+  // One live subscription per user (issue #72): a plan picked before signing
+  // in to an account that already subscribes is changed in the portal, not
+  // bought a second time.
+  const [current, picked] = paidPlans;
+  assert.ok(picked, "config.ts should list two paid plans");
+  const stripe = await startFakeStripe();
+  const db = await connectDb();
+  try {
+    const user = await insertTestUser(db);
+    try {
+      const now = new Date();
+      await db.query(
+        `insert into subscriptions
+           (user_id, stripe_subscription_id, stripe_price_id, plan, status, current_period_start, current_period_end)
+         values ($1, $2, $3, $4, 'active', $5, $6)`,
+        [user.id, `sub_test_${crypto.randomUUID()}`, current.priceId, current.tier, now, new Date(now.getTime() + 30 * 864e5)]
+      );
+      await db.query("update users set plan = $2 where id = $1", [user.id, current.tier]);
+      const cookie = await mintSessionCookie(user);
+
+      await withPage(browser, "/dashboard", { cookie: [cookie, `pending_plan_id=${picked.tier}`] }, async () => {
+        for (let waited = 0; stripe.portals.length === 0 && waited < 15_000; waited += 100) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      });
+      assert.equal(stripe.portals.length, 1, "the app should open the billing portal for the plan change");
+      assert.equal(stripe.checkouts.length, 0, "the app should open no Checkout Session");
+    } finally {
+      await deleteTestUser(db, user.id);
+    }
+  } finally {
+    await db.end();
     await stripe.close();
   }
 });
