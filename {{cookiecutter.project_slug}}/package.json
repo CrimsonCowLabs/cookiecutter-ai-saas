@@ -35,6 +35,7 @@
     "next-auth": "^5.0.0-beta.25",
     "nextjs-toploader": "^3.7.0",
     "pg": "^8.13.0",
+    "posthog-js": "^1.438.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hot-toast": "^2.4.1",

@@ -7,6 +7,8 @@ Runs after the project is generated to:
 - Remove optional features based on cookiecutter choices
 """
 
+import copy
+import json
 import os
 import re
 import shutil
@@ -26,6 +28,7 @@ INCLUDE_MAGIC_LINK = "{{ cookiecutter.include_magic_link }}"
 DAISYUI_THEME = "{{ cookiecutter.daisyui_theme }}"
 LLM_PROVIDER = "{{ cookiecutter.llm_provider }}"
 PYTHON_VERSION = "{{ cookiecutter.python_version }}"
+ANALYTICS = "{{ cookiecutter.analytics }}"
 # Python floor that workers/app/pyproject.toml and poetry.lock ship with (the
 # cookiecutter.json default). Keep in sync with both.
 LOCKED_PYTHON_VERSION = "3.14"
@@ -216,6 +219,162 @@ def handle_resend():
         remove_file("tests/compliance/fake-resend.mjs")
 
 
+def dump_npm_json(data):
+    """Serialise the way npm writes package.json and package-lock.json: two
+    spaces, non-ASCII left as is, a trailing newline."""
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+
+def resolve_lock_path(packages, from_path, name):
+    """The `packages` key a dependency `name` of the package at `from_path`
+    resolves to, by node's lookup: its own node_modules first, then each
+    enclosing one up to the root's. None if no copy is installed."""
+    base = from_path
+    while True:
+        candidate = f"{base}/node_modules/{name}" if base else f"node_modules/{name}"
+        if candidate in packages:
+            return candidate
+        if not base:
+            return None
+        cut = base.rfind("/node_modules/")
+        base = base[:cut] if cut >= 0 else ""
+
+
+def _lock_edges(packages, path, is_root):
+    """(target path, dev?, optional?) for each installed dependency of `path`."""
+    meta = packages[path]
+    kinds = {}
+    # Later kinds win, so a name listed in two places takes npm's precedence:
+    # optional over prod, prod over peer.
+    peer_meta = meta.get("peerDependenciesMeta", {})
+    for name in meta.get("peerDependencies", {}):
+        kinds[name] = (False, peer_meta.get(name, {}).get("optional", False))
+    for name in meta.get("dependencies", {}):
+        kinds[name] = (False, False)
+    for name in meta.get("optionalDependencies", {}):
+        kinds[name] = (False, True)
+    if is_root:
+        for name in meta.get("devDependencies", {}):
+            kinds.setdefault(name, (True, False))
+    edges = []
+    for name, (dev, optional) in kinds.items():
+        target = resolve_lock_path(packages, path, name)
+        if target is not None:
+            if packages[target].get("link") and "resolved" in packages[target]:
+                target = packages[target]["resolved"]
+            if target in packages:
+                edges.append((target, dev, optional))
+    return edges
+
+
+def _reachable(packages, follow):
+    """Paths reachable from the root along the edges `follow(dev, optional)` admits."""
+    seen, stack = {""}, [""]
+    while stack:
+        path = stack.pop()
+        for target, dev, optional in _lock_edges(packages, path, path == ""):
+            if target not in seen and follow(dev, optional):
+                seen.add(target)
+                stack.append(target)
+    return seen
+
+
+def _set_lock_flag(meta, key, wanted):
+    """Add or drop a boolean flag on a lockfile entry, placing a new one where
+    npm would: in the alphabetical run of keys that follows version, resolved
+    and integrity."""
+    if not wanted:
+        meta.pop(key, None)
+        return
+    if key in meta:
+        return
+    keys = list(meta)
+    start = 0
+    while start < len(keys) and keys[start] in ("name", "version", "resolved", "integrity", "link"):
+        start += 1
+    i = start
+    while i < len(keys) and keys[i] < key and (i == start or keys[i] >= keys[i - 1]):
+        i += 1
+    items = list(meta.items())
+    items.insert(i, (key, True))
+    meta.clear()
+    meta.update(items)
+
+
+def prune_lock(lock):
+    """Drop every package the root no longer reaches and recompute the dev,
+    optional and devOptional flags of the rest, as npm's calc-dep-flags does.
+    Mutates and returns `lock`."""
+    packages = lock["packages"]
+    everything = _reachable(packages, lambda dev, optional: True)
+    for path in [p for p in packages if p not in everything]:
+        del packages[path]
+    not_dev = _reachable(packages, lambda dev, optional: not dev)
+    not_optional = _reachable(packages, lambda dev, optional: not optional)
+    required = _reachable(packages, lambda dev, optional: not dev and not optional)
+    for path, meta in packages.items():
+        if path == "":
+            continue
+        dev = path not in not_dev
+        optional = path not in not_optional
+        _set_lock_flag(meta, "dev", dev)
+        _set_lock_flag(meta, "optional", optional)
+        _set_lock_flag(meta, "devOptional", path not in required and not dev and not optional)
+    return lock
+
+
+def remove_dependency_entry(manifest, name):
+    """Delete `name` from every dependency field of a package.json, or of a
+    lock's root entry, dropping a field it leaves empty the way npm does."""
+    for field in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        if name in manifest.get(field, {}):
+            del manifest[field][name]
+            if not manifest[field]:
+                del manifest[field]
+
+
+def drop_npm_dependency_from_lock(lock, name):
+    """A copy of `lock` without the root's dependency on `name` and without
+    every package only it needed."""
+    lock = copy.deepcopy(lock)
+    remove_dependency_entry(lock["packages"][""], name)
+    return prune_lock(lock)
+
+
+def drop_npm_dependency(name, directory="."):
+    """Remove `name` from package.json and prune package-lock.json to match,
+    so `npm ci` still installs exactly the locked tree, minus that package."""
+    pkg_path = os.path.join(directory, "package.json")
+    lock_path = os.path.join(directory, "package-lock.json")
+    with open(pkg_path, "r", encoding="utf-8") as f:
+        pkg = json.load(f)
+    remove_dependency_entry(pkg, name)
+    with open(pkg_path, "w", encoding="utf-8") as f:
+        f.write(dump_npm_json(pkg))
+    with open(lock_path, "r", encoding="utf-8") as f:
+        lock = json.load(f)
+    with open(lock_path, "w", encoding="utf-8") as f:
+        f.write(dump_npm_json(drop_npm_dependency_from_lock(lock, name)))
+    print(f"  Removed npm dependency: {name}")
+
+
+def handle_analytics():
+    """Remove the consent banner, consent module, analytics loader, proxy and
+    their tests, and the posthog-js dependency, if analytics is not included."""
+    if ANALYTICS == "none":
+        print("Removing analytics files...")
+        # The /legal/analytics page stays and says nothing is tracked; its
+        # PostHog wording, the footer's "Privacy choices" link and the
+        # middleware's /ingest prefix go with the "analytics" markers.
+        remove_file("lib/consent.ts")
+        remove_file("lib/analytics.ts")
+        remove_directory("components/consent")
+        remove_directory("app/ingest")
+        remove_file("tests/compliance/analytics-consent.test.mjs")
+        remove_file("tests/compliance/fake-posthog.mjs")
+        drop_npm_dependency("posthog-js")
+
+
 def handle_magic_link():
     """Remove the email sign-in page and form if magic link is not included."""
     if INCLUDE_MAGIC_LINK == "no":
@@ -277,6 +436,10 @@ def marker_decisions():
         # RESEND_API_KEY serves magic link, the contact form, the
         # subscription acknowledgment email and marketing email.
         "resend": sends_email(),
+        # Consent-gated analytics: the banner, the consent module, the loader
+        # and the first-party proxy ship only with a provider.
+        "analytics": ANALYTICS == "posthog",
+        "no-analytics": ANALYTICS == "none",
         # One provider is answered and only that one's variables ship. The
         # worker's settings.py still reads all four, with defaults, the way
         # lib/plans.ts survives include_stripe=no: it is provider-agnostic code,
@@ -355,6 +518,7 @@ def main():
     handle_marketing_extras()
     handle_magic_link()
     handle_resend()
+    handle_analytics()
     apply_markers()
     make_scripts_executable()
 

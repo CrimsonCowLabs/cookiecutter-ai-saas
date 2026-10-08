@@ -277,6 +277,18 @@ and how to cancel (when Resend is configured), and `/legal/subscriptions`
 explains renewal, cancellation and refunds (California's Automatic Renewal
 Law).
 {%- endif %}
+{%- if cookiecutter.analytics == "posthog" %} PostHog analytics runs only after a visitor
+chooses "Accept" on a consent banner whose "Reject" is just as prominent;
+until then posthog-js is not even loaded. A Global Privacy Control signal
+counts as a refusal, "Privacy choices" in the footer and the controls on
+`/legal/analytics` change or withdraw the choice, and events reach PostHog
+only through the app's own `/ingest` proxy, without the visitor's cookies or
+IP address. Set `POSTHOG_KEY` (and, for an EU project, `POSTHOG_HOST` and
+`POSTHOG_ASSETS_HOST`) to turn it on; `lib/consent.ts` is the one place that
+knows what a visitor agreed to.
+{%- else %} The project has no analytics, and `/legal/analytics` says
+nothing is tracked.
+{%- endif %}
 [docs/compliance.md](docs/compliance.md) covers each risk, what the app
 already does and what is still up to you. It is not legal advice.
 

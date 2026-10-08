@@ -25,6 +25,9 @@ every one before you launch.
 | `accessibility.contactEmail` | Where visitors report an accessibility barrier. |
 | `accessibility.reviewDate` | When you last reviewed the accessibility statement, as `YYYY-MM-DD`. |
 | `consentTextVersion` | The version of the consent text visitors agree to. Changing it invalidates every stored consent, so everyone is asked again; change it whenever you change what you collect. |
+{%- if cookiecutter.analytics == "posthog" %}
+| `analyticsRetention` | How long analytics events are kept, in words ("12 months"), as `/legal/analytics` tells visitors. Set your PostHog project's data retention to match (see [Analytics and consent](#analytics-and-consent)). |
+{%- endif %}
 
 ## The legal pages
 
@@ -51,7 +54,7 @@ scripts/check_compliance.sh
 Name test files to run only those, for example
 `scripts/check_compliance.sh tests/compliance/age-gate.test.mjs`.
 
-It needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3001{% endif %}{% if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}, 3997{% endif %}{% if cookiecutter.include_stripe == "yes" %}, 3998{% endif %} and 3999 free,
+It needs Docker, ports 3000{% if cookiecutter.include_stripe == "yes" %}, 3001{% endif %}{% if cookiecutter.analytics == "posthog" %}, 3996{% endif %}{% if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}, 3997{% endif %}{% if cookiecutter.include_stripe == "yes" %}, 3998{% endif %} and 3999 free,
 and Chrome or Chromium (set `CHROME_PATH` if it is not in a usual place). Run it on a fresh checkout, not your working
 copy: it writes its own `.env.local`, so it refuses to run when one exists,
 and it deletes the compose volumes when it finishes.
@@ -83,6 +86,17 @@ It checks that:
   other message with the footer and both unsubscribe headers (see
   [Marketing email](#marketing-email-can-spam));
 {%- endif %}
+{%- if cookiecutter.analytics == "posthog" %}
+- no analytics request is made, by the browser or by the app's `/ingest`
+  proxy, before the visitor has chosen, after "Reject", when the browser
+  sends a Global Privacy Control signal, or when the only consent on record
+  was given to an older consent text; after "Accept" one is made, through
+  `/ingest` only and without the visitor's cookies or IP address; "Accept"
+  and "Reject" look exactly alike; withdrawing consent on
+  `/legal/analytics` stops it and clears PostHog's cookies and storage; and
+  "Privacy choices" in the footer asks again, against a stand-in PostHog
+  (see [Analytics and consent](#analytics-and-consent));
+{%- endif %}
 - the home page, the sign-in and sign-up pages, the other public pages, the
   blog (when the project has one), every legal page and the dashboard make
   no request to another server;
@@ -93,7 +107,9 @@ It checks that:
   Terms, every legal page, the dashboard and the account settings pass an
   automated WCAG 2.2 AA audit in both the light and the dark theme, open
   with a working "Skip to content" link, and show a clearly visible focus
-  outline on everything the keyboard can reach.
+  outline on everything the keyboard can reach{% if cookiecutter.analytics == "posthog" %}, all with the analytics
+  consent banner showing; and the banner can be answered with Enter or Space
+  alone, and Tab moves on past it{% endif %}.
 
 ## Children's privacy (COPPA)
 
@@ -429,6 +445,206 @@ for (const user of subscribers) {
   email, which this module does not record.
 
 {% endif -%}
+## Analytics and consent
+
+{% if cookiecutter.analytics == "posthog" -%}
+**The law and the risk.** In the EU, the ePrivacy Directive (Article 5(3),
+as each member state has enacted it) and in the UK, PECR (regulation 6)
+allow storing or reading anything on a visitor's device, a cookie or a
+localStorage key alike, only with their prior consent, unless it is
+strictly necessary for a service they asked for. Analytics is not. The
+consent has to meet the GDPR's standard (Articles 4(11) and 7): freely
+given, specific, informed and unambiguous, given before anything is
+stored, as easy to withdraw as to give, and something you can show you
+obtained. Regulators also require refusing to be as easy as accepting:
+France's CNIL fined Google €150 million and Facebook €60 million, in
+decisions announced in January 2022, for cookie banners that took one click
+to accept and several to refuse. GDPR fines reach €20 million or 4% of worldwide annual
+turnover, whichever is higher (Article 83(5)). In California, the CCPA
+requires honouring a Global Privacy Control signal as an opt-out of
+"selling" or "sharing" personal information (Cal. Code Regs. tit. 11,
+§7025), which sending browsing data to an analytics company can amount to;
+the Attorney General's 2022 settlement with Sephora, for $1.2 million, was
+partly for ignoring it. Civil penalties are up to $2,500 per violation, or
+$7,500 if intentional, adjusted for inflation (Civil Code §1798.155 and
+§1798.199.90). Colorado and other states require honouring GPC too. As of
+October 2026.
+
+**What the app does.**
+
+- **One module decides.** `lib/consent.ts` is the only code that reads or
+  writes the consent cookie. Anything that tracks asks it
+  `mayRun("analytics")` (or `useConsent("analytics")` in a component) and
+  does nothing without an explicit, current "yes". The choice is stored in
+  a first-party cookie, `consent`, as JSON with the consent text version:
+  `{"version":"<legal.consentTextVersion>","analytics":"granted"}`. It
+  lasts six months, after which the visitor is asked again.
+- **The banner.** Until the visitor chooses, every page shows a banner at
+  the top (`components/consent/consent-banner.tsx`) with "Accept" and
+  "Reject" buttons that look exactly alike and a link to
+  `/legal/analytics`. It is not a dialog: it sits in the page's normal
+  flow, covers nothing, and the site works fully without an answer (no
+  answer means no analytics). It is reached by Tab in order, answered with
+  Enter or Space, and Tab moves on past it.
+- **Nothing before consent.** PostHog's library (`posthog-js`) is a
+  separate chunk that `lib/analytics.ts` loads with a dynamic `import()`
+  only after "Accept". Before that, the page has none of PostHog's code
+  and stores nothing.
+- **A first-party proxy.** posthog-js sends everything to `/ingest` on the
+  app's own domain. `app/ingest/[...path]/route.ts` forwards it to
+  `POSTHOG_HOST` (and `/ingest/static/*` to `POSTHOG_ASSETS_HOST`), passing
+  on only the content type, encoding and user agent: never the visitor's
+  cookies, and none of the headers that carry their IP address
+  (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`, ...). PostHog sees your
+  server's address instead. `$ip` is also on posthog-js's property
+  denylist. So the visitor's browser never contacts PostHog, and the
+  no-off-origin rule (see [Fonts and third-party
+  requests](#fonts-and-third-party-requests)) still holds with analytics
+  on.
+- **Page views only.** It records page views (including Next.js's
+  client-side navigations) and page leaves. Autocapture, session
+  recording, heatmaps, dead clicks, web vitals, exception capture,
+  surveys, feature flags and web experiments are all off, and posthog-js
+  may not load any further script. Events are sent as they happen, not
+  queued, and every event asks `lib/consent.ts` again on its way out.
+  Users are not identified, so events are not linked to accounts.
+- **GPC is a refusal.** A browser that sends a Global Privacy Control
+  signal (`navigator.globalPrivacyControl`) is treated as having chosen
+  "Reject", whatever the cookie says: no banner, nothing loaded.
+- **Withdrawing is as easy as giving.** "Privacy choices" in the footer
+  shows the banner again, and `/legal/analytics` has "Turn analytics on"
+  and "Turn analytics off" buttons. Turning it off opts posthog-js out,
+  stops it storing anything, and deletes every PostHog cookie and
+  localStorage and sessionStorage key (`ph_...`, `__ph_...`) at once.
+- **Asking again.** A cookie written against a different
+  `legal.consentTextVersion` counts as no choice, so changing it puts the
+  banner in front of everyone again.
+- **The key is read at request time.** `POSTHOG_KEY` is read on the server
+  as each page is rendered, not built into the client bundle, so one Docker
+  image runs with or without analytics. Unset, there is no banner, no
+  "Privacy choices" link and nothing loads. The cost: every page is
+  rendered on request rather than prerendered at build time.
+- **The notice.** `/legal/analytics` says what is collected, that PostHog
+  processes it for you, for how long (`legal.analyticsRetention`), how GPC
+  is treated and how to change your mind. The Privacy Policy links to it.
+- The compliance check runs the app against a stand-in PostHog
+  (`tests/compliance/fake-posthog.mjs`, through `POSTHOG_HOST` and
+  `POSTHOG_ASSETS_HOST`) and proves every point above in a real browser,
+  watching both the browser's requests and what reaches the stand-in.
+
+**Configuring it.**
+
+1. Create a PostHog project, in the US or the EU cloud. Choose the EU one
+   if most of your visitors are in the EU.
+2. Copy the project API key (it starts `phc_`) from the project's settings
+   into `POSTHOG_KEY`: in `.env.local` for development, and as
+   `vault_posthog_key` in `ansible/vault.yml` for production. It is not a
+   secret, since every visitor who accepts receives it.
+3. For an EU project, set `POSTHOG_HOST=https://eu.i.posthog.com` and
+   `POSTHOG_ASSETS_HOST=https://eu-assets.i.posthog.com` (`posthog_host`
+   and `posthog_assets_host` in `ansible/group_vars/all.yml`, which
+   `env-production.j2` reads). The defaults are the US cloud's.
+4. In the PostHog project's settings, turn on "Discard client IP data",
+   and set the data retention to what `legal.analyticsRetention` in
+   `config.ts` says.
+5. Accept PostHog's data processing agreement (DPA), so it processes the
+   data as your processor.
+6. Set `legal.consentTextVersion` and `legal.analyticsRetention`, deploy,
+   and check the banner, `/legal/analytics` and an event arriving in
+   PostHog.
+
+**Changing what you collect.** Whenever you change what is measured, who
+receives it or how long it is kept, update `/legal/analytics` (and the
+Privacy Policy if it is affected) and change `legal.consentTextVersion`,
+for example from `"2026-10"` to `"2026-11"`. Everyone who accepted the old
+text is asked again; nothing runs for them until they answer. Don't change
+the version for a typo fix: that asks everyone again for nothing.
+
+**Tracking an event.** Page views are automatic. For anything else, call
+`trackEvent` from `lib/analytics.ts` in client code; it does nothing unless
+the visitor accepted and PostHog is running, so call it freely:
+
+```ts
+import { trackEvent } from "@/lib/analytics";
+
+trackEvent("report exported", { format: "pdf" });
+```
+
+Never put personal data (names, email addresses, free text a user typed)
+in an event's properties.
+
+### Adding another purpose
+
+Anything new that tracks visitors, stores something on their device that
+isn't strictly necessary, or loads another company's code (a chat widget,
+an embedded video, ads, another analytics tool) needs its own consent.
+
+1. Add the purpose to `Purpose` in `lib/consent.ts`, for example
+   `"analytics" | "support-chat"`. Nothing else in that file changes: the
+   cookie keeps one answer per purpose.
+2. Ask for it: add its own question, with its own equally prominent
+   "Accept" and "Reject", to the banner, and its own controls next to
+   `AnalyticsChoices` on its `/legal` page. Don't bundle it with
+   analytics; consent has to be specific.
+3. Gate the code on it: load it only after `mayRun("support-chat")` (or
+   `useConsent("support-chat")`) is true, with a dynamic `import()` or by
+   rendering the component only then, and stop it and clear what it stored
+   when the answer turns to "denied".
+4. Route it through your own domain where you can, as `/ingest` does, so
+   the browser never contacts the other company.
+5. Describe it on a `/legal` page, change `legal.consentTextVersion`, and
+   add a test to `tests/compliance/` that proves nothing is sent before
+   consent or after "Reject".
+
+**What you still have to do.**
+
+- Do steps 4 and 5 of [Configuring it](#analytics-and-consent): discard IP
+  data, set the retention, and accept PostHog's DPA. EU data sent to the US
+  cloud also needs a transfer mechanism (PostHog relies on the EU-US Data
+  Privacy Framework and standard contractual clauses); the EU cloud avoids
+  the question.
+- Keep `/legal/analytics` true. If you turn on autocapture, session
+  recording, surveys or feature flags, call `posthog.identify` to link
+  events to accounts, or send personal data in events, say so there and
+  change `legal.consentTextVersion`. Session recording in particular needs
+  its own consent and masking of everything a visitor types.
+- Keep every tracker behind `lib/consent.ts`. A script pasted into a
+  layout, a PostHog snippet copied from its docs, or a second analytics
+  tool would run before consent; the third-party request check catches
+  some, not all, of these.
+- Be able to show consent. The cookie is the record on the visitor's side;
+  the app keeps no server-side log of who consented. If you need one (a
+  regulator can ask you to demonstrate consent), log the choice and its
+  consent text version, without anything that identifies the visitor
+  beyond what you already hold.
+- Don't make the site depend on an answer: no "accept to continue" walls,
+  and no features that only work after "Accept" unless they truly need
+  analytics.
+{%- else -%}
+**The law and the risk.** In the EU and the UK, storing or reading
+anything on a visitor's device that isn't strictly necessary, such as an
+analytics cookie, needs their prior consent (the ePrivacy Directive,
+Article 5(3), and PECR), given to the GDPR's standard and as easy to refuse
+as to accept. In California, a Global Privacy Control signal from the
+browser has to be honoured as an opt-out. As of October 2026.
+
+**What the app does.** This project was generated without analytics
+(`analytics=none`). Nothing is tracked: there is no analytics library, no
+consent banner and no session recording, and `/legal/analytics` tells
+visitors so.
+
+**What you still have to do.**
+
+- To add analytics, regenerate the project with `analytics=posthog` and
+  carry your changes across, or copy what it adds: `lib/consent.ts`,
+  `lib/analytics.ts`, `components/consent/`, the `/ingest` proxy and its
+  tests. It ships PostHog behind a consent banner, a first-party proxy,
+  GPC handling and withdrawal, with compliance tests for each.
+- If you add any other tracker yourself, ask for consent before it runs,
+  make refusing as easy as accepting, treat GPC as a refusal, and update
+  `/legal/analytics`.
+{%- endif %}
+
 ## Fonts and third-party requests
 
 **The law and the risk.** Under the EU's GDPR, an IP address is personal
@@ -460,7 +676,9 @@ turnover, whichever is higher (GDPR Article 83(5)). As of October 2026.
   never with a `<link>` to Google Fonts or an `@import` from a font CDN.
 - Self-host any other library, stylesheet or image rather than linking a CDN.
 - Load anything that has to come from another server (analytics, chat
-  widgets, embedded videos, maps) only after the visitor consents to it.
+  widgets, embedded videos, maps) only after the visitor consents to it{% if cookiecutter.analytics == "posthog" %}:
+  ask `lib/consent.ts` first, as `lib/analytics.ts` does (see
+  [Adding another purpose](#adding-another-purpose)){% endif %}.
 - When you add a public page, add it to the list in
   `tests/compliance/third-party-requests.test.mjs` so it is checked too.
 - Run `scripts/check_compliance.sh` after changing a layout, a page's
@@ -624,6 +842,12 @@ for services. As of October 2026.
   project has them), the Privacy Policy and Terms, every page under `/legal`,
   the dashboard and the account settings, in the light and the dark theme
   and the one chosen at generation time, and allows no violations.
+{%- if cookiecutter.analytics == "posthog" %}
+- The analytics consent banner sits in the page's normal flow, just after
+  the skip link, so it never covers anything and needs no answer before the
+  page can be used. The check answers it with the keyboard alone and fails
+  if Tab cannot move on past it.
+{%- endif %}
 - Every page starts with a "Skip to content" link (`components/ui/skip-link.tsx`)
   that jumps past the navigation to the page's `<Main>`. The check presses
   Tab on each listed page and fails if the first stop is not that link, if

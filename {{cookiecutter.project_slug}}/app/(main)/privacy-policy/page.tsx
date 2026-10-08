@@ -67,6 +67,29 @@ export default function PrivacyPolicyPage() {
               for which is which.
             </p>
             {/* cc:end resend */}
+            {/* cc:begin analytics */}
+            <p>
+              If you agree to it, we measure which pages are used with
+              PostHog, which processes the measurements for us. Nothing is
+              measured until you choose &ldquo;Accept&rdquo;, a Global Privacy
+              Control signal from your browser counts as a refusal, and you
+              can withdraw at any time. See{" "}
+              <Link href="/legal/analytics" className="link link-primary">
+                Analytics &amp; recording
+              </Link>{" "}
+              for what is collected and for how long.
+            </p>
+            {/* cc:end analytics */}
+            {/* cc:begin no-analytics */}
+            <p>
+              We use no analytics and no session recording: nothing is tracked
+              about which pages you visit. See{" "}
+              <Link href="/legal/analytics" className="link link-primary">
+                Analytics &amp; recording
+              </Link>
+              .
+            </p>
+            {/* cc:end no-analytics */}
           </section>
 
           <section className="space-y-3">

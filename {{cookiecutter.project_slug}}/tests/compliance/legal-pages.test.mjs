@@ -110,6 +110,25 @@ test("the children's privacy notice gives the configured minimum age and a way f
   assert.match(policy.html, new RegExp(`at least (<!-- -->)?${minimumAge}\\b`), "the Privacy Policy should state the minimum age too");
 });
 
+test("the analytics page is linked from the hub and the Privacy Policy, and says what is tracked", async () => {
+  const { status, html } = await get("/legal/analytics");
+  assert.equal(status, 200, `/legal/analytics should load unauthenticated, got ${status}`);
+  assert.ok(links((await get("/legal")).html).includes("/legal/analytics"), "/legal should link to it");
+  // cc:begin analytics
+  assert.match(html, /PostHog/, "it should name who receives the measurements");
+  assert.match(html, /What is collected/, "it should say what is collected");
+  assert.match(html, /How long it is kept/, "it should say how long it is kept");
+  assert.match(html, /Global Privacy Control/, "it should say a GPC signal counts as a refusal");
+  assert.ok(html.includes('id="analytics-choices"'), "it should have the controls to change or withdraw consent");
+  // cc:end analytics
+  // cc:begin no-analytics
+  assert.match(html, /nothing is tracked/i, "it should say nothing is tracked");
+  // cc:end no-analytics
+
+  const policy = await get("/privacy-policy");
+  assert.ok(links(policy.html).includes("/legal/analytics"), "the Privacy Policy should link to it");
+});
+
 // cc:begin resend
 test("the email preferences page is linked from the hub and the Privacy Policy", async () => {
   const { status, html } = await get("/legal/email-preferences");

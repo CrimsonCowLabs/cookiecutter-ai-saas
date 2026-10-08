@@ -75,6 +75,14 @@ vault_stripe_webhook_secret: ""
 vault_resend_api_key: ""
 # cc:end resend
 
+# cc:begin analytics
+# ─── Analytics ─────────────────────────────────────────────────────────────
+# The PostHog project API key (phc_...). It is not secret, since every
+# visitor who accepts analytics receives it, but it lives here with the other
+# service keys. Empty means no consent banner and no analytics.
+vault_posthog_key: ""
+# cc:end analytics
+
 # ─── Model provider ────────────────────────────────────────────────────────
 # The provider answered at generation time, and only that one. Ollama needs no
 # key unless something in front of it asks for one, so its entry can stay empty.

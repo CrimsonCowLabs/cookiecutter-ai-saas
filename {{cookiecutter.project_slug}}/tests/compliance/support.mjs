@@ -120,6 +120,26 @@ export function unsubscribeToken(email) {
 }
 // cc:end resend
 
+// cc:begin analytics
+/** legal.consentTextVersion, read out of config.ts (the project root is the cwd). */
+export function consentTextVersion() {
+  const value = fs.readFileSync("config.ts", "utf8").match(/consentTextVersion:\s*"([^"]*)"/)?.[1];
+  if (!value) throw new Error("config.ts should set legal.consentTextVersion to a string");
+  return value;
+}
+
+/**
+ * A `name=value` consent cookie for a visitor who has already answered the
+ * analytics question with `decision` ("granted" or "denied"), against consent
+ * text `version` (the configured one unless given). This is the format
+ * lib/consent.ts writes; the tests write it themselves to start from a
+ * visitor who chose on an earlier visit.
+ */
+export function consentCookie(decision, version = consentTextVersion()) {
+  return `consent=${encodeURIComponent(JSON.stringify({ version, analytics: decision }))}`;
+}
+// cc:end analytics
+
 /** Every same-site `href` in `html`, without its query or fragment. */
 export function links(html) {
   return [...html.matchAll(/href="(\/[^"#?]*)/g)].map((m) => m[1]);
@@ -197,14 +217,16 @@ export async function launchBrowser() {
 /**
  * Load `path` in a fresh page with no consent given, hand the loaded page to
  * `fn`, and close it again once `fn` is done. `cookie` is one `name=value`
- * or a list of them. Every request the page tries to
+ * or a list of them. `prepare(page)`, if given, runs before the page loads
+ * (to listen to its requests, say, or change what the browser reports about
+ * itself). Every request the page tries to
  * make to another origin is aborted before it is sent, so nothing a test
  * does here ever leaks anything, and is recorded in the `offOrigin` list
  * passed to `fn` (see visit() below for its shape).
  *
  * Returns whatever `fn` returns.
  */
-export async function withPage(browser, path, { cookie } = {}, fn) {
+export async function withPage(browser, path, { cookie, prepare } = {}, fn) {
   const base = new URL(config.baseUrl);
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
@@ -226,6 +248,7 @@ export async function withPage(browser, path, { cookie } = {}, fn) {
       }
       req.continue();
     });
+    await prepare?.(page);
 
     const res = await page.goto(new URL(path, base).href, { waitUntil: "networkidle0" });
     return await fn({ page, res, offOrigin });

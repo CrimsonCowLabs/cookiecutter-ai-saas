@@ -21,6 +21,19 @@ jobs:
       - run: python -m pip install pyyaml
       - run: python scripts/check_ci_matrix.py
 
+  # The hook's own logic that needs no generation, chiefly pruning
+  # package-lock.json when analytics=none drops posthog-js.
+  hook-tests:
+    name: Post-generation hook unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m unittest discover -s hooks/tests -v
+
   # Roughly pairwise selection: every value of every choice appears in at least
   # one combination (enforced by matrix-coverage). Each entry is named so a
   # failing check identifies the combination. Keep keys equal to cookiecutter.json.
@@ -32,62 +45,70 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: "default: none / stripe / extras / google+microsoft / link / ollama"
+          - name: "default: none / stripe / extras / google+microsoft / link / ollama / no-analytics"
             database_extensions: none
             include_stripe: "yes"
             include_marketing_extras: "yes"
             auth_providers: google_microsoft
             include_magic_link: "yes"
             llm_provider: ollama
-          - name: "pgvector / no-stripe / no-extras / google-only / no-link / openai"
+            analytics: none
+          - name: "pgvector / no-stripe / no-extras / google-only / no-link / openai / no-analytics"
             database_extensions: pgvector
             include_stripe: "no"
             include_marketing_extras: "no"
             auth_providers: google_only
             include_magic_link: "no"
             llm_provider: openai
-          - name: "none / no-stripe / extras / microsoft-only / link / anthropic"
+            analytics: none
+          - name: "none / no-stripe / extras / microsoft-only / link / anthropic / posthog"
             database_extensions: none
             include_stripe: "no"
             include_marketing_extras: "yes"
             auth_providers: microsoft_only
             include_magic_link: "yes"
             llm_provider: anthropic
-          - name: "pgvector / stripe / no-extras / microsoft-only / no-link / openrouter"
+            analytics: posthog
+          - name: "pgvector / stripe / no-extras / microsoft-only / no-link / openrouter / no-analytics"
             database_extensions: pgvector
             include_stripe: "yes"
             include_marketing_extras: "no"
             auth_providers: microsoft_only
             include_magic_link: "no"
             llm_provider: openrouter
-          - name: "none / stripe / no-extras / google+microsoft / no-link / anthropic"
+            analytics: none
+          - name: "none / stripe / no-extras / google+microsoft / no-link / anthropic / no-analytics"
             database_extensions: none
             include_stripe: "yes"
             include_marketing_extras: "no"
             auth_providers: google_microsoft
             include_magic_link: "no"
             llm_provider: anthropic
-          - name: "pgvector / no-stripe / extras / google+microsoft / link / openai"
+            analytics: none
+          - name: "pgvector / no-stripe / extras / google+microsoft / link / openai / posthog"
             database_extensions: pgvector
             include_stripe: "no"
             include_marketing_extras: "yes"
             auth_providers: google_microsoft
             include_magic_link: "yes"
             llm_provider: openai
-          - name: "none / no-stripe / no-extras / google-only / link / openrouter"
+            analytics: posthog
+          - name: "none / no-stripe / no-extras / google-only / link / openrouter / posthog"
             database_extensions: none
             include_stripe: "no"
             include_marketing_extras: "no"
             auth_providers: google_only
             include_magic_link: "yes"
             llm_provider: openrouter
-          - name: "pgvector / stripe / extras / microsoft-only / no-link / ollama"
+            analytics: posthog
+          - name: "pgvector / stripe / extras / microsoft-only / no-link / ollama / posthog"
             database_extensions: pgvector
             include_stripe: "yes"
             include_marketing_extras: "yes"
             auth_providers: microsoft_only
             include_magic_link: "no"
             llm_provider: ollama
+            analytics: posthog
     env:
       G: .generated/matrix-app
     steps:
@@ -114,16 +135,32 @@ jobs:
             include_marketing_extras=${{ matrix.include_marketing_extras }} \
             auth_providers=${{ matrix.auth_providers }} \
             include_magic_link=${{ matrix.include_magic_link }} \
-            llm_provider=${{ matrix.llm_provider }}
+            llm_provider=${{ matrix.llm_provider }} \
+            analytics=${{ matrix.analytics }}
 
       # Lockfiles ship with the template and are copied verbatim, so every generation
       # gets the same dependency tree. Only the project name inside the npm locks is
       # substituted; poetry.lock is untouched.
+      #
+      # The one exception is analytics=none: the template's lock includes
+      # posthog-js, and the hook prunes it and everything only it needed. That
+      # pruned lock is held to what npm itself writes for the same removal —
+      # `npm uninstall --package-lock-only` on a copy of the template, which
+      # reads only the lockfile (offline, no scripts) — so the hook cannot
+      # drift from npm's own idea of the tree. `npm ci` below then refuses any
+      # package.json/lock disagreement.
       - name: Verify lockfiles match the template
         run: |
           T='{{cookiecutter.project_slug}}'
           cmp "$T/workers/app/poetry.lock" "$G/workers/app/poetry.lock"
-          sed 's/__PROJECT_SLUG__/matrix-app/g' "$T/package-lock.json" | cmp - "$G/package-lock.json"
+          if [ "${{ matrix.analytics }}" = none ]; then
+            E="$RUNNER_TEMP/expected-lock"
+            mkdir -p "$E" && cp "$T/package.json" "$T/package-lock.json" "$E/"
+            (cd "$E" && npm uninstall posthog-js --package-lock-only --offline --ignore-scripts --no-audit --no-fund)
+            sed 's/__PROJECT_SLUG__/matrix-app/g' "$E/package-lock.json" | cmp - "$G/package-lock.json"
+          else
+            sed 's/__PROJECT_SLUG__/matrix-app/g' "$T/package-lock.json" | cmp - "$G/package-lock.json"
+          fi
           sed 's/__PROJECT_SLUG__/matrix-app/g' "$T/workers/db-writer/package-lock.json" | cmp - "$G/workers/db-writer/package-lock.json"
 
       # Each flag value must leave (or remove) exactly what it promises.
@@ -206,8 +243,42 @@ jobs:
               fi
             done
           done
-          # No marker comment survives into a generated project.
-          ! grep -rq 'cc:begin\|cc:end' "$G/.env.example" "$G/ansible"
+          # No marker comment survives into a generated project, anywhere in
+          # it. A marker is a comment (//, #, /* or {/*) opening on cc:begin or
+          # cc:end and a name, so prose that mentions the markers, as setup.sh
+          # does, is not a match.
+          if grep -rnE --exclude-dir=node_modules '(//|#|/\*) *cc:(begin|end) [A-Za-z0-9_-]+' "$G"; then
+            echo "cc: markers survived generation" >&2
+            exit 1
+          fi
+          # Consent-gated analytics (issue #85). With none there is no
+          # dependency, banner, consent module, loader or proxy, and the
+          # /legal/analytics page says nothing is tracked. With PostHog all of
+          # it ships, configured at runtime by POSTHOG_KEY.
+          if [ "${{ matrix.analytics }}" = none ]; then
+            test ! -e "$G/lib/consent.ts" && test ! -e "$G/lib/analytics.ts"
+            test ! -e "$G/components/consent" && test ! -e "$G/app/ingest"
+            test ! -e "$G/tests/compliance/analytics-consent.test.mjs" && test ! -e "$G/tests/compliance/fake-posthog.mjs"
+            if grep -rniE 'posthog' "$G/package.json" "$G/package-lock.json" "$G/app" "$G/components" "$G/lib" "$G/middleware.ts" "$G/.env.example" "$G/next.config.ts"; then
+              echo "PostHog survived analytics=none" >&2
+              exit 1
+            fi
+            # `if grep` rather than `! grep`: bash -e does not stop on a
+            # negated command, so `! grep` alone would never fail the step.
+            if grep -rniE 'ConsentBanner|consent-banner|Privacy choices|globalPrivacyControl|/ingest' "$G/app" "$G/components" "$G/lib" "$G/middleware.ts"; then
+              echo "Consent banner or analytics proxy survived analytics=none" >&2
+              exit 1
+            fi
+            test -e "$G/app/(main)/legal/analytics/page.tsx"
+            grep -qiE 'nothing is tracked|not tracked|does not track' "$G/app/(main)/legal/analytics/page.tsx"
+          else
+            test -e "$G/lib/consent.ts" && test -e "$G/lib/analytics.ts"
+            test -d "$G/components/consent" && test -e "$G/app/ingest/[...path]/route.ts"
+            test -e "$G/tests/compliance/analytics-consent.test.mjs" && test -e "$G/tests/compliance/fake-posthog.mjs"
+            test -e "$G/app/(main)/legal/analytics/page.tsx"
+            grep -q '"posthog-js":' "$G/package.json" && grep -q '"node_modules/posthog-js":' "$G/package-lock.json"
+            grep -q '^POSTHOG_KEY=' "$G/.env.example"
+          fi
           # Magic link is independent of the OAuth choice: off drops its files, provider and UI.
           # RESEND_API_KEY stays when the contact form or Stripe still sends email.
           if [ "${{ matrix.include_magic_link }}" = no ]; then
@@ -436,16 +507,30 @@ jobs:
   # Issue #84 (copyright/DMCA) adds to legal-pages.test.mjs: /legal/copyright
   # shows the configured legal.dmcaAgent and the Terms of Service link to it;
   # the axe audit picks it up with the other /legal pages.
+  # Issue #85 (consent-gated analytics) adds
+  # tests/compliance/analytics-consent.test.mjs, run against a stand-in
+  # PostHog (fake-posthog.mjs) behind the app's first-party /ingest proxy: no
+  # analytics request is made before consent or after "Reject", one is made
+  # after "Accept", a Global Privacy Control signal suppresses tracking, and
+  # withdrawing consent stops it. The consent banner and /legal/analytics
+  # join the axe audit, keyboard checks included. Hence the matrix: the
+  # default answers (analytics=none, where /legal/analytics says nothing is
+  # tracked and no banner exists) and analytics=posthog.
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an
   # operator can rerun it after changing their app; this job just runs it
-  # against a freshly generated one, with the default answers. It drives the
-  # runner's preinstalled Google Chrome through puppeteer-core.
+  # against a freshly generated one, with the default answers apart from
+  # analytics. It drives the runner's preinstalled Google Chrome through
+  # puppeteer-core.
   compliance:
-    name: The legal pages, age gate, renewal terms and acknowledgment, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app
+    name: "The legal pages, age gate, renewal terms and acknowledgment, analytics consent, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app (analytics=${{ matrix.analytics }})"
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        analytics: [none, posthog]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -459,14 +544,18 @@ jobs:
           node-version: "20"
 
       - name: Generate project
-        run: cookiecutter . --no-input -o .generated-compliance project_name="Compliance App"
+        run: |
+          cookiecutter . --no-input -o .generated-compliance project_name="Compliance App" \
+            analytics=${{ matrix.analytics }}
 
       - name: The compliance suite passes against a running app
         env:
           CHROME_PATH: /usr/bin/google-chrome
         run: .generated-compliance/compliance-app/scripts/check_compliance.sh
 
+      # The age gate does not depend on analytics, so once is enough.
       - name: Raising the minimum age moves the age screen's line
+        if: matrix.analytics == 'none'
         env:
           CHROME_PATH: /usr/bin/google-chrome
         working-directory: .generated-compliance/compliance-app

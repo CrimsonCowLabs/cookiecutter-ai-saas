@@ -3,6 +3,9 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import { getSEOTags, renderSchemaTags } from "@/lib/seo";
 import ClientLayout from "@/components/LayoutClient";
 import { SkipLink } from "@/components/ui/skip-link";
+// cc:begin analytics
+import { AnalyticsConsent } from "@/components/consent/analytics-consent";
+// cc:end analytics
 import config from "@/config";
 import "../globals.css";
 
@@ -23,6 +26,9 @@ export default function MainLayout({ children }: { children: ReactNode }) {
       </head>
       <body>
         <SkipLink />
+        {/* cc:begin analytics */}
+        <AnalyticsConsent />
+        {/* cc:end analytics */}
         <ClientLayout>{children}</ClientLayout>
       </body>
     </html>

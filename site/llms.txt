@@ -20,6 +20,7 @@ Choices made once, at generation time:
 - Magic-link sign-in via Resend: on or off.
 - pgvector: on or off.
 - Marketing extras (a JSON-backed blog and a contact form): on or off.
+- Analytics: none, or PostHog behind a consent banner (nothing loads until the visitor accepts; a Global Privacy Control signal counts as a refusal).
 - Naming and defaults: project name, slug and description, author, domain, brand colour and theme, Python and Node.js versions, local Postgres and Redis ports.
 
 ## How to install

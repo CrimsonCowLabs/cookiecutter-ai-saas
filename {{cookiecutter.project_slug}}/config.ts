@@ -110,6 +110,9 @@ const config = {
       reviewDate: "REPLACE_WITH_ACCESSIBILITY_REVIEW_DATE",
     },
     consentTextVersion: "REPLACE_WITH_CONSENT_TEXT_VERSION",
+    // cc:begin analytics
+    analyticsRetention: "REPLACE_WITH_ANALYTICS_RETENTION",
+    // cc:end analytics
   },
 } satisfies ConfigProps;
 
