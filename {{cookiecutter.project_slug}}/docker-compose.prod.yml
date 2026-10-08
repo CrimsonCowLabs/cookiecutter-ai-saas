@@ -21,6 +21,12 @@ services:
       # re-issuing on the next boot, and Let's Encrypt rate-limits that.
       - caddydata:/data
       - caddyconfig:/config
+      # The JSON access log (see the Caddyfile's `log` block), on the host at
+      # logs/caddy/access.log beside this file, where a ban jail can read it.
+      # A bind mount rather than a volume so that the path is a plain file the
+      # host's own tools see. Caddy rotates and bounds it itself; it is not
+      # shipped to `docker compose logs`.
+      - ./logs/caddy:/var/log/caddy
     depends_on:
       - app
     networks:

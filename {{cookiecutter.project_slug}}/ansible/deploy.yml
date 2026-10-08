@@ -488,6 +488,18 @@
         - Caddyfile
       register: shipped_config
 
+    - name: Make the directory Caddy's access log is bind-mounted from
+      # docker-compose.prod.yml mounts logs/caddy into the proxy. Docker would
+      # create a missing source itself, but as root and only when the
+      # container starts; made here it exists, at a known path and owner,
+      # before anything — a ban jail included — goes looking for it. Caddy
+      # (root in its container) writes the files in it, 0640.
+      ansible.builtin.file:
+        path: "{{ app_dir }}/logs/caddy"
+        state: directory
+        owner: "{{ deploy_user }}"
+        mode: "0755"
+
     - name: Render .env-production on the host
       # The secrets are decrypted on the control machine and written straight
       # to their destination: 0600, owned by the account compose runs as. This
