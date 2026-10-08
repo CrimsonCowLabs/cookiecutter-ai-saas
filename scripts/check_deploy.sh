@@ -371,12 +371,15 @@ pass "Caddy's access log records the client's own address ($CLIENT_IP), not a ga
 # And X-Forwarded-For as it reached the app, read back from the one place the
 # app acts on it: the contact form's rate-limit key in Redis. The request need
 # not be a valid submission — the limit is counted before anything else.
+# The client also sends an X-Forwarded-For of its own: Caddy trusts no proxy in
+# front of it, so it must replace that header rather than append to it, or any
+# client could pick the bucket it is counted in.
 if [[ -f app/api/contact/route.ts ]]; then
-  client_curl -o /dev/null -X POST -H 'content-type: application/json' -d '{}' \
-    https://localhost/api/contact
+  client_curl -o /dev/null -X POST -H 'content-type: application/json' \
+    -H 'X-Forwarded-For: 203.0.113.7' -d '{}' https://localhost/api/contact
   keys="$(th_exec "docker exec ${SLUG}-redis-1 redis-cli --scan --pattern 'rl:contact:*'" | tr -d '\r')"
   grep -qxF "rl:contact:$CLIENT_IP" <<<"$keys" \
-    || fail "the contact form rate-limited by '${keys:-nothing}', not by the client's address $CLIENT_IP"
+    || fail "the contact form rate-limited by '${keys:-nothing}', not by the client's address $CLIENT_IP (a forged X-Forwarded-For must not survive)"
   pass "X-Forwarded-For reaches the app carrying the client's address, so the contact form limits per client"
 fi
 

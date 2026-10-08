@@ -194,7 +194,7 @@ Two things this does not claim. The switch is `docker compose up -d`, which
 stops a container before starting its replacement, so a release that cannot
 start costs the seconds between the recreate and the rollback — the guarantee
 is the end state, not zero downtime. And the health gate proves the app boots
-and answers on the stack's own network, not that TLS works: a certificate
+and answers on the host's loopback, not that TLS works: a certificate
 arrives from an asynchronous ACME exchange that has not necessarily finished on
 a first deploy, which is what the DNS pre-flight protects instead.
 
@@ -275,6 +275,13 @@ has the host's routes, which reach every container's address. A compromised
 Caddy could connect to Postgres (which still wants its password) and Redis
 (which has none). Host networking is the price of Caddy seeing clients' real
 addresses — see [The firewall and Docker](#the-firewall-and-docker).
+
+The same goes for other compose projects on the same host. Docker used to keep
+its networks apart with isolation chains of its own; with its iptables
+management off, `ufw route allow in on br-+` forwards from any container network
+to any destination, the other networks' containers included. On a host that runs
+only this stack that changes nothing. If you add unrelated stacks, give Redis a
+password, or keep them on another host.
 
 Responses are not compressed at the proxy. Next.js already compresses its own
 output, and compressing a stream is how the SSE job-progress endpoint stops

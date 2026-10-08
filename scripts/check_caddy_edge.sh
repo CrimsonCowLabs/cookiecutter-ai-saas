@@ -8,11 +8,10 @@
 # :8080, so no certificate is involved. The upstream is a small Python server
 # that records every request it is handed and reads every body to the end.
 #
-# The two share one network namespace, and the stub also answers to the name
-# `app` on a private network. So the proxy hop works whichever way the
-# Caddyfile names the app — `app:3000` (compose service name) or
-# `127.0.0.1:3000` (Caddy on host networking) — and this check does not need
-# to know which.
+# The two share one network namespace, so the stub listening on port 3000 is
+# exactly where the Caddyfile's `reverse_proxy 127.0.0.1:3000` points — the
+# same hop as in production, where Caddy is on the host's network and the app
+# is published on its loopback.
 #
 # Asserted:
 #   - each scanner path gets Caddy's 404 and never reaches the upstream;
@@ -108,7 +107,7 @@ PY
 docker network create "$NET" >/dev/null
 # The stub owns the network namespace, so it is the container that publishes
 # Caddy's port to the host.
-docker run -d --name "$STUB" --network "$NET" --network-alias app \
+docker run -d --name "$STUB" --network "$NET" \
   -p 127.0.0.1::8080 -v "$WORK/stub.py:/stub.py:ro" \
   python:3-alpine python -u /stub.py >/dev/null
 docker run -d --name "$CADDY" --network "container:$STUB" \
