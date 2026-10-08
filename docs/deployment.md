@@ -32,11 +32,11 @@ it.
 |---------|--------------------------|
 | Deploy account | A user named from `author_name`, key-only, passwordless sudo, in the `docker` group — the account `ansible/deploy.yml` logs in as |
 | SSH | Key-only, no root login, no passwords, in `/etc/ssh/sshd_config.d/00-hardening.conf` |
-| Firewall | `ufw`: inbound denied by default; SSH, `80/tcp`, `443/tcp` and `443/udp` (HTTP/3) open |
+| Firewall | `ufw`, governing every inbound port — containers' included: inbound denied by default; SSH, `80/tcp`, `443/tcp` and `443/udp` (HTTP/3) open; forwarding and NAT for container networks (see [The firewall and Docker](#the-firewall-and-docker)) |
 | Intrusion banning | `fail2ban`'s sshd jail, reading the journal |
 | Security updates | `unattended-upgrades`, restricted to security origins, no automatic reboot |
 | Log rotation | `logrotate.timer`, the journal capped at 500M, Docker's json-file logs capped |
-| Container runtime | Docker Engine and the compose plugin, from Docker's apt repository |
+| Container runtime | Docker Engine and the compose plugin, from Docker's apt repository, with its iptables management off |
 | Where deploys land | `/app/<project_slug>`, owned by the deploy account |
 
 Everything adjustable is in `ansible/group_vars/all.yml` — the account name, the
@@ -61,12 +61,50 @@ lockout hard.
   [HTTPS and TLS](#https-and-tls)), so provisioning's part is to leave 80 and
   443 open and unoccupied. The playbook fails if a host nginx or Apache is
   running on them, rather than letting Caddy fail to bind on the first deploy.
-- **ufw does not see Docker's published ports.** Docker writes its own iptables
-  chain. That is survivable here only because the production stack publishes 80
-  and 443 and nothing else — add a published port to that stack and it is
-  exposed whatever ufw says.
 - **No application.** Provisioning ends at a ready host; `ansible/deploy.yml`
   takes it from there.
+
+### The firewall and Docker
+
+ufw is the only thing deciding what the outside world can reach. That is not
+Docker's default: left alone, Docker publishes a container's port by writing
+its own iptables rules ahead of ufw's, so a published port is open to the
+internet whatever ufw says. The playbook turns that off — `"iptables": false`
+and `"ip6tables": false` in `/etc/docker/daemon.json`, written before Docker is
+first started — so a port a container publishes is an ordinary listener
+(`docker-proxy`) that ufw filters like any other. Publish a port in the compose
+file and it is reachable from outside only once a ufw rule allows it.
+
+Docker's rules also did two jobs the containers still need, so ufw does them
+instead:
+
+| Job | How ufw does it |
+|-----|-----------------|
+| Forwarding traffic out of container networks | `ufw route allow in on br-+` (every compose network) and `in on docker0` (the default bridge). Traffic *from* a container may go anywhere; traffic *to* one is forwarded only as a reply. Routed traffic is otherwise denied |
+| NAT for containers talking to the internet | `/etc/ufw/after.init`, which ufw runs on every start, reload and stop. It masquerades traffic from `docker_address_pool` (in `group_vars/all.yml`, pinned in `daemon.json` so the two agree) that leaves the host, and leaves traffic between containers untranslated |
+| The kernel forwarding at all | `net/ipv4/ip_forward=1` in `/etc/ufw/sysctl.conf` |
+
+`ufw status verbose` shows the inbound rules and the two forwarding rules; the
+NAT rule is in `iptables -t nat -S ufw-docker-postrouting`.
+
+A host provisioned before this — where Docker did manage iptables — still
+carries the rules Docker wrote, because Docker does not remove them when told to
+stop. Re-running `provision.yml` removes them, leaving ufw's and fail2ban's
+rules in place. CI checks both the fresh host and that upgrade: no Docker rule
+in `iptables-save` or `ip6tables-save`, a container's published port refused
+from outside while it answers on the host, containers reaching each other by
+name and the internet over HTTPS — and a second run that changes nothing.
+
+Two things follow for the stack, both in `docker-compose.prod.yml`:
+
+- **Caddy runs on the host's network.** A published port now goes through
+  `docker-proxy`, which would make every client arrive from the same Docker
+  gateway address — one bucket for the contact form's per-IP rate limit, and
+  nothing worth banning. On the host's network Caddy binds 80, 443 and 443/udp
+  itself, sees each client's own address, and passes it to the app in
+  `X-Forwarded-For`.
+- **The app publishes its port on loopback** (`127.0.0.1:3000`), which is where
+  Caddy proxies to. Nothing outside the host can reach it.
 
 ## Deploying
 
@@ -214,7 +252,7 @@ Two prerequisites for the certificate, and neither is optional:
 
 - **Point the domain's A/AAAA record at the host before the first deploy.**
   Issuance is a challenge against that name, so it fails until DNS resolves and
-  ports 80 and 443 reach the container. Caddy retries with a backoff, so fixing
+  ports 80 and 443 reach the host. Caddy retries with a backoff, so fixing
   DNS afterwards recovers without intervention — but Let's Encrypt rate-limits
   failures, so the record is cheaper to get in first.
 - **Set `NEXTAUTH_URL=https://<your domain>` in `.env-production`**, and register
@@ -227,11 +265,16 @@ Two prerequisites for the certificate, and neither is optional:
 | Proxy config | `Caddyfile`, rendered from `domain_name` at generation time |
 | Certificates | the `caddydata` volume — keep it across deploys, or every boot re-issues into a rate limit |
 | Expiry warnings | mailed to `author_email`, unless that is at a reserved example domain (see below) |
-| Published ports | `80`, `443`, `443/udp` (HTTP/3), on the `caddy` service only |
+| Listening ports | `80`, `443`, `443/udp` (HTTP/3), bound by `caddy` on the host's network; the app's `3000` on `127.0.0.1` only, for Caddy |
 
-The app sits with Caddy on a `caddy-net` network that Postgres and Redis never
-join, so the internet-facing container has no route to the database even if it is
-compromised.
+Postgres and Redis publish no port, and nothing from outside is forwarded to a
+container, so they are reachable only from the host and from inside the stack.
+That is less isolation than there used to be: Caddy once sat on a network of its
+own with the app, with no route to the database, and on the host's network it
+has the host's routes, which reach every container's address. A compromised
+Caddy could connect to Postgres (which still wants its password) and Redis
+(which has none). Host networking is the price of Caddy seeing clients' real
+addresses — see [The firewall and Docker](#the-firewall-and-docker).
 
 Responses are not compressed at the proxy. Next.js already compresses its own
 output, and compressing a stream is how the SSE job-progress endpoint stops

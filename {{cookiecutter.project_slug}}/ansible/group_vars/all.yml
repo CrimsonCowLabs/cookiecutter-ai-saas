@@ -38,6 +38,16 @@ ssh_port: "{{ ansible_port | default(22) }}"
 firewall_tcp_ports: [80, 443]
 firewall_udp_ports: [443]
 
+# Where Docker takes container networks' addresses from, and therefore what
+# ufw's NAT rule masquerades on the way out (ansible/templates/ufw-after.init.j2).
+# Docker writes no iptables rules of its own here, so a network outside this
+# range would have no route to the internet. It is the block Docker's own
+# defaults start in, so networks made before it was pinned are inside it; change
+# it only if it collides with a network the host is on, and then
+# recreate the stack's networks (`docker compose down && docker compose up -d`),
+# because existing networks keep the addresses they were given.
+docker_address_pool: 172.16.0.0/12
+
 # How hard to bounce someone failing SSH authentication.
 fail2ban_maxretry: 5
 fail2ban_findtime: 10m
