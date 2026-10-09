@@ -69,12 +69,12 @@ export function stripeSubscription(id, { customer, status = "active", priceId = 
 }
 
 /**
- * The checkout.session.completed event for `user` subscribing as a Stripe
- * customer of the checkout's own, with the session, customer and
+ * The checkout.session.completed event for `user` subscribing, on `priceId`,
+ * as a Stripe customer of the checkout's own, with the session, customer and
  * subscription it names added to `stripe` (a fake-stripe.mjs instance),
  * since the webhook looks each of them up.
  */
-export function subscriptionCompleted(stripe, user) {
+export function subscriptionCompleted(stripe, user, { priceId = RESOLVED_PRICE_ID } = {}) {
   const id = crypto.randomUUID();
   const session = {
     id: `cs_test_${id}`,
@@ -87,9 +87,9 @@ export function subscriptionCompleted(stripe, user) {
     payment_status: "paid",
   };
   stripe.add(
-    { ...session, line_items: { object: "list", data: [{ quantity: 1, price: { id: RESOLVED_PRICE_ID } }] } },
+    { ...session, line_items: { object: "list", data: [{ quantity: 1, price: { id: priceId } }] } },
     { id: session.customer, object: "customer", email: user.email },
-    stripeSubscription(session.subscription, { customer: session.customer })
+    stripeSubscription(session.subscription, { customer: session.customer, priceId })
   );
   return { type: "checkout.session.completed", data: { object: session } };
 }

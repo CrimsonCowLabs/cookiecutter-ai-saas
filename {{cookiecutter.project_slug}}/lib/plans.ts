@@ -7,6 +7,23 @@ export function getPlanConfig(tier: PlanTier): PlanConfig {
   return plan;
 }
 
+/** The plan whose Stripe Price is `priceId`, if config.ts has one. */
+export function planForPrice(priceId: string | null | undefined): PlanConfig | undefined {
+  if (!priceId) return undefined;
+  return config.stripe.plans.find((p) => p.priceId === priceId);
+}
+
+/**
+ * The plan `tier` names, if it is one config.ts lists with a Stripe Price to
+ * check out. Null for anything else (the free plan, an unknown tier, a price
+ * id): checkout actions are public endpoints, so `tier` is whatever a request
+ * says.
+ */
+export function checkoutPlan(tier: unknown): PlanConfig | null {
+  const plan = config.stripe.plans.find((p) => p.tier === tier);
+  return plan?.priceId ? plan : null;
+}
+
 export function getPlanLimits(tier: PlanTier) {
   return getPlanConfig(tier).limits;
 }

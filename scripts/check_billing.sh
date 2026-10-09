@@ -3,7 +3,8 @@
 # one-live-subscription checkout rules of issue #72, and that subscription
 # entitlement converges on Stripe's state whatever order events arrive in
 # (issue #71), and that a delayed (bank debit) payment grants access only once
-# its money arrives (issue #73), actually hold, against a
+# its money arrives (issue #73), and that unknown Stripe prices are refused at
+# checkout and reported by the webhook (issue #74), actually hold, against a
 # really running instance of a generated project — not mocks, and not the
 # route handler imported in-process. See tests/billing/integration/*.test.mjs
 # for what is asserted and why; this script is only the plumbing that gets a
