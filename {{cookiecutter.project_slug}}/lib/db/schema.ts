@@ -24,11 +24,17 @@ export const jobStatusEnum = pgEnum("job_status", [
   "cancelled",
 ]);
 
+// Every status Stripe reports a subscription in, stored as itself; which of
+// them grant the plan is lib/subscription-sync.ts's call.
 export const subscriptionStatusEnum = pgEnum("subscription_status", [
   "active",
   "canceled",
   "past_due",
   "trialing",
+  "incomplete",
+  "incomplete_expired",
+  "unpaid",
+  "paused",
 ]);
 
 // ─── Tables ──────────────────────────────────────────────
@@ -151,8 +157,8 @@ export const subscriptions = pgTable("subscriptions", {
   userId: uuid("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
-  // Unique so a redelivered checkout.session.completed event can't record the
-  // same subscription twice.
+  // Unique, and recorded only by upsert (lib/subscription-sync.ts), so
+  // redelivered and concurrent webhook events leave one row per subscription.
   stripeSubscriptionId: text("stripe_subscription_id").notNull().unique(),
   stripePriceId: text("stripe_price_id").notNull(),
   plan: planEnum("plan").notNull(),

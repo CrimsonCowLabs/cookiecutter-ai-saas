@@ -1,4 +1,4 @@
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, notInArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, subscriptions } from "@/lib/db/schema";
 import {
@@ -8,6 +8,7 @@ import {
   createOneTimeCheckout,
   expireOpenSubscriptionCheckouts,
   hasLiveSubscription,
+  ENDED_SUBSCRIPTION_STATUSES,
 } from "@/lib/stripe";
 import type { PlanConfig } from "@/types/config";
 
@@ -76,12 +77,12 @@ async function asCustomer<T>(
 /** Whether `userId` has a subscription, recorded here or in Stripe, that hasn't ended. */
 async function hasLiveSubscriptionFor(tx: Tx, userId: string, customerId: string) {
   // The webhook records a subscription only once its checkout completes, and
-  // marks it canceled when Stripe deletes it; Stripe is asked as well for one
-  // paid for moments ago whose webhook hasn't arrived yet.
+  // then keeps its status in step with Stripe's; Stripe is asked as well for
+  // one paid for moments ago whose webhook hasn't arrived yet.
   const recorded = await tx
     .select({ id: subscriptions.id })
     .from(subscriptions)
-    .where(and(eq(subscriptions.userId, userId), ne(subscriptions.status, "canceled")))
+    .where(and(eq(subscriptions.userId, userId), notInArray(subscriptions.status, ENDED_SUBSCRIPTION_STATUSES)))
     .limit(1);
   return recorded.length > 0 || (await hasLiveSubscription(customerId));
 }

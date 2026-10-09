@@ -276,8 +276,14 @@ nothing about renewal.
   that subscription's `checkout.session.completed` event from the Stripe
   Dashboard.
 - **One subscription, one row.** `subscriptions.stripe_subscription_id` is
-  unique, so a redelivered event finds the row it recorded rather than
-  adding another, and `subscriptions.acknowledged_at` records when the
+  unique and only ever upserted, so a redelivered event finds the row it
+  recorded rather than adding another. Every subscription event re-fetches
+  the subscription from Stripe and records its status as Stripe reports it
+  (`lib/subscription-sync.ts`), so a late or replayed event can't put a
+  cancelled subscriber back on a paid plan. `active`, `trialing` and
+  `past_due` (grace while Stripe retries the card) grant the plan; `unpaid`,
+  `canceled`, `incomplete`, `incomplete_expired` and `paused` mean free.
+  `subscriptions.acknowledged_at` records when the
   acknowledgment went out (null until then, and always without Resend).
   On an existing deployment, remove any duplicate rows before applying the
   schema change (`npm run db:push` or your migration), or it will fail.
