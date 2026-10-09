@@ -15,6 +15,11 @@ type SubscriptionStatus = (typeof subscriptionStatusEnum.enumValues)[number];
  */
 const ENTITLING_STATUSES: readonly SubscriptionStatus[] = ["active", "trialing", "past_due"];
 
+/** Whether a subscription grants its tier: an entitling status, and its first invoice paid. */
+function entitles({ status, awaitingFirstPayment }: { status: SubscriptionStatus; awaitingFirstPayment: boolean }) {
+  return ENTITLING_STATUSES.includes(status) && !awaitingFirstPayment;
+}
+
 const isStatus = (status: string): status is SubscriptionStatus =>
   (subscriptionStatusEnum.enumValues as readonly string[]).includes(status);
 
@@ -86,8 +91,13 @@ async function userWithCustomer(
  * order events arrive, what's recorded converges on Stripe's current state.
  *
  * The subscription's user is the one it was recorded for, else `userId` (a
- * completed checkout's), else whoever has its Stripe customer. With none,
- * nothing is recorded: its checkout.session.completed event will record it.
+ * paid checkout's), else whoever has its Stripe customer. With none, nothing
+ * is recorded: its checkout's paid event will record it.
+ *
+ * A subscription grants nothing until its first invoice is paid, whatever
+ * its status: paid by bank debit (ACH, SEPA), Stripe can count it active
+ * while the money is still on its way, and keeps it going after the debit
+ * fails, until the invoice is paid some other way or Stripe gives up.
  *
  * Syncs of one subscription take turns (a transaction-scoped advisory lock,
  * held across the Stripe call), so the last to finish fetched last: two
@@ -105,7 +115,9 @@ export async function syncSubscription(
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${"subscription:" + stripeSubscriptionId}, 0))`
     );
-    const sub = await getStripe().subscriptions.retrieve(stripeSubscriptionId);
+    const sub = await getStripe().subscriptions.retrieve(stripeSubscriptionId, {
+      expand: ["latest_invoice"],
+    });
 
     const [recorded] = await tx
       .select({ userId: subscriptions.userId, plan: subscriptions.plan })
@@ -137,10 +149,12 @@ export async function syncSubscription(
     await tx.select({ id: users.id }).from(users).where(eq(users.id, ownerId)).for("update");
 
     const period = getSubscriptionPeriod(sub);
+    const invoice = typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
     const state = {
       stripePriceId: priceId,
       plan: tier,
       status: sub.status,
+      awaitingFirstPayment: invoice?.billing_reason === "subscription_create" && invoice.status !== "paid",
       currentPeriodStart: period.start,
       currentPeriodEnd: period.end,
     };
@@ -153,13 +167,17 @@ export async function syncSubscription(
     // subscriptions entitle them to, so an event for an old, ended
     // subscription can't take away the plan a newer one grants.
     const owned = await tx
-      .select({ plan: subscriptions.plan, status: subscriptions.status })
+      .select({
+        plan: subscriptions.plan,
+        status: subscriptions.status,
+        awaitingFirstPayment: subscriptions.awaitingFirstPayment,
+      })
       .from(subscriptions)
       .where(eq(subscriptions.userId, ownerId))
       .orderBy(desc(subscriptions.createdAt));
-    const plan = owned.find((s) => ENTITLING_STATUSES.includes(s.status))?.plan ?? "free";
+    const plan = owned.find(entitles)?.plan ?? "free";
     await tx.update(users).set({ plan, updatedAt: new Date() }).where(eq(users.id, ownerId));
 
-    return { tier, entitles: ENTITLING_STATUSES.includes(sub.status) };
+    return { tier, entitles: entitles(state) };
   });
 }

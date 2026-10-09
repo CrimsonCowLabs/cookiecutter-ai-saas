@@ -41,6 +41,7 @@ function oneTimePurchasePayload(checkoutSessionId, userId) {
         object: "checkout.session",
         client_reference_id: userId,
         metadata: { type: "one_time_purchase" },
+        payment_status: "paid",
         amount_total: 1999,
         currency: "usd",
       },

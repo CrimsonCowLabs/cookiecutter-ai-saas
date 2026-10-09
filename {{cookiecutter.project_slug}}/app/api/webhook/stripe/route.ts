@@ -1,9 +1,9 @@
 import { NextResponse, NextRequest } from "next/server";
 import { headers } from "next/headers";
 import Stripe from "stripe";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { users, subscriptions, purchases } from "@/lib/db/schema";
+import { users, subscriptions, purchases, auditLogs } from "@/lib/db/schema";
 import { getStripe, findCheckoutSession } from "@/lib/stripe";
 import { audit } from "@/lib/audit";
 import { sendSubscriptionAcknowledgment } from "@/lib/subscription-acknowledgment";
@@ -47,6 +47,163 @@ function logSecondCustomer(
   );
 }
 
+// What a checkout's payment_status is once its money has arrived, or when
+// it needs none (a free trial, a 100% discount).
+const PAID: Stripe.Checkout.Session.PaymentStatus[] = ["paid", "no_payment_required"];
+
+function isOneTimePurchase(session: Stripe.Checkout.Session) {
+  return session.metadata?.type === "one_time_purchase";
+}
+
+/** The id of checkout `session`'s Stripe customer, if it has one. */
+function customerOf(session: Stripe.Checkout.Session): string | null {
+  return typeof session.customer === "string" ? session.customer : (session.customer?.id ?? null);
+}
+
+type User = typeof users.$inferSelect;
+
+/**
+ * The account checkout `session` is for: the one its client_reference_id
+ * names, which the app's own checkouts carry, else, for a subscription (a
+ * Stripe Payment Link, say), the one with its customer's email. Only ever an
+ * existing account: see logUnfulfilled.
+ */
+async function checkoutUser(session: Stripe.Checkout.Session): Promise<User | null> {
+  const userId = session.client_reference_id;
+  if (userId) {
+    const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    return user ?? null;
+  }
+  const customerId = customerOf(session);
+  if (isOneTimePurchase(session) || !customerId) return null;
+  const customer = (await getStripe().customers.retrieve(customerId)) as Stripe.Customer;
+  if (!customer.email) return null;
+  const [user] = await db.select().from(users).where(eq(users.email, customer.email)).limit(1);
+  return user ?? null;
+}
+
+/** Record paid one-time purchase `session` for `userId` and grant its credits, once. */
+async function fulfilOneTimePurchase(session: Stripe.Checkout.Session, userId: string) {
+  const retrieved = await findCheckoutSession(session.id);
+  const lineItem = retrieved?.line_items?.data[0];
+  const quantity = lineItem?.quantity ?? 1;
+
+  // Recording the purchase and granting the credit in one
+  // transaction means a failure partway through (a dropped DB
+  // connection between the two statements, say) rolls both back
+  // rather than leaving a purchase recorded with no credit granted.
+  // That matters here specifically because of the idempotency guard
+  // below: a purchase row that exists but was never credited would
+  // make every future redelivery of this same event a silent no-op
+  // forever (onConflictDoNothing would keep skipping it), so the
+  // customer would simply never receive what they paid for.
+  const purchaseId = await db.transaction(async (tx) => {
+    // Unique on stripeCheckoutSessionId: Stripe redelivers webhook
+    // events, and this insert is what makes fulfilment idempotent —
+    // an empty `inserted` means this checkout session was already
+    // recorded, so the credit below must not run twice for it.
+    const inserted = await tx
+      .insert(purchases)
+      .values({
+        userId,
+        stripeCheckoutSessionId: session.id,
+        stripePriceId: lineItem?.price?.id ?? null,
+        quantity,
+        amountTotal: session.amount_total ?? null,
+        currency: session.currency ?? null,
+      })
+      .onConflictDoNothing({ target: purchases.stripeCheckoutSessionId })
+      .returning();
+
+    if (inserted.length === 0) return null;
+
+    // Grant what the purchase promises. "Credits" is deliberately
+    // generic — same as lib/plans.ts staying feature-agnostic — this
+    // webhook's job is only to make sure a completed payment always
+    // shows up as something the app can act on, never silently
+    // nothing (see issue #27).
+    await tx
+      .update(users)
+      .set({ credits: sql`${users.credits} + ${quantity}`, updatedAt: new Date() })
+      .where(eq(users.id, userId));
+
+    return inserted[0].id;
+  });
+
+  if (!purchaseId) return;
+
+  await audit({
+    userId,
+    action: "billing.one_time_purchase_fulfilled",
+    resourceType: "purchase",
+    resourceId: purchaseId,
+    metadata: { checkoutSessionId: session.id, quantity },
+  });
+}
+
+/**
+ * Record paid subscription checkout `session`'s subscription for `user`,
+ * grant its plan and acknowledge it. Resolves to "acknowledgment_failed" when
+ * the acknowledgment couldn't be sent, so the event can be failed and
+ * redelivered.
+ */
+async function fulfilSubscription(
+  session: Stripe.Checkout.Session,
+  user: User
+): Promise<"done" | "acknowledgment_failed"> {
+  // Their Stripe customer is the one the app created before checkout
+  // (lib/checkout.ts), and stays that one: the customer here is only stored
+  // for a user who had none, as after a Payment Link checkout.
+  const customerId = customerOf(session);
+  if (!customerId) return "done";
+  if (user.stripeCustomerId && user.stripeCustomerId !== customerId) {
+    logSecondCustomer(session, user.id, user.stripeCustomerId, customerId);
+  }
+  await db
+    .update(users)
+    .set({
+      stripeCustomerId: sql`coalesce(${users.stripeCustomerId}, ${customerId})`,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, user.id));
+
+  if (!session.subscription) return "done";
+  const subscriptionId = session.subscription as string;
+  // Records the subscription, and grants the plan, as Stripe has
+  // them now rather than as they were at checkout: this event may be
+  // a redelivery arriving after the subscription changed or ended.
+  const synced = await syncSubscription(subscriptionId, { userId: user.id });
+  const plan = synced && config.stripe.plans.find((p) => p.tier === synced.tier);
+  // Nothing to acknowledge for a subscription that has already ended
+  // (cancelled before this event arrived) or never started.
+  if (!plan || !synced.entitles) return "done";
+
+  // California's Automatic Renewal Law: acknowledge the subscription
+  // with its terms and how to cancel, on whichever delivery of this
+  // event first finds it unacknowledged (a no-op without Resend; see
+  // lib/subscription-acknowledgment.ts).
+  const [record] = await db
+    .select({ id: subscriptions.id, acknowledgedAt: subscriptions.acknowledgedAt })
+    .from(subscriptions)
+    .where(eq(subscriptions.stripeSubscriptionId, subscriptionId))
+    .limit(1);
+  if (record && !record.acknowledgedAt) {
+    const sent = await sendSubscriptionAcknowledgment({
+      to: user.email,
+      plan,
+      subscriptionId,
+    });
+    if (sent === "failed") return "acknowledgment_failed";
+    if (sent === "sent") {
+      await db
+        .update(subscriptions)
+        .set({ acknowledgedAt: new Date() })
+        .where(eq(subscriptions.id, record.id));
+    }
+  }
+  return "done";
+}
+
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
@@ -72,160 +229,65 @@ export async function POST(req: NextRequest) {
 
   try {
     switch (event.type) {
-      case "checkout.session.completed": {
-        const stripeObject = event.data.object as Stripe.Checkout.Session;
+      // A checkout paid by a delayed method (a bank debit such as ACH or
+      // SEPA) completes unpaid; the money arrives, or fails to, days later.
+      // Access is granted only once it has: a card checkout completes
+      // already paid, a debit's arrives as async_payment_succeeded. Either
+      // way, fulfilling it again on a redelivery grants nothing more.
+      case "checkout.session.completed":
+      case "checkout.session.async_payment_succeeded": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        if (!PAID.includes(session.payment_status)) break;
 
-        // Handle one-time purchases
-        if (stripeObject.metadata?.type === "one_time_purchase") {
-          const userId = stripeObject.client_reference_id;
-          const owner = userId
-            ? await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1)
-            : [];
-          if (!userId || !owner[0]) {
-            logUnfulfilled(stripeObject, stripeObject.customer as string | null);
-            break;
-          }
-
-          const session = await findCheckoutSession(stripeObject.id);
-          const lineItem = session?.line_items?.data[0];
-          const quantity = lineItem?.quantity ?? 1;
-
-          // Recording the purchase and granting the credit in one
-          // transaction means a failure partway through (a dropped DB
-          // connection between the two statements, say) rolls both back
-          // rather than leaving a purchase recorded with no credit granted.
-          // That matters here specifically because of the idempotency guard
-          // below: a purchase row that exists but was never credited would
-          // make every future redelivery of this same event a silent no-op
-          // forever (onConflictDoNothing would keep skipping it), so the
-          // customer would simply never receive what they paid for.
-          const purchaseId = await db.transaction(async (tx) => {
-            // Unique on stripeCheckoutSessionId: Stripe redelivers webhook
-            // events, and this insert is what makes fulfillment idempotent —
-            // an empty `inserted` means this checkout session was already
-            // recorded, so the credit below must not run twice for it.
-            const inserted = await tx
-              .insert(purchases)
-              .values({
-                userId,
-                stripeCheckoutSessionId: stripeObject.id,
-                stripePriceId: lineItem?.price?.id ?? null,
-                quantity,
-                amountTotal: stripeObject.amount_total ?? null,
-                currency: stripeObject.currency ?? null,
-              })
-              .onConflictDoNothing({ target: purchases.stripeCheckoutSessionId })
-              .returning();
-
-            if (inserted.length === 0) return null;
-
-            // Grant what the purchase promises. "Credits" is deliberately
-            // generic — same as lib/plans.ts staying feature-agnostic — this
-            // webhook's job is only to make sure a completed payment always
-            // shows up as something the app can act on, never silently
-            // nothing (see issue #27).
-            await tx
-              .update(users)
-              .set({ credits: sql`${users.credits} + ${quantity}`, updatedAt: new Date() })
-              .where(eq(users.id, userId));
-
-            return inserted[0].id;
-          });
-
-          if (!purchaseId) break;
-
-          await audit({
-            userId,
-            action: "billing.one_time_purchase_fulfilled",
-            resourceType: "purchase",
-            resourceId: purchaseId,
-            metadata: { checkoutSessionId: stripeObject.id, quantity },
-          });
-
-          break;
-        }
-
-        // Handle subscription checkouts. Which plan, and whether it's still
-        // granted, comes from the subscription itself (syncSubscription below).
-        const customerId = stripeObject.customer as string;
-        const userId = stripeObject.client_reference_id;
-
-        const customer = (await getStripe().customers.retrieve(
-          customerId
-        )) as Stripe.Customer;
-
-        // By the reference id the app's own checkouts carry, else (a Stripe
-        // Payment Link, say) by the customer's email. Either way only an
-        // existing account: see logUnfulfilled.
-        const result = userId
-          ? await db.select().from(users).where(eq(users.id, userId)).limit(1)
-          : customer.email
-            ? await db.select().from(users).where(eq(users.email, customer.email)).limit(1)
-            : [];
-        const user = result[0];
-
+        const user = await checkoutUser(session);
         if (!user) {
-          logUnfulfilled(stripeObject, customerId);
+          logUnfulfilled(session, customerOf(session));
           break;
         }
 
-        // Their Stripe customer is the one the app created before checkout
-        // (lib/checkout.ts), and stays that one: the customer here is only
-        // stored for a user who had none, as after a Payment Link checkout.
-        if (user.stripeCustomerId && user.stripeCustomerId !== customerId) {
-          logSecondCustomer(stripeObject, user.id, user.stripeCustomerId, customerId);
+        if (isOneTimePurchase(session)) {
+          await fulfilOneTimePurchase(session, user.id);
+          break;
         }
-        await db
-          .update(users)
-          .set({
-            stripeCustomerId: sql`coalesce(${users.stripeCustomerId}, ${customerId})`,
-            updatedAt: new Date(),
-          })
-          .where(eq(users.id, user.id));
-
-        if (stripeObject.subscription) {
-          const subscriptionId = stripeObject.subscription as string;
-          // Records the subscription, and grants the plan, as Stripe has
-          // them now rather than as they were at checkout: this event may be
-          // a redelivery arriving after the subscription changed or ended.
-          const synced = await syncSubscription(subscriptionId, { userId: user.id });
-          const plan = synced && config.stripe.plans.find((p) => p.tier === synced.tier);
-          // Nothing to acknowledge for a subscription that has already ended
-          // (cancelled before this event arrived) or never started.
-          if (!plan || !synced.entitles) break;
-
-          // California's Automatic Renewal Law: acknowledge the subscription
-          // with its terms and how to cancel, on whichever delivery of this
-          // event first finds it unacknowledged (a no-op without Resend; see
-          // lib/subscription-acknowledgment.ts).
-          const [record] = await db
-            .select({ id: subscriptions.id, acknowledgedAt: subscriptions.acknowledgedAt })
-            .from(subscriptions)
-            .where(eq(subscriptions.stripeSubscriptionId, subscriptionId))
-            .limit(1);
-          if (record && !record.acknowledgedAt) {
-            const sent = await sendSubscriptionAcknowledgment({
-              to: user.email,
-              plan,
-              subscriptionId,
-            });
-            if (sent === "failed") {
-              // A 5xx makes Stripe redeliver the event, and the redelivery
-              // sends it. Everything above is safe to run again.
-              return NextResponse.json(
-                { error: "Subscription acknowledgment send failed" },
-                { status: 500 }
-              );
-            }
-            if (sent === "sent") {
-              await db
-                .update(subscriptions)
-                .set({ acknowledgedAt: new Date() })
-                .where(eq(subscriptions.id, record.id));
-            }
-          }
+        if ((await fulfilSubscription(session, user)) === "acknowledgment_failed") {
+          // A 5xx makes Stripe redeliver the event, and the redelivery sends
+          // it. Everything before it is safe to run again.
+          return NextResponse.json(
+            { error: "Subscription acknowledgment send failed" },
+            { status: 500 }
+          );
         }
+        break;
+      }
 
+      // The debit failed: nothing was granted, so nothing is taken away. A
+      // subscription it was for grants nothing until its first invoice is
+      // paid some other way (see lib/subscription-sync.ts). Audited once per
+      // checkout, however often Stripe redelivers the event.
+      case "checkout.session.async_payment_failed": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const [audited] = await db
+          .select({ id: auditLogs.id })
+          .from(auditLogs)
+          .where(
+            and(
+              eq(auditLogs.action, "billing.async_payment_failed"),
+              sql`${auditLogs.metadata}->>'checkoutSessionId' = ${session.id}`
+            )
+          )
+          .limit(1);
+        if (audited) break;
+        const user = await checkoutUser(session);
+        await audit({
+          userId: user?.id ?? null,
+          action: "billing.async_payment_failed",
+          resourceType: "checkout_session",
+          metadata: {
+            checkoutSessionId: session.id,
+            mode: session.mode,
+            customerId: customerOf(session),
+          },
+        });
         break;
       }
 

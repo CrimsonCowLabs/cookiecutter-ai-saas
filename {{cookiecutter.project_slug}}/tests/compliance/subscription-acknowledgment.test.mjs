@@ -114,6 +114,7 @@ function subscriptionCompleted(user, plan) {
     customer: `cus_test_${id}`,
     subscription: `sub_test_${id}`,
     customer_details: { email: user.email },
+    payment_status: "paid",
   };
   stripe.add(
     { ...session, line_items: { object: "list", data: [{ quantity: 1, price: { id: plan.priceId } }] } },
@@ -266,7 +267,14 @@ test("a one-time purchase whose client_reference_id has no account is logged, no
   stripe.add({ ...session, line_items: { object: "list", data: [{ quantity: 1, price: { id: "price_test_one_time" } }] } });
   await deliver({
     type: "checkout.session.completed",
-    data: { object: { ...session, client_reference_id: crypto.randomUUID(), metadata: { type: "one_time_purchase" } } },
+    data: {
+      object: {
+        ...session,
+        client_reference_id: crypto.randomUUID(),
+        metadata: { type: "one_time_purchase" },
+        payment_status: "paid",
+      },
+    },
   });
   const { rows } = await db.query(`select 1 from purchases where stripe_checkout_session_id = $1`, [session.id]);
   assert.equal(rows.length, 0, "no purchase should be recorded");
@@ -295,6 +303,7 @@ test("a one-time purchase sends no acknowledgment", async () => {
           client_reference_id: user.id,
           customer_details: { email: user.email },
           metadata: { type: "one_time_purchase" },
+          payment_status: "paid",
           amount_total: 1999,
           currency: "usd",
         },

@@ -3,8 +3,10 @@
 // tests/auth/support.mjs's shape; connectDb/insertTestUser/deleteTestUser are
 // generic enough (not auth-specific) to import from there directly rather
 // than duplicating them here.
+import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import Stripe from "stripe";
+import { insertTestUser, deleteTestUser } from "../../auth/support.mjs";
 
 const DEFAULT_BASE_URL = "http://localhost:3000";
 // A fixed, low-entropy placeholder, not a real credential — the same idea as
@@ -44,14 +46,21 @@ export function deliver(event) {
   return postWebhookEvent(payload, signer.webhooks.generateTestHeaderString({ payload, secret: config.webhookSecret }));
 }
 
-/** A subscription as Stripe returns it: one item, on `priceId`, in `status`. */
-export function stripeSubscription(id, { customer, status = "active", priceId = RESOLVED_PRICE_ID }) {
+/**
+ * A subscription as Stripe returns it: one item, on `priceId`, in `status`.
+ * Given `firstInvoice` (an invoice status: "open" while a bank debit is on
+ * its way, "paid" once it has arrived), its latest invoice is its first.
+ */
+export function stripeSubscription(id, { customer, status = "active", priceId = RESOLVED_PRICE_ID, firstInvoice }) {
   const now = Math.floor(Date.now() / 1000);
   return {
     id,
     object: "subscription",
     customer,
     status,
+    ...(firstInvoice && {
+      latest_invoice: { id: `in_${id}`, object: "invoice", billing_reason: "subscription_create", status: firstInvoice },
+    }),
     items: {
       object: "list",
       data: [{ price: { id: priceId }, current_period_start: now, current_period_end: now + 30 * 86_400 }],
@@ -75,6 +84,7 @@ export function subscriptionCompleted(stripe, user) {
     customer: `cus_test_${id}`,
     subscription: `sub_test_${id}`,
     customer_details: { email: user.email },
+    payment_status: "paid",
   };
   stripe.add(
     { ...session, line_items: { object: "list", data: [{ quantity: 1, price: { id: RESOLVED_PRICE_ID } }] } },
@@ -82,4 +92,26 @@ export function subscriptionCompleted(stripe, user) {
     stripeSubscription(session.subscription, { customer: session.customer })
   );
   return { type: "checkout.session.completed", data: { object: session } };
+}
+
+/** Run `fn(user)` as a freshly inserted user of `db`, deleted again afterwards. */
+export async function asNewUser(db, fn) {
+  const user = await insertTestUser(db);
+  try {
+    return await fn(user);
+  } finally {
+    await deleteTestUser(db, user.id);
+  }
+}
+
+/** Deliver `event`, asserting the webhook accepted it. */
+export async function deliverOk(event) {
+  const res = await deliver(event);
+  assert.equal(res.status, 200, `the webhook should accept ${event.type}, got ${res.status}`);
+}
+
+/** `userId`'s plan, as the rest of the app reads it. */
+export async function planOf(db, userId) {
+  const { rows } = await db.query("select plan from users where id = $1", [userId]);
+  return rows[0]?.plan;
 }
