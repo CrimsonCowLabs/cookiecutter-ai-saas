@@ -259,8 +259,9 @@ nothing about renewal.
   `tests/billing/integration/checkout.test.mjs` proves this against a
   running app (`scripts/check_billing.sh`).
 - **The acknowledgment.** When Resend is configured (`RESEND_API_KEY`), the
-  Stripe webhook emails every new subscriber once, on
-  `checkout.session.completed`, from `config.resend.fromNoReply`
+  Stripe webhook emails every new subscriber once, when their checkout is
+  paid (`checkout.session.completed`, or for a bank debit
+  `checkout.session.async_payment_succeeded`), from `config.resend.fromNoReply`
   (`lib/subscription-acknowledgment.ts`): the same renewal terms, word for
   word, and step-by-step how to cancel online through Settings → Manage
   billing and the billing portal, with a link to `/legal/subscriptions`. A
@@ -273,8 +274,7 @@ nothing about renewal.
   sends it. Each send carries a Resend idempotency key for the
   subscription, so deliveries that overlap still send one email. If the
   retries run out, the log line is the last word: fix Resend, then resend
-  that subscription's `checkout.session.completed` event from the Stripe
-  Dashboard.
+  that subscription's paid checkout event from the Stripe Dashboard.
 - **One subscription, one row.** `subscriptions.stripe_subscription_id` is
   unique and only ever upserted, so a redelivered event finds the row it
   recorded rather than adding another. Every subscription event re-fetches
@@ -283,6 +283,15 @@ nothing about renewal.
   cancelled subscriber back on a paid plan. `active`, `trialing` and
   `past_due` (grace while Stripe retries the card) grant the plan; `unpaid`,
   `canceled`, `incomplete`, `incomplete_expired` and `paused` mean free.
+  A subscription, or a one-time purchase, paid by bank debit (ACH, SEPA)
+  grants nothing until its money arrives
+  (`checkout.session.async_payment_succeeded`); a subscription grants
+  nothing while its first invoice is unpaid, even though Stripe may already
+  call it active. A debit that fails
+  (`checkout.session.async_payment_failed`) grants nothing and is recorded
+  once in the audit log as `billing.async_payment_failed`; if the customer
+  then pays the subscription's invoice another way, the plan follows. Your
+  webhook endpoint must send both events.
   `subscriptions.acknowledged_at` records when the
   acknowledgment went out (null until then, and always without Resend).
   On an existing deployment, remove any duplicate rows before applying the

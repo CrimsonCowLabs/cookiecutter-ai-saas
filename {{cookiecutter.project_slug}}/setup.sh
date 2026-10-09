@@ -375,6 +375,9 @@ setup_feature_credentials() {
     echo "Stripe is enabled for this project. You'll need:"
     echo "  - STRIPE_SECRET_KEY    : API keys page      -> https://dashboard.stripe.com/apikeys"
     echo "  - STRIPE_WEBHOOK_SECRET: a webhook endpoint's signing secret -> https://dashboard.stripe.com/webhooks"
+    echo "    (endpoint /api/webhook/stripe; events checkout.session.completed,"
+    echo "    checkout.session.async_payment_succeeded, checkout.session.async_payment_failed,"
+    echo "    customer.subscription.updated, customer.subscription.deleted)"
     prompt_for_credential STRIPE_SECRET_KEY "Stripe secret key (sk_...): "
     prompt_for_credential STRIPE_WEBHOOK_SECRET "Stripe webhook signing secret (whsec_...): "
   fi

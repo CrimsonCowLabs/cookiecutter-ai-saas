@@ -163,6 +163,10 @@ export const subscriptions = pgTable("subscriptions", {
   stripePriceId: text("stripe_price_id").notNull(),
   plan: planEnum("plan").notNull(),
   status: subscriptionStatusEnum("status").notNull(),
+  // Its first invoice isn't paid yet: a bank debit (ACH, SEPA) still
+  // processing, or one that failed and hasn't been paid since. Grants
+  // nothing, whatever the status (lib/subscription-sync.ts).
+  awaitingFirstPayment: boolean("awaiting_first_payment").notNull().default(false),
   currentPeriodStart: timestamp("current_period_start", {
     mode: "date",
   }).notNull(),

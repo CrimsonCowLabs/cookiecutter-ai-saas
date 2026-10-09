@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **216 files** with
+Every generated project is a complete distributed system — **217 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -432,7 +432,7 @@ After generation, configure these in `.env.local`:
 |----------|--------|
 | `STRIPE_PUBLIC_KEY` | [Stripe Dashboard](https://dashboard.stripe.com/apikeys) |
 | `STRIPE_SECRET_KEY` | Same as above |
-| `STRIPE_WEBHOOK_SECRET` | Stripe Dashboard → Webhooks → Signing secret |
+| `STRIPE_WEBHOOK_SECRET` | Stripe Dashboard → Webhooks → Signing secret, of an endpoint at `/api/webhook/stripe` sending `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `customer.subscription.updated` and `customer.subscription.deleted` |
 
 ### LLM Provider
 
