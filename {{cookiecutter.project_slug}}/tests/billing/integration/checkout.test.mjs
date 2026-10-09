@@ -19,10 +19,9 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import Stripe from "stripe";
 import { connectDb, insertTestUser, deleteTestUser, mintSessionCookie } from "../../auth/support.mjs";
 import { startFakeStripe } from "../../compliance/fake-stripe.mjs";
-import { config, postWebhookEvent } from "./support.mjs";
+import { config, deliver, subscriptionCompleted } from "./support.mjs";
 
 // Tiers only: which Stripe Price each resolves to doesn't matter here (see
 // ./subscription-lifecycle.test.mjs on why they collide under `next start`).
@@ -104,53 +103,6 @@ async function recordSubscription(user, { plan = PRO, status = "active" } = {}) 
   await db.query("update users set plan = $2 where id = $1", [user.id, status === "canceled" ? "free" : plan]);
 }
 
-// Only used to sign events locally; never talks to Stripe.
-const signer = new Stripe("sk_test_dummy_key_for_offline_signature_tests");
-
-// The Price every paid plan resolves to under `next start`, matched as "pro"
-// (see ./subscription-lifecycle.test.mjs).
-const RESOLVED_PRICE_ID = "price_REPLACE_WITH_LIVE_PRICE_ID";
-
-/** POST `event` to the webhook, signed the way Stripe signs it. */
-function deliver(event) {
-  const payload = JSON.stringify({ id: `evt_test_${crypto.randomUUID()}`, object: "event", ...event });
-  return postWebhookEvent(payload, signer.webhooks.generateTestHeaderString({ payload, secret: config.webhookSecret }));
-}
-
-/**
- * The checkout.session.completed event for `user` subscribing as a Stripe
- * customer of the checkout's own, with the session, customer and
- * subscription it names made retrievable from the fake, since the webhook
- * looks each of them up.
- */
-function subscriptionCompleted(user) {
-  const id = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
-  const session = {
-    id: `cs_test_${id}`,
-    object: "checkout.session",
-    mode: "subscription",
-    client_reference_id: user.id,
-    customer: `cus_test_${id}`,
-    subscription: `sub_test_${id}`,
-    customer_details: { email: user.email },
-  };
-  stripe.add(
-    { ...session, line_items: { object: "list", data: [{ quantity: 1, price: { id: RESOLVED_PRICE_ID } }] } },
-    { id: session.customer, object: "customer", email: user.email },
-    {
-      id: session.subscription,
-      object: "subscription",
-      status: "active",
-      items: {
-        object: "list",
-        data: [{ price: { id: RESOLVED_PRICE_ID }, current_period_start: now, current_period_end: now + 30 * 86_400 }],
-      },
-    }
-  );
-  return { type: "checkout.session.completed", data: { object: session } };
-}
-
 test("a user who abandons a checkout and starts another checks out as the same Stripe customer both times", async () => {
   await asNewUser(async (user, cookie) => {
     const field = await upgradeActionField(cookie);
@@ -221,7 +173,7 @@ test("a paid checkout as another Stripe customer keeps the user's own customer, 
 
     // As a Stripe Payment Link would: a checkout the app didn't open, so
     // Stripe made it a customer of its own.
-    const event = subscriptionCompleted(user);
+    const event = subscriptionCompleted(stripe, user);
     const res = await deliver(event);
     assert.equal(res.status, 200, `the webhook should accept the event, got ${res.status}`);
 

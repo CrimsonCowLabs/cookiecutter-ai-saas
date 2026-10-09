@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Prove the Stripe webhook fixes for issue #27, and the one-customer,
-# one-live-subscription checkout rules of issue #72, actually hold, against a
+# Prove the Stripe webhook fixes for issue #27, the one-customer,
+# one-live-subscription checkout rules of issue #72, and that subscription
+# entitlement converges on Stripe's state whatever order events arrive in
+# (issue #71), actually hold, against a
 # really running instance of a generated project — not mocks, and not the
 # route handler imported in-process. See tests/billing/integration/*.test.mjs
 # for what is asserted and why; this script is only the plumbing that gets a
@@ -56,8 +58,8 @@ grep -qF "\"${POSTGRES_PORT}:5432\"" docker-compose.yml \
 # passing against a secret nobody checked. STRIPE_SECRET_KEY never has to be
 # a real key: STRIPE_API_BASE points the app's Stripe client at a stand-in
 # API (tests/compliance/fake-stripe.mjs) on FAKE_STRIPE_PORT, which the
-# checkout tests start; a call the webhook makes while nothing listens there
-# is caught and tolerated (see lib/stripe.ts's findCheckoutSession). The key
+# checkout and subscription lifecycle tests start (one test file at a time,
+# since they share the port). The key
 # only has to be present, because getStripe() throws if it's unset at all
 # (see lib/stripe.ts's own comment on that). NEXTAUTH_SECRET is the value
 # tests/auth/support.mjs mints the checkout tests' session cookies with.

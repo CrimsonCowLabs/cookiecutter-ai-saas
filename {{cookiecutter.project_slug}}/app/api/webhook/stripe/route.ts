@@ -7,55 +7,8 @@ import { users, subscriptions, purchases } from "@/lib/db/schema";
 import { getStripe, findCheckoutSession } from "@/lib/stripe";
 import { audit } from "@/lib/audit";
 import { sendSubscriptionAcknowledgment } from "@/lib/subscription-acknowledgment";
+import { syncSubscription } from "@/lib/subscription-sync";
 import config from "@/config";
-
-/**
- * Stripe moved `current_period_start`/`current_period_end` off the
- * Subscription object itself and onto each subscription item as of the
- * 2025-03-31 "basil" API version (shipped starting in stripe-node v18): a
- * subscription's items can each be on a different billing cycle, so the
- * period is now tracked per item rather than per subscription. Verified
- * against the installed stripe package's own type definitions
- * (node_modules/stripe/cjs/resources/Subscriptions.d.ts no longer declares
- * current_period_start/end on `Subscription`; SubscriptionItems.d.ts does) —
- * this app only ever creates single-item subscriptions (see createCheckout
- * in lib/stripe.ts), so the first item's period stands in for "the"
- * subscription's period.
- *
- * This checks the period fields themselves, not just whether an item is
- * present: a webhook *event's* payload shape is pinned to whatever API
- * version the webhook endpoint itself was configured with in the Stripe
- * Dashboard, independent of which stripe-node version this app's code calls
- * the API with. An endpoint still pinned to a pre-basil version delivers
- * events whose subscription items exist but lack these per-item fields, and
- * `item.current_period_start * 1000` on an undefined field is `NaN` — this
- * falls back the same way a genuinely missing item does, rather than writing
- * an Invalid Date.
- */
-function getSubscriptionPeriod(sub: Stripe.Subscription): {
-  start: Date;
-  end: Date;
-} {
-  const item = sub.items.data[0];
-  if (!item?.current_period_start || !item?.current_period_end) {
-    // Falling back silently would let billing-period drift accumulate
-    // unnoticed (see the comment above), so this is loud even though it's
-    // non-fatal: the webhook still returns 200 rather than failing the event.
-    console.error(
-      `[Webhook] subscription ${sub.id} has no usable per-item billing period` +
-        " (missing item, or the webhook endpoint is still pinned to a" +
-        ' pre-"basil" Stripe API version); falling back to a guessed period.'
-    );
-  }
-  return {
-    start: item?.current_period_start
-      ? new Date(item.current_period_start * 1000)
-      : new Date(),
-    end: item?.current_period_end
-      ? new Date(item.current_period_end * 1000)
-      : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-  };
-}
 
 /**
  * A paid checkout with no account to fulfil it for. Accounts are created only
@@ -192,15 +145,10 @@ export async function POST(req: NextRequest) {
           break;
         }
 
-        // Handle subscription checkouts
-        const session = await findCheckoutSession(stripeObject.id);
-
-        const customerId = session?.customer as string;
-        const priceId = session?.line_items?.data[0]?.price?.id;
+        // Handle subscription checkouts. Which plan, and whether it's still
+        // granted, comes from the subscription itself (syncSubscription below).
+        const customerId = stripeObject.customer as string;
         const userId = stripeObject.client_reference_id;
-        const plan = config.stripe.plans.find((p) => p.priceId === priceId);
-
-        if (!plan) break;
 
         const customer = (await getStripe().customers.retrieve(
           customerId
@@ -221,61 +169,30 @@ export async function POST(req: NextRequest) {
           break;
         }
 
-        // A redelivery of this event (Stripe retries it when the
-        // acknowledgment below fails) finds the subscription already
-        // recorded, and the user updated before it was. Updating them again
-        // could undo a plan change made in the billing portal since.
-        const alreadyRecorded = stripeObject.subscription
-          ? (
-              await db
-                .select({ id: subscriptions.id })
-                .from(subscriptions)
-                .where(eq(subscriptions.stripeSubscriptionId, stripeObject.subscription as string))
-                .limit(1)
-            ).length > 0
-          : false;
-
-        // Update the user's plan. Their Stripe customer is the one the app
-        // created before checkout (lib/checkout.ts), and stays that one: the
-        // customer here is only stored for a user who had none, as after a
-        // Payment Link checkout.
+        // Their Stripe customer is the one the app created before checkout
+        // (lib/checkout.ts), and stays that one: the customer here is only
+        // stored for a user who had none, as after a Payment Link checkout.
         if (user.stripeCustomerId && user.stripeCustomerId !== customerId) {
           logSecondCustomer(stripeObject, user.id, user.stripeCustomerId, customerId);
         }
-        if (!alreadyRecorded) {
-          await db
-            .update(users)
-            .set({
-              plan: plan.tier,
-              stripeCustomerId: sql`coalesce(${users.stripeCustomerId}, ${customerId})`,
-              updatedAt: new Date(),
-            })
-            .where(eq(users.id, user.id));
-        }
+        await db
+          .update(users)
+          .set({
+            stripeCustomerId: sql`coalesce(${users.stripeCustomerId}, ${customerId})`,
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, user.id));
 
-        // Create subscription record
         if (stripeObject.subscription) {
-          const sub = await getStripe().subscriptions.retrieve(
-            stripeObject.subscription as string
-          );
-
-          const period = getSubscriptionPeriod(sub);
-
-          // Unique on stripe_subscription_id (lib/db/schema.ts), so a
-          // redelivered event finds the row it recorded the first time
-          // rather than adding another.
-          await db
-            .insert(subscriptions)
-            .values({
-              userId: user.id,
-              stripeSubscriptionId: sub.id,
-              stripePriceId: priceId!,
-              plan: plan.tier,
-              status: "active",
-              currentPeriodStart: period.start,
-              currentPeriodEnd: period.end,
-            })
-            .onConflictDoNothing({ target: subscriptions.stripeSubscriptionId });
+          const subscriptionId = stripeObject.subscription as string;
+          // Records the subscription, and grants the plan, as Stripe has
+          // them now rather than as they were at checkout: this event may be
+          // a redelivery arriving after the subscription changed or ended.
+          const synced = await syncSubscription(subscriptionId, { userId: user.id });
+          const plan = synced && config.stripe.plans.find((p) => p.tier === synced.tier);
+          // Nothing to acknowledge for a subscription that has already ended
+          // (cancelled before this event arrived) or never started.
+          if (!plan || !synced.entitles) break;
 
           // California's Automatic Renewal Law: acknowledge the subscription
           // with its terms and how to cancel, on whichever delivery of this
@@ -284,18 +201,17 @@ export async function POST(req: NextRequest) {
           const [record] = await db
             .select({ id: subscriptions.id, acknowledgedAt: subscriptions.acknowledgedAt })
             .from(subscriptions)
-            .where(eq(subscriptions.stripeSubscriptionId, sub.id))
+            .where(eq(subscriptions.stripeSubscriptionId, subscriptionId))
             .limit(1);
           if (record && !record.acknowledgedAt) {
             const sent = await sendSubscriptionAcknowledgment({
               to: user.email,
               plan,
-              subscriptionId: sub.id,
+              subscriptionId,
             });
             if (sent === "failed") {
-              // Not the 200 every other error gets below: a 5xx makes Stripe
-              // redeliver the event, and the redelivery sends it. Everything
-              // above is safe to run again.
+              // A 5xx makes Stripe redeliver the event, and the redelivery
+              // sends it. Everything above is safe to run again.
               return NextResponse.json(
                 { error: "Subscription acknowledgment send failed" },
                 { status: 500 }
@@ -317,68 +233,13 @@ export async function POST(req: NextRequest) {
         break;
       }
 
-      case "customer.subscription.updated": {
-        const sub = event.data.object as Stripe.Subscription;
-        const priceId = sub.items?.data[0]?.price?.id;
-        const plan = config.stripe.plans.find((p) => p.priceId === priceId);
-
-        if (plan) {
-          const period = getSubscriptionPeriod(sub);
-
-          // One transaction: subscriptions.plan is per-subscription history,
-          // users.plan is what the rest of the app (settings page,
-          // getPlanLimits) actually reads, and a plan change here —
-          // upgrading or downgrading through the customer portal — left the
-          // latter stale (issue #27). Writing them separately would let a
-          // failure between the two statements reintroduce that exact bug
-          // intermittently, instead of fixing it.
-          await db.transaction(async (tx) => {
-            const updated = await tx
-              .update(subscriptions)
-              .set({
-                plan: plan.tier,
-                stripePriceId: priceId!,
-                status: sub.status === "active" ? "active" : "past_due",
-                currentPeriodStart: period.start,
-                currentPeriodEnd: period.end,
-              })
-              .where(eq(subscriptions.stripeSubscriptionId, sub.id))
-              .returning();
-
-            const subRecord = updated[0];
-            if (subRecord) {
-              await tx
-                .update(users)
-                .set({ plan: plan.tier, updatedAt: new Date() })
-                .where(eq(users.id, subRecord.userId));
-            }
-          });
-        }
-        break;
-      }
-
+      // Whatever changed (plan, status, cancellation), the subscription is
+      // synced from Stripe rather than read off the event, which may be
+      // stale by the time it arrives.
+      case "customer.subscription.updated":
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
-
-        await db
-          .update(subscriptions)
-          .set({ status: "canceled" })
-          .where(eq(subscriptions.stripeSubscriptionId, sub.id));
-
-        // Revert user to free plan
-        const subRecord = await db
-          .select()
-          .from(subscriptions)
-          .where(eq(subscriptions.stripeSubscriptionId, sub.id))
-          .limit(1);
-
-        if (subRecord[0]) {
-          await db
-            .update(users)
-            .set({ plan: "free", updatedAt: new Date() })
-            .where(eq(users.id, subRecord[0].userId));
-        }
-
+        await syncSubscription(sub.id);
         break;
       }
 
@@ -386,8 +247,12 @@ export async function POST(req: NextRequest) {
         break;
     }
   } catch (e: unknown) {
+    // Stripe unreachable, say, or the database. A 5xx makes Stripe redeliver
+    // the event, which every handler above is safe to run again for, rather
+    // than leaving what the app records behind Stripe's state.
     const message = e instanceof Error ? e.message : "Unknown error";
     console.error("stripe error: ", message);
+    return NextResponse.json({ error: "Webhook handler failed" }, { status: 500 });
   }
 
   return NextResponse.json({});

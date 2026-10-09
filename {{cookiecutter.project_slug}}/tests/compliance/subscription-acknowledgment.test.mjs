@@ -215,6 +215,24 @@ test("two deliveries of the same event at once send one acknowledgment", async (
   });
 });
 
+test("a checkout event for a subscription cancelled before it arrived records it and sends nothing", async () => {
+  await asNewUser(async (user) => {
+    const event = subscriptionCompleted(user, plan);
+    const { subscription, customer } = event.data.object;
+    // Stripe redelivers events hours late; by then the subscription has ended.
+    stripe.add({
+      id: subscription,
+      object: "subscription",
+      customer,
+      status: "canceled",
+      items: { object: "list", data: [{ price: { id: plan.priceId } }] },
+    });
+    await deliver(event);
+    assert.ok(await subscriptionRecorded(subscription), "the subscription should be recorded, as canceled");
+    assert.equal(emailsTo(user).length, 0, "no acknowledgment should be sent for a subscription that has already ended");
+  });
+});
+
 // Accounts are created only by Auth.js, behind the age gate (lib/auth.ts), so a
 // paid checkout from someone with no account is logged for the operator to
 // reconcile, never fulfilled by making them one.

@@ -146,7 +146,7 @@ export const createCustomer = async ({
 
 // Every status but these is a subscription the customer still has, paid up
 // or not: the portal, not a second checkout, is where to change it.
-const ENDED_SUBSCRIPTION_STATUSES: Stripe.Subscription.Status[] = ["canceled", "incomplete_expired"];
+export const ENDED_SUBSCRIPTION_STATUSES = ["canceled", "incomplete_expired"] satisfies Stripe.Subscription.Status[];
 
 /** Whether `customerId` has a subscription in Stripe that hasn't ended. */
 export const hasLiveSubscription = async (customerId: string): Promise<boolean> => {
@@ -155,7 +155,7 @@ export const hasLiveSubscription = async (customerId: string): Promise<boolean> 
     status: "all",
     limit: 100,
   });
-  return subscriptions.data.some((sub) => !ENDED_SUBSCRIPTION_STATUSES.includes(sub.status));
+  return subscriptions.data.some((sub) => !(ENDED_SUBSCRIPTION_STATUSES as string[]).includes(sub.status));
 };
 
 /**
