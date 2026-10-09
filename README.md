@@ -581,6 +581,9 @@ add a tool it can call — is in the [agent guide](docs/agent.md).
 | **DaisyUI over custom CSS** | Rapid prototyping with consistent dark theme, easy to override |
 | **`_copy_without_render`** | Prevents Jinja2/TypeScript `{{ }}` conflicts in cookiecutter |
 
+The larger decisions are written up in full, with the context and trade-offs
+behind each one, in the [design record](docs/adr/README.md).
+
 ---
 
 ## Database backups and operations
