@@ -12,7 +12,7 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 ## File structure
 
-This repo uses a **single-context** layout: one root `CONTEXT.md` plus `docs/adr/`. Neither exists yet; that's expected.
+This repo uses a **single-context** layout: one root `CONTEXT.md` plus `docs/adr/`. `docs/adr/` exists; `CONTEXT.md` doesn't yet, and that's expected.
 
 ```
 /
