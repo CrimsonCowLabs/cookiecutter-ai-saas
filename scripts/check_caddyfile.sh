@@ -20,9 +20,11 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 ! grep -qE '\{%|\{\{' "$CADDYFILE" \
   || fail "unrendered Jinja in $CADDYFILE: $(grep -nE '\{%|\{\{' "$CADDYFILE" | head -3)"
 
-# Every request has to reach the app through the proxy.
-grep -q '^[[:space:]]*reverse_proxy app:3000$' "$CADDYFILE" \
-  || fail "$CADDYFILE does not reverse_proxy to app:3000"
+# Every request has to reach the app through the proxy — on the host's loopback,
+# where the app publishes its port, because Caddy runs on the host's network
+# and has no compose service names to resolve.
+grep -q '^[[:space:]]*reverse_proxy 127.0.0.1:3000$' "$CADDYFILE" \
+  || fail "$CADDYFILE does not reverse_proxy to 127.0.0.1:3000"
 
 # Caddy needs the file at a path inside the container, so mount it absolute.
 ABS="$(cd "$(dirname "$CADDYFILE")" && pwd)/$(basename "$CADDYFILE")"

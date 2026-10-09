@@ -1,15 +1,28 @@
 services:
   caddy:
     image: caddy:2-alpine
-    # The only service that publishes ports. Caddy terminates TLS, redirects
-    # HTTP to HTTPS and proxies to `app`, so bringing this stack up is all that
-    # serving the site over HTTPS takes.
-    ports:
-      - "80:80"
-      - "443:443"
-      # HTTP/3. Caddy advertises it via Alt-Svc; without the UDP port clients
-      # retry over TCP, so this is a performance line, not a correctness one.
-      - "443:443/udp"
+    # The front door: Caddy terminates TLS, redirects HTTP to HTTPS and proxies
+    # to `app`, so bringing this stack up is all that serving the site over
+    # HTTPS takes.
+    #
+    # On the host's network rather than behind published ports, so it binds
+    # 80/tcp, 443/tcp and 443/udp (HTTP/3) on the host itself. The host's
+    # firewall is ufw alone — Docker writes no iptables rules there (see
+    # ansible/provision.yml) — so a published port would be relayed by
+    # docker-proxy, and every client would reach Caddy from the same Docker
+    # gateway address. That would put the whole internet in one bucket for the
+    # contact form's per-IP rate limit, and make any IP ban useless. Here Caddy
+    # sees each client's own address and passes it on in X-Forwarded-For.
+    #
+    # The cost is isolation. Caddy used to sit on a network of its own with the
+    # app, which Postgres and Redis never joined, so a compromised proxy had no
+    # route to the database. On the host's network it has the host's routes,
+    # and the host can reach every container's address directly: Postgres
+    # (which still wants its password) and Redis (which has none) are a
+    # connection away. What keeps them from the internet is unchanged — they
+    # publish no port, and nothing from outside is forwarded to a container —
+    # but what keeps them from Caddy is now only Caddy not being compromised.
+    network_mode: host
     environment:
       # Pass-through with no default: unset means the Caddyfile's own default,
       # https://{{ cookiecutter.domain_name }}. Set it to https://localhost to
@@ -21,16 +34,25 @@ services:
       # re-issuing on the next boot, and Let's Encrypt rate-limits that.
       - caddydata:/data
       - caddyconfig:/config
+      # The JSON access log (see the Caddyfile's `log` block), on the host at
+      # logs/caddy/access.log beside this file, where a ban jail can read it.
+      # A bind mount rather than a volume so that the path is a plain file the
+      # host's own tools see. Caddy rotates and bounds it itself; it is not
+      # shipped to `docker compose logs`.
+      - ./logs/caddy:/var/log/caddy
     depends_on:
       - app
-    networks:
-      - caddy-net
     restart: unless-stopped
 
   app:
     image: {{ cookiecutter.project_slug }}-app:latest
-    # No `ports`: the app is reachable only through caddy on caddy-net.
-    #
+    # Published on the host's loopback only, which is where Caddy (on the
+    # host's network) reaches it. Nothing outside the host can: loopback is not
+    # routable, and ufw would refuse port 3000 anyway. Keep the 127.0.0.1 —
+    # without it the port is bound on every address, and only the firewall
+    # would stand between the app and the internet, without TLS.
+    ports:
+      - "127.0.0.1:3000:3000"
     # env_file and nothing else: compose reads the file itself, as the deploy
     # account, and injects the values as environment variables. Mounting it
     # into the container as well would need it readable by the container's own
@@ -43,9 +65,6 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    networks:
-      - caddy-net
-      - default
 
   worker:
     image: {{ cookiecutter.project_slug }}-worker:latest
@@ -132,9 +151,3 @@ volumes:
   redisdata:
   caddydata:
   caddyconfig:
-
-networks:
-  # caddy <-> app only. Postgres and Redis sit on the implicit `default` network,
-  # which the proxy never joins, so the internet-facing container has no route to
-  # the database even if it is compromised.
-  caddy-net:

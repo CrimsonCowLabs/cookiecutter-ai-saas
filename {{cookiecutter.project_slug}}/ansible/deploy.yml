@@ -44,8 +44,8 @@
 #     starts its replacement. A release that cannot start therefore costs the
 #     seconds between the recreate and the rollback, not zero. What is
 #     guaranteed is the end state: the previous release serving again.
-#   * The health gate proves the app boots and answers over the stack's own
-#     network. It says nothing about TLS, because a certificate arrives from an
+#   * The health gate proves the app boots and answers on the loopback port
+#     Caddy proxies to. It says nothing about TLS, because a certificate arrives from an
 #     asynchronous ACME exchange that has not necessarily finished on a first
 #     deploy — which is what the DNS pre-flight is protecting instead.
 
@@ -288,8 +288,8 @@
 
   vars:
     project_root: "{{ playbook_dir | dirname }}"
-    # The compose project name, passed explicitly so that the network names the
-    # migrations and the health probe attach to are predictable rather than
+    # The compose project name, passed explicitly so that the network name the
+    # migrations attach to is predictable rather than
     # derived from whatever directory compose was invoked in.
     compose_project: "{{ project_slug }}"
     compose_file: docker-compose.prod.yml
@@ -487,6 +487,18 @@
         - "{{ compose_file }}"
         - Caddyfile
       register: shipped_config
+
+    - name: Make the directory Caddy's access log is bind-mounted from
+      # docker-compose.prod.yml mounts logs/caddy into the proxy. Docker would
+      # create a missing source itself, but as root and only when the
+      # container starts; made here it exists, at a known path and owner,
+      # before anything — a ban jail included — goes looking for it. Caddy
+      # (root in its container) writes the files in it, 0640.
+      ansible.builtin.file:
+        path: "{{ app_dir }}/logs/caddy"
+        state: directory
+        owner: "{{ deploy_user }}"
+        mode: "0755"
 
     - name: Render .env-production on the host
       # The secrets are decrypted on the control machine and written straight
@@ -738,30 +750,21 @@
             env_files: ["{{ env_file }}"]
             state: present
 
-        - name: Wait for the app to answer inside the stack
-          # The app image doubles as the client: it is already on the host, so
-          # this needs nothing pulled, and `node -e` runs whatever this release
-          # ships. Anything below 500 counts — a redirect or a 404 still means
-          # the server booted, wired up its database pool and is answering.
-          ansible.builtin.command:
-            argv:
-              - docker
-              - run
-              - --rm
-              - --network
-              - "{{ compose_project }}_caddy-net"
-              - "{{ project_slug }}-app:latest"
-              - node
-              - -e
-              - >-
-                fetch('http://app:3000/')
-                .then(r => process.exit(r.status < 500 ? 0 : 1))
-                .catch(() => process.exit(1))
+        - name: Wait for the app to answer where Caddy reaches it
+          # On the host's loopback, where docker-compose.prod.yml publishes the
+          # app's port and Caddy (on the host's network) proxies to it — so
+          # this is the proxy's own path to the app, minus TLS. Anything below
+          # 500 counts: a redirect or a 404 still means the server booted,
+          # wired up its database pool and is answering.
+          ansible.builtin.uri:
+            url: http://127.0.0.1:3000/
+            follow_redirects: none
+            status_code: "{{ range(100, 500) | list }}"
+            timeout: 10
           register: app_probe
-          until: app_probe.rc == 0
+          until: app_probe is succeeded
           retries: "{{ deploy_health_retries }}"
           delay: "{{ deploy_health_delay }}"
-          changed_when: false
 
         - name: Read which services the compose file says must stay up
           # From the file rather than from `docker compose config`, whose

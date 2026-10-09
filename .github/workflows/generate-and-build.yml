@@ -300,6 +300,17 @@ jobs:
             *) grep -q '^GOOGLE_ID=' "$G/.env.example"; grep -q 'MICROSOFT' "$G/.env.example" ;;
           esac
 
+      # Issue #98. The Caddyfile has no flag-dependent Jinja today, but it is
+      # checked under every combination anyway, so one added later cannot
+      # break `caddy fmt` for a combination nobody tried. Then it is run
+      # against a stub upstream: scanner paths blocked before the app, bodies
+      # over their cap refused with 413, event streams unbuffered, and every
+      # refusal marked in the JSON access log.
+      - name: Caddyfile is formatted, valid and refuses junk at the edge
+        run: |
+          scripts/check_caddyfile.sh "$G/Caddyfile"
+          scripts/check_caddy_edge.sh "$G/Caddyfile"
+
       - name: Install dependencies (frozen)
         working-directory: .generated/matrix-app
         run: npm ci --no-audit --no-fund
@@ -384,6 +395,8 @@ jobs:
           scripts/check_caddyfile.sh "$C"
           grep -qF '{$SITE_ADDRESS:https://app.proxy-test.dev}' "$C"
           grep -q '^[[:space:]]*email ops@proxy-test.dev$' "$C"
+          # The flag matrix runs this on files without a global block.
+          scripts/check_caddy_edge.sh "$C"
 
       - name: A reserved example domain leaves the ACME account anonymous
         run: |
@@ -404,8 +417,9 @@ jobs:
           grep -q '^[[:space:]]*email dev@acme-example.com$' "$C"
 
   # Acceptance criteria 2-4: bringing up the production stack is sufficient for
-  # working TLS, HTTP redirects to it, and nothing but the proxy is on the
-  # host's ports. See scripts/check_tls_stack.sh for why localhost stands in for
+  # working TLS, HTTP redirects to it, and nothing but the proxy faces the
+  # network — Caddy on the host's network, the app published on loopback only
+  # (issue #97). See scripts/check_tls_stack.sh for why localhost stands in for
   # the real domain.
   tls-stack:
     name: Production stack serves HTTPS
@@ -612,6 +626,15 @@ jobs:
   # ready state from one command, SSH is key-only with no root login, the
   # firewall exposes only what is needed, unattended upgrades and log rotation
   # are active, and a second run changes nothing.
+  #
+  # Issue #97 adds: Docker writes no iptables or ip6tables rules, so ufw
+  # governs every inbound port — a container publishing an unallowed port is
+  # unreachable from outside — while containers still reach each other by name
+  # and the internet over HTTPS through ufw's forwarding and NAT rules. A host
+  # whose Docker used to manage iptables is closed up the same way by a re-run.
+  # The stack-level half (Caddy logging the client's real address and passing
+  # it on in X-Forwarded-For, the app's port on loopback only) is in the deploy
+  # job, where the stack runs.
   #
   # scripts/check_provisioning.sh does the end-to-end run; this job adds what is
   # true of the generated files before anything is run against a host.

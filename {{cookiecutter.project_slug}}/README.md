@@ -407,7 +407,10 @@ What it leaves behind:
   both off, and the playbook asserts that against `sshd -T` rather than trusting
   the file it just wrote.
 - **A firewall** (`ufw`) denying inbound traffic except SSH, 80, and 443 on both
-  TCP and UDP — the UDP rule is HTTP/3, which Caddy advertises.
+  TCP and UDP — the UDP rule is HTTP/3, which Caddy advertises. It governs
+  every port on the host, a container's published port included: Docker's own
+  iptables management is turned off, and ufw carries the NAT and forwarding
+  rules containers need to reach each other and the internet.
 - **`fail2ban`** banning repeated SSH authentication failures, reading the
   journal rather than the `/var/log/auth.log` this release no longer writes.
 - **Unattended security upgrades**, restricted to security origins, with no
@@ -415,7 +418,8 @@ What it leaves behind:
 - **Log rotation** that covers the three places logs pile up: `logrotate`, a
   capped journal, and a cap on Docker's own container logs.
 - **Docker Engine and the compose plugin**, from Docker's apt repository rather
-  than the distribution's `docker.io`, which ships no `docker compose`.
+  than the distribution's `docker.io`, which ships no `docker compose` — told to
+  leave the firewall to ufw (`"iptables": false` in `/etc/docker/daemon.json`).
 
 The first run connects as root; after it, root cannot log in, so later runs
 connect as the deploy user. The playbook works out which of the two answers
@@ -424,18 +428,31 @@ user is created, given your key, and watched logging in *before* root's access
 is removed — a wrong key fails while you can still get in.
 
 No reverse proxy is installed: Caddy runs in the stack (see [HTTPS](#https)), so
-provisioning's job is to leave 80 and 443 open and unoccupied. One caveat worth
-knowing: Docker publishes ports through its own iptables chain, which `ufw` does
-not filter. That is fine as long as the production stack publishes only 80 and
-443 — publish another and it is exposed whatever `ufw` says.
+provisioning's job is to leave 80 and 443 open and unoccupied.
+
+Because Docker writes no iptables rules, publishing a port in a compose file
+exposes nothing until you also open it in `ufw` — the firewall is the one place
+that decides. The NAT rule for containers lives in `/etc/ufw/after.init` and
+masquerades `docker_address_pool` (`ansible/group_vars/all.yml`), which
+`daemon.json` pins Docker to. On a host provisioned before this, re-running
+`provision.yml` also removes the rules Docker had already written, which
+Docker leaves in place when it stops managing them.
 
 ### HTTPS
 
 TLS needs no step of its own. The production stack runs its own Caddy, so once
 the stack is up, HTTPS is up: Caddy obtains a certificate for
 `{{ cookiecutter.domain_name }}` from Let's Encrypt on first boot, renews it, and
-redirects HTTP to HTTPS. Nothing else publishes a port — the app, PostgreSQL and
-Redis are reachable only from inside the stack.
+redirects HTTP to HTTPS.
+
+Caddy runs on the host's network, binding 80 and 443 itself, so it sees each
+client's real address and passes it to the app in `X-Forwarded-For` — which is
+what the contact form's per-IP rate limit counts by. Behind a published port it
+would see one Docker gateway address for everybody. The app publishes port 3000
+on `127.0.0.1` only, for Caddy; PostgreSQL and Redis publish nothing. The price
+is isolation: on the host's network Caddy can reach every container's address,
+Postgres and Redis included, where it used to share a network with the app
+alone.
 
 Bringing the stack up is `ansible/deploy.yml`: `docker-compose.prod.yml` has no
 build context, so the images have to be built and shipped, and `.env-production`
@@ -485,6 +502,35 @@ curl -k https://localhost/
 
 The redirect, TLS termination and the proxy hop are the production path; only
 the issuer differs.
+
+#### What Caddy refuses, and the access log
+
+Caddy turns away obvious junk before it reaches the app:
+
+- **Scanner probes** — `/.env*`, `/.git/*`, `/.aws/*`, WordPress and phpMyAdmin
+  paths, `/cgi-bin/*`, `/server-status`, anything ending in `.php` — get an
+  empty 404 and a closed connection. The app never sees them. The list is the
+  `@scanner` matcher in `Caddyfile`; keep real routes out of it.
+- **Oversized bodies** get a 413: over 64 KB on `/api/contact`,
+  `/api/age-check` and `/api/unsubscribe`, over 1 MB on the analytics proxy
+  (`/ingest`), over 10 MB anywhere else. If you add file uploads, raise the
+  global cap or give the upload route its own `request_body` block.
+
+The access log is JSON, one request per line, at `logs/caddy/access.log` next to
+the compose file on the host — `/app/{{ cookiecutter.project_slug }}/logs/caddy/`
+after a deploy, unless you changed `app_dir`. It rolls at 10 MiB and keeps five
+gzipped rolls for at most 30 days, so it stays under about 60 MB. It goes only
+there, not to `docker compose logs caddy`. Every request Caddy refused carries a
+`blocked` field — `"scanner"` or `"body_too_large"` — and nothing else does,
+which is what a ban jail should match:
+
+```bash
+sudo jq -c 'select(.blocked) | [.ts, .request.client_ip, .blocked, .request.uri]' \
+  logs/caddy/access.log
+```
+
+The file is root's and mode 0640, because it holds client addresses and full
+request URIs, sign-in link tokens included.
 
 ## The CLI
 
@@ -714,7 +760,7 @@ ansible/
   group_vars/all.yml    # Deploy account, ports, log caps, deploy and backup settings
   vault.yml.example     # Every production secret, to fill in and encrypt
   templates/            # .env-production and the backup units, rendered on the host
-Caddyfile               # TLS and HTTP->HTTPS for {{ cookiecutter.domain_name }}
+Caddyfile               # TLS, HTTP->HTTPS, probe blocking and body caps for {{ cookiecutter.domain_name }}
 ```
 
 ## License

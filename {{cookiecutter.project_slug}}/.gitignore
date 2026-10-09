@@ -27,6 +27,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# Caddy's access log, bind-mounted out of the production stack
+/logs/
+
 # Misc
 .DS_Store
 *.pem

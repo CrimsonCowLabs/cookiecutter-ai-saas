@@ -71,10 +71,12 @@ echo "==> Bringing up the production stack (SITE_ADDRESS=https://localhost)"
 export SITE_ADDRESS=https://localhost
 "${COMPOSE[@]}" up -d --wait "${SERVICES[@]}"
 
-# ── The proxy is the only thing on the host's ports ──────────────────────────
-# `config` resolves the compose file to its normalised form, so this reads the
-# bindings the stack actually asks the host for rather than scraping a `ps`
-# table. Caddy publishes 80 and 443; nothing else publishes at all.
+# ── Only the proxy faces the network ─────────────────────────────────────────
+# `config` resolves the compose file to its normalised form, so this reads what
+# the stack actually asks the host for rather than scraping a `ps` table. Caddy
+# is on the host's network, binding 80 and 443 itself, so that it sees clients'
+# real addresses. The app publishes its port on loopback for Caddy, and nothing
+# else publishes at all.
 leaks="$("${COMPOSE[@]}" config --format json | python3 -c '
 import json, sys
 
@@ -83,21 +85,26 @@ services = json.load(sys.stdin)["services"]
 
 def published(name):
     return sorted(
-        "%s/%s" % (p["published"], p.get("protocol", "tcp"))
+        "%s:%s/%s" % (p.get("host_ip") or "0.0.0.0", p["published"], p.get("protocol", "tcp"))
         for p in services[name].get("ports") or []
     )
 
 
-leaked = {n: published(n) for n in services if n != "caddy" and published(n)}
+problems = []
+if services["caddy"].get("network_mode") != "host":
+    problems.append("caddy is not on the host network (network_mode %r)"
+                    % services["caddy"].get("network_mode"))
+if published("caddy"):
+    problems.append("caddy publishes %s, which host networking makes meaningless" % published("caddy"))
+if published("app") != ["127.0.0.1:3000/tcp"]:
+    problems.append("app publishes %s, expected only 127.0.0.1:3000/tcp" % published("app"))
+leaked = {n: published(n) for n in services if n not in ("caddy", "app") and published(n)}
 if leaked:
-    print("these services publish host ports: %s" % leaked)
-
-missing = {"80/tcp", "443/tcp"} - set(published("caddy"))
-if missing:
-    print("caddy does not publish %s (only %s)" % (sorted(missing), published("caddy")))
+    problems.append("these services publish host ports: %s" % leaked)
+print("; ".join(problems))
 ')"
 [[ -z "$leaks" ]] || fail "$leaks"
-pass "caddy publishes 80 and 443; no other service publishes a host port"
+pass "caddy is on the host network, the app publishes on loopback only, nothing else publishes"
 
 # Caddy provisions the certificate after the container starts, so poll rather
 # than assume the first request lands after TLS is ready.
@@ -138,5 +145,12 @@ https_status="$(curl -sS --cacert "$ROOT_CA" -o /dev/null -w '%{http_code}' http
 [[ "$https_status" == 200 ]] \
   || fail "expected 200 over HTTPS from the proxied app, got $https_status"
 pass "HTTPS serves the proxied app (200) with a certificate that verifies"
+
+# ── The access log reaches the host ──────────────────────────────────────────
+# The compose file bind-mounts logs/caddy; what Caddy logs inside the container
+# is checked by scripts/check_caddy_edge.sh. Here: the file lands on the host.
+# It is root's and 0640, so only its size is visible from this account.
+await "Caddy's access log on the host" test -s logs/caddy/access.log
+pass "Caddy's access log is on the host at logs/caddy/access.log"
 
 echo "==> TLS stack check passed"

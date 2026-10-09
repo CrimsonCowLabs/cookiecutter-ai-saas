@@ -12,9 +12,16 @@
 # tasks.
 #
 # There is no reverse proxy here on purpose. Caddy runs inside
-# docker-compose.prod.yml (see the Caddyfile), so provisioning's part in serving
-# HTTPS is to leave 80 and 443 open and unoccupied — which the firewall tasks do,
-# and the web-server check below enforces.
+# docker-compose.prod.yml (see the Caddyfile), on the host's own network, so
+# provisioning's part in serving HTTPS is to leave 80 and 443 open and
+# unoccupied — which the firewall tasks do, and the web-server check below
+# enforces.
+#
+# ufw is the one thing deciding what reaches this host, containers included.
+# Docker is told not to write iptables rules of its own (see the container
+# runtime section), so a port a container publishes is filtered by ufw like any
+# other, and ufw carries the two rules Docker used to: NAT for containers
+# talking out, and forwarding for traffic that leaves their networks.
 #
 # Running it twice changes nothing: every task is idempotent, and CI asserts a
 # second run reports zero changes.
@@ -92,6 +99,12 @@
       ansible.builtin.service:
         name: docker
         state: restarted
+
+    - name: Reload ufw
+      # Re-reads sysctl.conf and re-runs after.init, which is where the
+      # forwarding sysctl and the containers' NAT rules live.
+      community.general.ufw:
+        state: reloaded
 
     - name: Restart journald
       ansible.builtin.service:
@@ -265,12 +278,12 @@
         quiet: true
 
     # ── Firewall ─────────────────────────────────────────────────────────────
-    # Note what ufw does not cover: Docker publishes ports by writing its own
-    # iptables chain, which ufw's rules do not see. That is survivable here only
-    # because the production stack publishes 80 and 443 and nothing else — the
-    # database and Redis are reachable only from inside the compose network. Add
-    # a published port to that stack and it is exposed regardless of what
-    # follows.
+    # These rules govern every inbound port on the host, including any port a
+    # container publishes: Docker writes no iptables rules here (see "Configure
+    # the Docker daemon" below), so nothing sits in front of ufw. Publishing a
+    # port in a compose file therefore exposes nothing until a rule here
+    # allows it — which is why the app can publish its port on
+    # loopback for Caddy without that being a decision about the internet.
     - name: Deny inbound traffic by default
       community.general.ufw:
         direction: incoming
@@ -280,6 +293,15 @@
       community.general.ufw:
         direction: outgoing
         policy: allow
+
+    - name: Deny forwarded traffic by default
+      # ufw's own default, stated rather than assumed: nothing is routed
+      # through this host unless a rule below says so. In particular nothing
+      # from outside is forwarded to a container's address — a container is
+      # reached through a published port, which the inbound rules govern.
+      community.general.ufw:
+        direction: routed
+        policy: deny
 
     - name: Keep SSH reachable
       # Before the firewall is enabled, so enabling it cannot cut this session.
@@ -304,6 +326,49 @@
         proto: udp
         comment: HTTP/3 (caddy)
       loop: "{{ firewall_udp_ports }}"
+
+    # ── What Docker's own rules used to do ──
+    # Three pieces, all applied by ufw when it starts, so they are in place at
+    # boot before any container is: the kernel forwarding packets at all,
+    # forwarding traffic that leaves a container network, and NAT for traffic
+    # that leaves the host. Without them the app and worker cannot reach
+    # Stripe, the LLM APIs or Resend, and — wherever bridged traffic passes
+    # through iptables — the app cannot reach Postgres or Redis either.
+    - name: Let the kernel forward packets for containers
+      # ufw applies this file on every start, which is what makes forwarding
+      # ufw's decision rather than Docker's. The line ships commented out.
+      ansible.builtin.lineinfile:
+        path: /etc/ufw/sysctl.conf
+        regexp: '^#?\s*net/ipv4/ip_forward\s*='
+        line: net/ipv4/ip_forward=1
+      notify: Reload ufw
+
+    - name: Forward traffic that starts on a container network
+      # br-* is every network compose creates; docker0 is the default bridge a
+      # bare `docker run` uses. Traffic *from* them may go anywhere — between
+      # containers, and out to the internet, as Docker's own rules allowed.
+      # Traffic *to* them from anywhere else is forwarded only as replies,
+      # which ufw's before.rules accept for any established connection.
+      community.general.ufw:
+        rule: allow
+        route: true
+        interface_in: "{{ item }}"
+        comment: containers (docker)
+      loop: [br-+, docker0]
+
+    - name: Masquerade container traffic leaving the host
+      # ufw has no command for NAT, so it goes in after.init, the hook ufw runs
+      # on every start and stop. A *nat section in before.rules would be the
+      # textbook place, but ufw never flushes the nat table, so every reload
+      # would add another copy; this script owns its chain and empties it each
+      # time instead.
+      ansible.builtin.template:
+        src: ufw-after.init.j2
+        dest: /etc/ufw/after.init
+        owner: root
+        group: root
+        mode: "0750"
+      notify: Reload ufw
 
     - name: Enable the firewall
       community.general.ufw:
@@ -458,6 +523,58 @@
         filename: docker
         state: present
 
+    - name: Create Docker's configuration directory
+      # Before the package exists, so that the daemon's very first start reads
+      # the configuration below. See the next task for why that matters.
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Configure the Docker daemon
+      # Written before Docker is installed: the package starts the daemon, and
+      # a daemon that starts even once with iptables management on writes
+      # rules it does not take back when told to stop. (A host where that has
+      # already happened is cleaned up further down.)
+      #
+      # Tell Docker to leave the firewall to ufw — "iptables" and "ip6tables"
+      # off. Left on, Docker publishes a container's port by writing its own
+      # rules ahead of ufw's, so the port is open to the internet whatever ufw
+      # says. Off, a published port is an ordinary listener (docker-proxy) that
+      # ufw filters like any other, and the firewall section above carries the
+      # NAT and forwarding Docker's rules used to provide.
+      #
+      # The address pool is pinned because ufw's NAT rule names it: a network
+      # Docker allocated outside it would have no route out — and left to its
+      # defaults, Docker moves on to 192.168.0.0/16 once its first fifteen
+      # networks are taken. 172.16.0.0/12 is where those defaults start, so a
+      # host that already has networks keeps them inside it; /24 at a time
+      # rather than /16 makes it last.
+      #
+      # And the log caps: json-file logs are otherwise unrotated and
+      # unbounded, and logrotate never sees them.
+      ansible.builtin.copy:
+        content: |
+          {
+            "iptables": false,
+            "ip6tables": false,
+            "default-address-pools": [
+              {"base": "{{ docker_address_pool }}", "size": 24}
+            ],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "{{ docker_log_max_size }}",
+              "max-file": "{{ docker_log_max_file }}"
+            }
+          }
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart docker
+
     - name: Install Docker Engine and the compose plugin
       # From Docker's own repository rather than the distribution's: the
       # packaged docker.io ships no `docker compose`, which deploy.yml and
@@ -472,29 +589,43 @@
         state: present
         update_cache: true
 
-    - name: Bound container log growth
-      # json-file logs are otherwise unrotated and unbounded, and logrotate
-      # never sees them.
-      ansible.builtin.copy:
-        content: |
-          {
-            "log-driver": "json-file",
-            "log-opts": {
-              "max-size": "{{ docker_log_max_size }}",
-              "max-file": "{{ docker_log_max_file }}"
-            }
-          }
-        dest: /etc/docker/daemon.json
-        owner: root
-        group: root
-        mode: "0644"
-      notify: Restart docker
-
     - name: Run Docker at boot
       ansible.builtin.service:
         name: docker
         enabled: true
         state: started
+
+    - name: Restart Docker now if its configuration changed
+      # Not at the end of the play: the clean-up below has to run against a
+      # daemon that has already stopped managing iptables, or it would put
+      # back what this removes.
+      ansible.builtin.meta: flush_handlers
+
+    - name: Remove iptables rules Docker wrote before it was told not to
+      # Only on a host provisioned before Docker was taken off iptables, or
+      # where something turned it back on: Docker does not remove its rules
+      # when it stops managing them, and they keep every port it published
+      # open around ufw until a reboot. Each is in a DOCKER* chain or names a
+      # bridge interface outside ufw's own chains, which is how they are told
+      # apart from ufw's rules for containers. The table is rewritten without
+      # them in one atomic restore, so ufw's and fail2ban's rules are never
+      # absent, even briefly.
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          # A DOCKER* chain, or a rule outside ufw's chains (ufw-*) that
+          # names one or jumps to one, or names a bridge Docker made.
+          docker_rule='^:DOCKER|^-A ([^u]|u[^f]|uf[^w]).*(DOCKER|docker0|br-[0-9a-f]{12})'
+          for family in iptables ip6tables; do
+            rules="$("$family-save")"
+            if grep -qE "$docker_rule" <<<"$rules"; then
+              grep -vE "$docker_rule" <<<"$rules" | "$family-restore"
+              echo "removed Docker's $family rules"
+            fi
+          done
+        executable: /bin/bash
+      register: docker_rule_cleanup
+      changed_when: docker_rule_cleanup.stdout | length > 0
 
     - name: Let the deploy user drive Docker
       # Membership in this group is equivalent to root — it is what lets

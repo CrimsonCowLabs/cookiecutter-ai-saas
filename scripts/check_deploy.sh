@@ -18,6 +18,10 @@
 #   * the DNS pre-flight aborts  — against a name resolving elsewhere, and
 #                                  proceeds against one resolving here
 #   * migrations run             — asserted against the database afterwards
+#   * the proxy sees clients     — Caddy logs a client's own address, and the
+#                                  app rate-limits by it from X-Forwarded-For
+#   * the app is loopback-only   — bound on 127.0.0.1:3000 and unreachable on
+#                                  the host's address
 #   * a failure leaves the       — a deliberately broken release, carrying a
 #     previous version serving     configuration change as well as an app that
 #                                  cannot start, is deployed over a working one;
@@ -90,6 +94,7 @@ cleanup() {
     mv docker-compose.prod.yml.check-backup docker-compose.prod.yml
   fi
   rm -f ansible/vault.yml
+  docker rm -f "${CLIENT:-}" >/dev/null 2>&1 || true
   # Images this check built, so a check does not quietly fill the disk. The
   # layer cache survives, so a re-run is not a cold build.
   docker image ls --format '{{.Repository}}:{{.Tag}}' \
@@ -100,6 +105,9 @@ cleanup() {
 trap cleanup EXIT
 
 throwaway_host_start "deploy-check-$$" "$SSH_PORT" "$HTTP_PORT:80" "$HTTPS_PORT:443"
+# A client with an address of its own, for the checks that need to know who the
+# proxy thinks is asking. See below.
+CLIENT="$TH_NAME-client"
 
 # Images are built for the host's architecture, not the control machine's —
 # which is the whole reason deploy_platform is a variable. A container on an
@@ -329,6 +337,64 @@ serving() {
 }
 await "the stack to serve HTTPS" serving
 pass "the deployed stack answers 200 over HTTPS from outside the host"
+
+# ── Criterion: the proxy sees who is asking ──────────────────────────────────
+# Caddy runs on the host's network rather than behind a published port, because
+# a published port now goes through docker-proxy, which would make every client
+# arrive from the same Docker gateway address — one shared bucket for the
+# contact form's per-IP rate limit, and nothing worth banning.
+#
+# The request above arrives through this machine's own published port, so its
+# source is a gateway either way. A client with an address of its own is
+# needed: a container next to the host on the outer network, whose IP is known
+# and is nobody's gateway. The host's image doubles as it, for its curl.
+container_ip() {
+  docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"
+}
+docker run -d --name "$CLIENT" --entrypoint sleep "$TH_NAME" infinity >/dev/null
+CLIENT_IP="$(container_ip "$CLIENT")"
+HOST_IP="$(container_ip "$TH_NAME")"
+[[ -n $CLIENT_IP && -n $HOST_IP ]] || fail "could not read the client's and the host's addresses"
+client_curl() {
+  docker exec "$CLIENT" curl -sk --max-time 10 --resolve "localhost:443:$HOST_IP" "$@"
+}
+[[ "$(client_curl -o /dev/null -w '%{http_code}' https://localhost/)" == 200 ]] \
+  || fail "the stack does not answer a client at $CLIENT_IP"
+
+# Caddy's access log, as the proxy recorded the request. It is a file on the
+# host (the compose file bind-mounts logs/caddy), not container output, and
+# Caddy writes it 0640 as root — th_exec runs as root, so it can read it.
+await "Caddy to log the request from $CLIENT_IP" \
+  th_exec "grep -qF '\"remote_ip\":\"$CLIENT_IP\"' $APP_DIR/logs/caddy/access.log"
+pass "Caddy's access log records the client's own address ($CLIENT_IP), not a gateway's"
+
+# And X-Forwarded-For as it reached the app, read back from the one place the
+# app acts on it: the contact form's rate-limit key in Redis. The request need
+# not be a valid submission — the limit is counted before anything else.
+# The client also sends an X-Forwarded-For of its own: Caddy trusts no proxy in
+# front of it, so it must replace that header rather than append to it, or any
+# client could pick the bucket it is counted in.
+if [[ -f app/api/contact/route.ts ]]; then
+  client_curl -o /dev/null -X POST -H 'content-type: application/json' \
+    -H 'X-Forwarded-For: 203.0.113.7' -d '{}' https://localhost/api/contact
+  keys="$(th_exec "docker exec ${SLUG}-redis-1 redis-cli --scan --pattern 'rl:contact:*'" | tr -d '\r')"
+  grep -qxF "rl:contact:$CLIENT_IP" <<<"$keys" \
+    || fail "the contact form rate-limited by '${keys:-nothing}', not by the client's address $CLIENT_IP (a forged X-Forwarded-For must not survive)"
+  pass "X-Forwarded-For reaches the app carrying the client's address, so the contact form limits per client"
+fi
+
+# ── Criterion: the app's port is on loopback only ────────────────────────────
+# Caddy reaches the app on 127.0.0.1, so that is the only address it may listen
+# on. Both halves: what the host binds, and what a client can actually reach.
+listeners="$(th_exec "ss -Hltn 'sport = :3000'" | awk '{print $4}' | sort -u | paste -sd, -)"
+[[ "$listeners" == "127.0.0.1:3000" ]] \
+  || fail "the app's port is bound on '$listeners', expected only 127.0.0.1:3000"
+if docker exec "$CLIENT" curl -sS --max-time 5 -o /dev/null "http://$HOST_IP:3000/" 2>/dev/null; then
+  fail "the app answers on $HOST_IP:3000 from outside the host"
+fi
+th_exec "curl -sS --max-time 5 -o /dev/null http://127.0.0.1:3000/" \
+  || fail "the app does not answer on the host's loopback, where Caddy reaches it"
+pass "the app listens on 127.0.0.1:3000 only, and is unreachable from outside the host"
 
 GOOD_APP_IMAGE="$(th_exec "docker images --no-trunc -q $SLUG-app:latest" | tr -d '\r')"
 GOOD_RELEASE="$(th_ssh "$DEPLOY_USER" "sed -n 's/^release: //p' $APP_DIR/RELEASE")"
