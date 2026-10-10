@@ -8,8 +8,7 @@ import { users } from "@/lib/db/schema";
 import { createCustomerPortal } from "@/lib/stripe";
 import { subscriptionCheckout } from "@/lib/checkout";
 import { audit } from "@/lib/audit";
-import { getPlanConfig } from "@/lib/plans";
-import config from "@/config";
+import { checkoutPlan } from "@/lib/plans";
 import type { PlanConfig, PlanTier } from "@/types/config";
 
 /**
@@ -30,25 +29,33 @@ function checkoutFor(userId: string, plan: PlanConfig): Promise<string | null> {
   });
 }
 
+/** Sends the user nowhere for a tier lib/plans.ts's checkoutPlan refuses. */
 export async function createCheckoutAction(tier: PlanTier) {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not authenticated");
 
-  const url = await checkoutFor(session.user.id, getPlanConfig(tier));
+  const plan = checkoutPlan(tier);
+  if (!plan) return;
+
+  const url = await checkoutFor(session.user.id, plan);
 
   if (url) redirect(url);
 }
 
 /**
  * Returns checkout URL (or the billing portal's, for a user already
- * subscribed) instead of redirecting.
+ * subscribed) instead of redirecting; null for a tier refused as
+ * createCheckoutAction refuses it.
  * Use this from client components where redirect() doesn't work.
  */
 export async function getCheckoutUrl(tier: PlanTier): Promise<string | null> {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not authenticated");
 
-  return checkoutFor(session.user.id, getPlanConfig(tier));
+  const plan = checkoutPlan(tier);
+  if (!plan) return null;
+
+  return checkoutFor(session.user.id, plan);
 }
 
 /**
@@ -67,11 +74,8 @@ export async function getCheckoutUrl(tier: PlanTier): Promise<string | null> {
  * subscription checkout (see checkoutFor).
  */
 export async function startCheckoutAction(formData: FormData) {
-  const planId = formData.get("planId");
-  if (typeof planId !== "string" || !planId) return;
-
-  const plan = config.stripe.plans.find((p) => p.tier === planId);
-  if (!plan || !plan.priceId) return;
+  const plan = checkoutPlan(formData.get("planId"));
+  if (!plan) return;
 
   const session = await auth();
   if (!session?.user?.id) return;

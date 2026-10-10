@@ -10,6 +10,7 @@ import {
   hasLiveSubscription,
   ENDED_SUBSCRIPTION_STATUSES,
 } from "@/lib/stripe";
+import { planForPrice } from "@/lib/plans";
 import type { PlanConfig } from "@/types/config";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -98,7 +99,9 @@ async function hasLiveSubscriptionFor(tx: Tx, userId: string, customerId: string
  *     with any subscription checkout they still had open expired first, so
  *     only the newest can be paid.
  *
- * Null when there's nowhere to send them (unknown user, Stripe failed).
+ * Null when there's nowhere to send them (unknown user, Stripe failed), and
+ * for a plan whose price config.ts doesn't list, which is refused before
+ * Stripe is asked for anything.
  */
 export async function subscriptionCheckout({
   userId,
@@ -116,6 +119,13 @@ export async function subscriptionCheckout({
   // Where the billing portal sends them back to.
   returnUrl: string;
 }): Promise<string | null> {
+  if (!planForPrice(plan.priceId)) {
+    console.error(
+      `[Checkout] refused a checkout for price ${plan.priceId || "none"},` +
+        " which no plan in config.ts names."
+    );
+    return null;
+  }
   return asCustomer(userId, async (customerId, tx) => {
     if (await hasLiveSubscriptionFor(tx, userId, customerId)) {
       return createCustomerPortal({ customerId, returnUrl });

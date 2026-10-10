@@ -321,6 +321,15 @@ nothing about renewal.
 - Keep `price`, `currency` and `interval` in `config.ts` equal to the Stripe
   Price each plan's `priceId` points at. The terms quote the config, and the
   customer is charged the Price; if they differ, the terms are wrong.
+- Set each plan's `priceId` to the Price of the environment it runs in (the
+  live one in production), and add a plan to `config.ts` before offering its
+  Price anywhere, the customer portal's plan switching included. Checkout
+  refuses anything but a configured plan's Price. A subscription on a Price
+  `config.ts` doesn't name grants no plan, or keeps the one it had; the
+  webhook logs `[Webhook] … is on price …, which no plan in config.ts names`
+  and audits it as `billing.unknown_price`, with the user, their Stripe
+  customer, the price and the event. When you see either, add the Price to
+  `config.ts`, or move the customer onto a configured one in Stripe.
 - In the Stripe Dashboard, under Settings → Public details, set your Terms of
   Service URL (`https://{{ cookiecutter.domain_name }}/tos`). Stripe refuses to create a
   Checkout Session that requires terms-of-service consent until it is set.

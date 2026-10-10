@@ -143,13 +143,14 @@ async function fulfilOneTimePurchase(session: Stripe.Checkout.Session, userId: s
 
 /**
  * Record paid subscription checkout `session`'s subscription for `user`,
- * grant its plan and acknowledge it. Resolves to "acknowledgment_failed" when
- * the acknowledgment couldn't be sent, so the event can be failed and
- * redelivered.
+ * grant its plan and acknowledge it, as paid `event` reports. Resolves to
+ * "acknowledgment_failed" when the acknowledgment couldn't be sent, so the
+ * event can be failed and redelivered.
  */
 async function fulfilSubscription(
   session: Stripe.Checkout.Session,
-  user: User
+  user: User,
+  event: Stripe.Event
 ): Promise<"done" | "acknowledgment_failed"> {
   // Their Stripe customer is the one the app created before checkout
   // (lib/checkout.ts), and stays that one: the customer here is only stored
@@ -172,7 +173,7 @@ async function fulfilSubscription(
   // Records the subscription, and grants the plan, as Stripe has
   // them now rather than as they were at checkout: this event may be
   // a redelivery arriving after the subscription changed or ended.
-  const synced = await syncSubscription(subscriptionId, { userId: user.id });
+  const synced = await syncSubscription(subscriptionId, { event, userId: user.id });
   const plan = synced && config.stripe.plans.find((p) => p.tier === synced.tier);
   // Nothing to acknowledge for a subscription that has already ended
   // (cancelled before this event arrived) or never started.
@@ -249,7 +250,7 @@ export async function POST(req: NextRequest) {
           await fulfilOneTimePurchase(session, user.id);
           break;
         }
-        if ((await fulfilSubscription(session, user)) === "acknowledgment_failed") {
+        if ((await fulfilSubscription(session, user, event)) === "acknowledgment_failed") {
           // A 5xx makes Stripe redeliver the event, and the redelivery sends
           // it. Everything before it is safe to run again.
           return NextResponse.json(
@@ -301,7 +302,7 @@ export async function POST(req: NextRequest) {
       case "customer.subscription.updated":
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
-        await syncSubscription(sub.id);
+        await syncSubscription(sub.id, { event });
         break;
       }
 

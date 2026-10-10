@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { connectDb, insertTestUser, deleteTestUser, mintSessionCookie } from "../../auth/support.mjs";
 import { startFakeStripe } from "../../compliance/fake-stripe.mjs";
-import { config, deliver, subscriptionCompleted } from "./support.mjs";
+import { RESOLVED_PRICE_ID, config, deliver, subscriptionCompleted } from "./support.mjs";
 
 // Tiers only: which Stripe Price each resolves to doesn't matter here (see
 // ./subscription-lifecycle.test.mjs on why they collide under `next start`).
@@ -234,5 +234,23 @@ test("a user whose subscription was cancelled can check out again, as the same c
     assert.match((await startCheckout(cookie, field, PRO)) ?? "", checkoutUrl);
     assert.equal(stripe.checkouts.at(-1).params.customer, customer);
     assert.equal(customersFor(user).length, 1);
+  });
+});
+
+test("a checkout for anything but a configured, priced plan is refused before Stripe is asked for anything", async () => {
+  await asNewUser(async (user, cookie) => {
+    const field = await upgradeActionField(cookie);
+    const before = { customers: stripe.customers.length, checkouts: stripe.checkouts.length };
+
+    // Server actions are public endpoints: the form's planId is whatever the
+    // request says. The free plan has no price, and a Stripe price id, even a
+    // configured one, is not a plan.
+    for (const planId of ["free", "platinum", RESOLVED_PRICE_ID, "price_someone_elses"]) {
+      assert.equal(await startCheckout(cookie, field, planId), null, `planId ${planId} should be sent nowhere`);
+    }
+
+    assert.equal(stripe.checkouts.length, before.checkouts, "no Checkout Session should be created");
+    assert.equal(stripe.customers.length, before.customers, "nor a Stripe customer");
+    assert.equal(customersFor(user).length, 0);
   });
 });

@@ -3,7 +3,8 @@ import { desc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, subscriptions, subscriptionStatusEnum } from "@/lib/db/schema";
 import { getStripe } from "@/lib/stripe";
-import config from "@/config";
+import { audit } from "@/lib/audit";
+import { planForPrice } from "@/lib/plans";
 import type { PlanTier } from "@/types/config";
 
 type SubscriptionStatus = (typeof subscriptionStatusEnum.enumValues)[number];
@@ -67,12 +68,15 @@ function getSubscriptionPeriod(sub: Stripe.Subscription): {
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+const customerIdOf = (customer: Stripe.Subscription["customer"]) =>
+  typeof customer === "string" ? customer : customer?.id;
+
 /** The user whose Stripe customer is `customer`, if any. */
 async function userWithCustomer(
   tx: Tx,
   customer: Stripe.Subscription["customer"]
 ): Promise<string | undefined> {
-  const customerId = typeof customer === "string" ? customer : customer?.id;
+  const customerId = customerIdOf(customer);
   if (!customerId) return undefined;
   const [user] = await tx
     .select({ id: users.id })
@@ -80,6 +84,39 @@ async function userWithCustomer(
     .where(eq(users.stripeCustomerId, customerId))
     .limit(1);
   return user?.id;
+}
+
+/**
+ * Subscription `sub`, of user `userId`, is on a price no plan in config.ts
+ * names: a price changed in Stripe, a legacy one, or the other environment's.
+ * No redelivery can fix that, so it is made impossible to miss instead,
+ * logged and audited with everything needed to find the customer.
+ */
+async function reportUnknownPrice(
+  sub: Stripe.Subscription,
+  userId: string,
+  priceId: string | undefined,
+  event: Stripe.Event
+) {
+  const customerId = customerIdOf(sub.customer) ?? null;
+  console.error(
+    `[Webhook] ${event.type} ${event.id}: subscription ${sub.id} of user ${userId}` +
+      ` (customer ${customerId ?? "none"}) is on price ${priceId ?? "none"}, which` +
+      " no plan in config.ts names. Add the price to config.ts, or move the" +
+      " customer onto a configured one in Stripe."
+  );
+  await audit({
+    userId,
+    action: "billing.unknown_price",
+    resourceType: "subscription",
+    metadata: {
+      eventId: event.id,
+      eventType: event.type,
+      subscriptionId: sub.id,
+      customerId,
+      priceId: priceId ?? null,
+    },
+  });
 }
 
 /**
@@ -103,15 +140,22 @@ async function userWithCustomer(
  * held across the Stripe call), so the last to finish fetched last: two
  * deliveries at once can't leave an older state written over a newer one.
  *
+ * A subscription on a price config.ts doesn't know (see reportUnknownPrice)
+ * keeps the tier it was recorded with, if any; never recorded, it isn't
+ * recorded now. Either way, `event` is reported, once the sync has committed:
+ * the audit insert takes a connection of its own, which mustn't be waited
+ * for while this one holds the lock.
+ *
  * Resolves to the subscription's tier and whether it grants it, or null if
  * it wasn't recorded. Throws when Stripe can't be reached, so the event can
  * be failed and redelivered.
  */
 export async function syncSubscription(
   stripeSubscriptionId: string,
-  { userId }: { userId?: string } = {}
+  { event, userId }: { event: Stripe.Event; userId?: string }
 ): Promise<{ tier: PlanTier; entitles: boolean } | null> {
-  return db.transaction(async (tx) => {
+  let unknownPrice: Parameters<typeof reportUnknownPrice> | undefined;
+  const synced = await db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${"subscription:" + stripeSubscriptionId}, 0))`
     );
@@ -131,12 +175,10 @@ export async function syncSubscription(
     }
 
     const priceId = sub.items.data[0]?.price?.id;
-    const tier: PlanTier | undefined =
-      config.stripe.plans.find((p) => p.priceId === priceId)?.tier ?? recorded?.plan;
-    if (!priceId || !tier) {
-      console.error(`[Webhook] subscription ${sub.id} is on price ${priceId ?? "none"}, no plan in config.ts; not recorded.`);
-      return null;
-    }
+    const configured = planForPrice(priceId);
+    if (!configured) unknownPrice = [sub, ownerId, priceId, event];
+    const tier: PlanTier | undefined = configured?.tier ?? recorded?.plan;
+    if (!priceId || !tier) return null;
     if (!isStatus(sub.status)) {
       console.error(`[Webhook] subscription ${sub.id} has status ${sub.status}, unknown to the app; not recorded.`);
       return null;
@@ -180,4 +222,6 @@ export async function syncSubscription(
 
     return { tier, entitles: entitles(state) };
   });
+  if (unknownPrice) await reportUnknownPrice(...unknownPrice);
+  return synced;
 }
