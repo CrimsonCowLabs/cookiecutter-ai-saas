@@ -19,17 +19,18 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import fs from "node:fs";
 import { connectDb } from "../../auth/support.mjs";
 import { startFakeStripe } from "../../compliance/fake-stripe.mjs";
 import {
   asNewUser,
+  assertLogged,
   deliver,
   deliverOk,
   oneTimePurchaseCompleted,
   planOf,
   postWebhookEvent,
   subscriptionCompleted,
+  withId,
 } from "./support.mjs";
 
 let stripe;
@@ -43,9 +44,6 @@ after(async () => {
   await db?.end();
 });
 
-/** `event`, given an id of its own, so a redelivery is the same event. */
-const withId = (event) => ({ id: `evt_test_${crypto.randomUUID()}`, ...event });
-
 /** Deliver `event` while Stripe is down, asserting the webhook asks for a retry. */
 async function deliverDuringOutage(event) {
   const end = stripe.outage();
@@ -55,14 +53,6 @@ async function deliverDuringOutage(event) {
   } finally {
     end();
   }
-}
-
-/** Assert the server log has an error line naming each of `names`. */
-function assertLogged(...names) {
-  if (!process.env.SERVER_LOG) return;
-  const log = fs.readFileSync(process.env.SERVER_LOG, "utf8");
-  const line = log.split("\n").find((l) => names.every((n) => l.includes(n)));
-  assert.ok(line, `the server log should have a line naming ${names.join(", ")}`);
 }
 
 async function subscriptionRows(stripeSubscriptionId) {

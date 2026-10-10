@@ -18,10 +18,9 @@
 // DATABASE_URL, FAKE_STRIPE_PORT.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import { connectDb } from "../../auth/support.mjs";
 import { startFakeStripe } from "../../compliance/fake-stripe.mjs";
-import { asNewUser, deliverOk, oneTimePurchaseCompleted } from "./support.mjs";
+import { ONE_TIME_UNIT_AMOUNT, asNewUser, deliverOk, oneTimePurchaseCompleted, withId } from "./support.mjs";
 
 let stripe;
 let db;
@@ -53,7 +52,7 @@ test("a one-time purchase is recorded and grants credits, exactly once even if r
 
     // Given an id, so that delivering it again is Stripe redelivering the
     // identical event (a retry, or a redelivery after a 2xx).
-    const event = { id: `evt_test_${crypto.randomUUID()}`, ...oneTimePurchaseCompleted(stripe, user, { quantity: 2 }) };
+    const event = withId(oneTimePurchaseCompleted(stripe, user, { quantity: 2 }));
     const checkoutSessionId = event.data.object.id;
 
     // First delivery: recorded and granted.
@@ -62,7 +61,7 @@ test("a one-time purchase is recorded and grants credits, exactly once even if r
     let rows = await purchaseRows(checkoutSessionId);
     assert.equal(rows.length, 1, "exactly one purchase row after the first delivery");
     assert.equal(rows[0].quantity, 2);
-    assert.equal(rows[0].amount_total, 3998);
+    assert.equal(rows[0].amount_total, 2 * ONE_TIME_UNIT_AMOUNT);
     assert.equal(rows[0].currency, "usd");
     assert.equal(rows[0].user_id, user.id);
 
