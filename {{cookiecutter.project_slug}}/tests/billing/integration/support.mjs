@@ -94,6 +94,29 @@ export function subscriptionCompleted(stripe, user, { priceId = RESOLVED_PRICE_I
   return { type: "checkout.session.completed", data: { object: session } };
 }
 
+/**
+ * The checkout.session.completed event for `user` buying `quantity` of a
+ * one-time purchase, with its session added to `stripe` (a fake-stripe.mjs
+ * instance), since the webhook looks it up for its line items.
+ */
+export function oneTimePurchaseCompleted(stripe, user, { quantity = 1 } = {}) {
+  const session = {
+    id: `cs_test_${crypto.randomUUID()}`,
+    object: "checkout.session",
+    mode: "payment",
+    client_reference_id: user.id,
+    metadata: { type: "one_time_purchase" },
+    payment_status: "paid",
+    amount_total: 1999 * quantity,
+    currency: "usd",
+  };
+  stripe.add({
+    ...session,
+    line_items: { object: "list", data: [{ quantity, price: { id: "price_test_one_time" } }] },
+  });
+  return { type: "checkout.session.completed", data: { object: session } };
+}
+
 /** Run `fn(user)` as a freshly inserted user of `db`, deleted again afterwards. */
 export async function asNewUser(db, fn) {
   const user = await insertTestUser(db);

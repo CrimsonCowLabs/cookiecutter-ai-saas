@@ -9,47 +9,32 @@
 // redelivers the same event — which it does, on anything but a 2xx response,
 // and sometimes even after one.
 //
-// This branch calls findCheckoutSession() (lib/stripe.ts), which hits the
-// Stripe API scripts/check_billing.sh points the app at (a stand-in that
-// only ./checkout.test.mjs starts, and that knows no such session) — but
-// that function catches its own errors and returns null on any failure, so
-// it needs neither real credentials nor the stand-in. With a
-// null session, the handler falls back to quantity 1 and a null price id —
-// which is exactly what these tests assert on, deterministically.
+// The webhook fetches the checkout session's line items from Stripe for the
+// quantity bought, so the session is added to a stand-in Stripe API
+// (../../compliance/fake-stripe.mjs) first. What happens when Stripe can't
+// be reached is ./handler-failure.test.mjs's.
 //
 // Env vars (see support.mjs for defaults): BASE_URL, STRIPE_WEBHOOK_SECRET,
-// DATABASE_URL.
-import { test } from "node:test";
+// DATABASE_URL, FAKE_STRIPE_PORT.
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import Stripe from "stripe";
-import { connectDb, insertTestUser, deleteTestUser } from "../../auth/support.mjs";
-import { config, postWebhookEvent } from "./support.mjs";
+import { connectDb } from "../../auth/support.mjs";
+import { startFakeStripe } from "../../compliance/fake-stripe.mjs";
+import { asNewUser, deliverOk, oneTimePurchaseCompleted } from "./support.mjs";
 
-const stripe = new Stripe("sk_test_dummy_key_for_offline_signature_tests", {
-  typescript: true,
+let stripe;
+let db;
+before(async () => {
+  stripe = await startFakeStripe();
+  db = await connectDb();
+});
+after(async () => {
+  await stripe?.close();
+  await db?.end();
 });
 
-function oneTimePurchasePayload(checkoutSessionId, userId) {
-  return JSON.stringify({
-    id: `evt_test_${crypto.randomUUID()}`,
-    object: "event",
-    type: "checkout.session.completed",
-    data: {
-      object: {
-        id: checkoutSessionId,
-        object: "checkout.session",
-        client_reference_id: userId,
-        metadata: { type: "one_time_purchase" },
-        payment_status: "paid",
-        amount_total: 1999,
-        currency: "usd",
-      },
-    },
-  });
-}
-
-async function purchaseRows(db, checkoutSessionId) {
+async function purchaseRows(checkoutSessionId) {
   const result = await db.query(
     "select quantity, amount_total, currency, user_id from purchases where stripe_checkout_session_id = $1",
     [checkoutSessionId]
@@ -57,56 +42,36 @@ async function purchaseRows(db, checkoutSessionId) {
   return result.rows;
 }
 
-async function getCredits(db, userId) {
+async function getCredits(userId) {
   const result = await db.query("select credits from users where id = $1", [userId]);
   return result.rows[0]?.credits;
 }
 
 test("a one-time purchase is recorded and grants credits, exactly once even if redelivered", async () => {
-  const db = await connectDb();
-  try {
-    const user = await insertTestUser(db);
-    try {
-      const startingCredits = await getCredits(db, user.id);
-      assert.equal(startingCredits, 0, "a fresh test user should start with no credits");
+  await asNewUser(db, async (user) => {
+    assert.equal(await getCredits(user.id), 0, "a fresh test user should start with no credits");
 
-      const checkoutSessionId = `cs_test_${crypto.randomUUID()}`;
-      const payload = oneTimePurchasePayload(checkoutSessionId, user.id);
-      const signature = stripe.webhooks.generateTestHeaderString({
-        payload,
-        secret: config.webhookSecret,
-      });
+    // Given an id, so that delivering it again is Stripe redelivering the
+    // identical event (a retry, or a redelivery after a 2xx).
+    const event = { id: `evt_test_${crypto.randomUUID()}`, ...oneTimePurchaseCompleted(stripe, user, { quantity: 2 }) };
+    const checkoutSessionId = event.data.object.id;
 
-      // First delivery: recorded and granted.
-      const firstRes = await postWebhookEvent(payload, signature);
-      assert.equal(firstRes.status, 200, `webhook should return 200, got ${firstRes.status}`);
+    // First delivery: recorded and granted.
+    await deliverOk(event);
 
-      let rows = await purchaseRows(db, checkoutSessionId);
-      assert.equal(rows.length, 1, "exactly one purchase row after the first delivery");
-      assert.equal(rows[0].quantity, 1);
-      assert.equal(rows[0].amount_total, 1999);
-      assert.equal(rows[0].currency, "usd");
-      assert.equal(rows[0].user_id, user.id);
+    let rows = await purchaseRows(checkoutSessionId);
+    assert.equal(rows.length, 1, "exactly one purchase row after the first delivery");
+    assert.equal(rows[0].quantity, 2);
+    assert.equal(rows[0].amount_total, 3998);
+    assert.equal(rows[0].currency, "usd");
+    assert.equal(rows[0].user_id, user.id);
 
-      assert.equal(await getCredits(db, user.id), 1, "credits should be granted once");
+    assert.equal(await getCredits(user.id), 2, "credits should be granted once");
 
-      // Stripe redelivers the identical event (retry, or a redelivery after
-      // a 2xx) — the exact same signed payload, sent again.
-      const secondRes = await postWebhookEvent(payload, signature);
-      assert.equal(secondRes.status, 200, `redelivery should still return 200, got ${secondRes.status}`);
+    await deliverOk(event);
 
-      rows = await purchaseRows(db, checkoutSessionId);
-      assert.equal(rows.length, 1, "the redelivery must not create a second purchase row");
-
-      assert.equal(
-        await getCredits(db, user.id),
-        1,
-        "the redelivery must not grant credits a second time"
-      );
-    } finally {
-      await deleteTestUser(db, user.id);
-    }
-  } finally {
-    await db.end();
-  }
+    rows = await purchaseRows(checkoutSessionId);
+    assert.equal(rows.length, 1, "the redelivery must not create a second purchase row");
+    assert.equal(await getCredits(user.id), 2, "the redelivery must not grant credits a second time");
+  });
 });

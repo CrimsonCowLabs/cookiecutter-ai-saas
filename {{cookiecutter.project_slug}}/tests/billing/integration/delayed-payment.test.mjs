@@ -15,10 +15,16 @@
 // DATABASE_URL, FAKE_STRIPE_PORT.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import { connectDb } from "../../auth/support.mjs";
 import { startFakeStripe } from "../../compliance/fake-stripe.mjs";
-import { asNewUser, deliverOk, planOf, stripeSubscription, subscriptionCompleted } from "./support.mjs";
+import {
+  asNewUser,
+  deliverOk,
+  oneTimePurchaseCompleted,
+  planOf,
+  stripeSubscription,
+  subscriptionCompleted,
+} from "./support.mjs";
 
 let stripe;
 let db;
@@ -38,21 +44,7 @@ function asEvent(event, type, payment_status) {
 
 /** checkout.session.completed for a one-time purchase by `user`, paid by bank debit: not paid yet. */
 function oneTimeCompletedUnpaid(user) {
-  return {
-    type: "checkout.session.completed",
-    data: {
-      object: {
-        id: `cs_test_${crypto.randomUUID()}`,
-        object: "checkout.session",
-        mode: "payment",
-        client_reference_id: user.id,
-        metadata: { type: "one_time_purchase" },
-        payment_status: "unpaid",
-        amount_total: 1999,
-        currency: "usd",
-      },
-    },
-  };
+  return asEvent(oneTimePurchaseCompleted(stripe, user), "checkout.session.completed", "unpaid");
 }
 
 /**

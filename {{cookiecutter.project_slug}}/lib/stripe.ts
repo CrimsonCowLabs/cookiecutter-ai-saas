@@ -218,15 +218,3 @@ export const createOneTimeCheckout = async ({
     return null;
   }
 };
-
-export const findCheckoutSession = async (sessionId: string) => {
-  try {
-    const session = await getStripe().checkout.sessions.retrieve(sessionId, {
-      expand: ["line_items"],
-    });
-    return session;
-  } catch (e) {
-    console.error(e);
-    return null;
-  }
-};
