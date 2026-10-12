@@ -4,12 +4,14 @@
 # entitlement converges on Stripe's state whatever order events arrive in
 # (issue #71), and that a delayed (bank debit) payment grants access only once
 # its money arrives (issue #73), and that unknown Stripe prices are refused at
-# checkout and reported by the webhook (issue #74), actually hold, against a
-# really running instance of a generated project — not mocks, and not the
-# route handler imported in-process. See tests/billing/integration/*.test.mjs
-# for what is asserted and why; this script is only the plumbing that gets a
-# real server and a real Postgres in front of it. Mirrors scripts/check_auth.sh
-# almost exactly — read that one first if this needs changing.
+# checkout and reported by the webhook (issue #74), and that a webhook handler
+# that fails asks Stripe to retry and the retry grants it once (issue #75),
+# actually hold, against a really running instance of a generated project —
+# not mocks, and not the route handler imported in-process. See
+# tests/billing/integration/*.test.mjs for what is asserted and why; this
+# script is only the plumbing that gets a real server and a real Postgres in
+# front of it. Mirrors scripts/check_auth.sh almost exactly — read that one
+# first if this needs changing.
 #
 # Usage: scripts/check_billing.sh <generated-project-dir>
 #
@@ -59,9 +61,9 @@ grep -qF "\"${POSTGRES_PORT}:5432\"" docker-compose.yml \
 # default, so a future change to either file fails a test instead of silently
 # passing against a secret nobody checked. STRIPE_SECRET_KEY never has to be
 # a real key: STRIPE_API_BASE points the app's Stripe client at a stand-in
-# API (tests/compliance/fake-stripe.mjs) on FAKE_STRIPE_PORT, which the
-# checkout and subscription lifecycle tests start (one test file at a time,
-# since they share the port). The key
+# API (tests/compliance/fake-stripe.mjs) on FAKE_STRIPE_PORT, which each
+# billing test file that needs it starts (one test file at a time, since they
+# share the port). The key
 # only has to be present, because getStripe() throws if it's unset at all
 # (see lib/stripe.ts's own comment on that). NEXTAUTH_SECRET is the value
 # tests/auth/support.mjs mints the checkout tests' session cookies with.

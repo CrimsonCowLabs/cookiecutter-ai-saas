@@ -4,7 +4,7 @@ import Stripe from "stripe";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, subscriptions, purchases, auditLogs } from "@/lib/db/schema";
-import { getStripe, findCheckoutSession } from "@/lib/stripe";
+import { getStripe } from "@/lib/stripe";
 import { audit } from "@/lib/audit";
 import { sendSubscriptionAcknowledgment } from "@/lib/subscription-acknowledgment";
 import { syncSubscription } from "@/lib/subscription-sync";
@@ -84,8 +84,11 @@ async function checkoutUser(session: Stripe.Checkout.Session): Promise<User | nu
 
 /** Record paid one-time purchase `session` for `userId` and grant its credits, once. */
 async function fulfilOneTimePurchase(session: Stripe.Checkout.Session, userId: string) {
-  const retrieved = await findCheckoutSession(session.id);
-  const lineItem = retrieved?.line_items?.data[0];
+  // Throws if Stripe can't be reached, so the event is redelivered: what was
+  // bought is only on the line items, and a purchase recorded without them
+  // would stay recorded wrong, since the guard below skips every redelivery.
+  const retrieved = await getStripe().checkout.sessions.retrieve(session.id, { expand: ["line_items"] });
+  const lineItem = retrieved.line_items?.data[0];
   const quantity = lineItem?.quantity ?? 1;
 
   // Recording the purchase and granting the credit in one
@@ -314,7 +317,7 @@ export async function POST(req: NextRequest) {
     // the event, which every handler above is safe to run again for, rather
     // than leaving what the app records behind Stripe's state.
     const message = e instanceof Error ? e.message : "Unknown error";
-    console.error("stripe error: ", message);
+    console.error(`[Webhook] ${event.type} event ${event.id} failed; answering 500 so Stripe retries it: ${message}`);
     return NextResponse.json({ error: "Webhook handler failed" }, { status: 500 });
   }
 

@@ -292,6 +292,10 @@ nothing about renewal.
   once in the audit log as `billing.async_payment_failed`; if the customer
   then pays the subscription's invoice another way, the plan follows. Your
   webhook endpoint must send both events.
+  A handler that fails partway (Stripe or the database unreachable) is
+  logged as `[Webhook] <event type> event <event id> failed` and answered
+  500, so Stripe redelivers the event and the redelivery grants what the
+  first delivery would have; the delivery that failed grants nothing.
   `subscriptions.acknowledged_at` records when the
   acknowledgment went out (null until then, and always without Resend).
   On an existing deployment, remove any duplicate rows before applying the

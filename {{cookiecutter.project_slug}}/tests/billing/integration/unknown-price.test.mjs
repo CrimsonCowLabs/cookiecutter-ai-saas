@@ -16,10 +16,17 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import fs from "node:fs";
 import { connectDb } from "../../auth/support.mjs";
 import { startFakeStripe } from "../../compliance/fake-stripe.mjs";
-import { asNewUser, deliverOk, planOf, stripeSubscription, subscriptionCompleted } from "./support.mjs";
+import {
+  asNewUser,
+  assertLogged,
+  deliverOk,
+  planOf,
+  stripeSubscription,
+  subscriptionCompleted,
+  withId,
+} from "./support.mjs";
 
 let stripe;
 let db;
@@ -34,23 +41,12 @@ after(async () => {
 
 const unknownPrice = () => `price_unknown_${crypto.randomUUID()}`;
 
-/** `event`, given an id of its own to find it by. */
-const withId = (event) => ({ id: `evt_test_${crypto.randomUUID()}`, ...event });
-
 async function unknownPriceAudits(eventId) {
   const { rows } = await db.query(
     "select user_id, metadata from audit_logs where action = 'billing.unknown_price' and metadata->>'eventId' = $1",
     [eventId]
   );
   return rows;
-}
-
-/** Assert the server log has an error line naming each of `names`. */
-function assertLogged(...names) {
-  if (!process.env.SERVER_LOG) return;
-  const log = fs.readFileSync(process.env.SERVER_LOG, "utf8");
-  const line = log.split("\n").find((l) => names.every((n) => l.includes(n)));
-  assert.ok(line, `the server log should have a line naming ${names.join(", ")}`);
 }
 
 test("a paid checkout for an unknown price is acknowledged, grants nothing, and is logged and audited", async () => {

@@ -17,7 +17,8 @@
 //   - creating a billing portal session, recorded and handed back a URL here;
 //   - listing a customer's subscriptions, out of those a test added;
 //   - retrieving an object a test added beforehand, by its id, whatever its
-//     type.
+//     type;
+//   - during an outage a test starts, every request, with a 503.
 //
 // Idempotency-Key headers are ignored, so every Customer the app asks for is
 // a new one: what the checkout tests prove is that the app itself never asks
@@ -36,7 +37,7 @@ const TIMEOUT_MS = 15_000;
 const CUSTOMER_LATENCY_MS = 100;
 
 /**
- * Start the fake API. Returns { nextCheckout, add, holdNextCheckout,
+ * Start the fake API. Returns { nextCheckout, add, holdNextCheckout, outage,
  * customers, checkouts, portals, close }:
  *
  *   nextCheckout() — resolves with the parameters of the next Checkout
@@ -51,6 +52,9 @@ const CUSTOMER_LATENCY_MS = 100;
  *   holdNextCheckout() — keep the next Checkout Session the app asks for
  *     waiting, for a test of what happens meanwhile: { reached, release }.
  *
+ *   outage() — answer every request with a 503, as Stripe does when it is
+ *     having trouble, until the function it returns is called.
+ *
  *   customers, checkouts, portals — every Customer, Checkout Session and
  *     billing portal session the app has created so far, in order:
  *     { id, params } plus, for a checkout, its `status` ("open" until
@@ -64,6 +68,7 @@ export async function startFakeStripe() {
   const checkouts = [];
   const portals = [];
   let created = 0;
+  let down = false;
 
   const list = (data) => ({ object: "list", data, has_more: false, url: "" });
 
@@ -75,6 +80,7 @@ export async function startFakeStripe() {
         res.writeHead(status, { "content-type": "application/json" });
         res.end(JSON.stringify(value));
       };
+      if (down) return json(503, { error: { type: "api_error", message: "fake Stripe: outage" } });
       const url = new URL(req.url, "http://fake");
       const params = Object.fromEntries(new URLSearchParams(body));
       const route = `${req.method} ${url.pathname}`;
@@ -160,6 +166,12 @@ export async function startFakeStripe() {
         return released;
       });
       return { reached, release };
+    },
+    outage() {
+      down = true;
+      return () => {
+        down = false;
+      };
     },
     customers,
     checkouts,

@@ -5,6 +5,7 @@
 // than duplicating them here.
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import Stripe from "stripe";
 import { insertTestUser, deleteTestUser } from "../../auth/support.mjs";
 
@@ -39,6 +40,20 @@ export async function postWebhookEvent(payload, signature) {
 
 // Only used to sign events locally; never talks to Stripe.
 const signer = new Stripe("sk_test_dummy_key_for_offline_signature_tests");
+
+/** `event`, given an id of its own: to find it by, or to deliver it again as the same event. */
+export const withId = (event) => ({ id: `evt_test_${crypto.randomUUID()}`, ...event });
+
+/**
+ * Assert the app's log has a line naming each of `names`. A no-op unless
+ * SERVER_LOG names the log file, as scripts/check_billing.sh sets it.
+ */
+export function assertLogged(...names) {
+  if (!process.env.SERVER_LOG) return;
+  const log = fs.readFileSync(process.env.SERVER_LOG, "utf8");
+  const line = log.split("\n").find((l) => names.every((n) => l.includes(n)));
+  assert.ok(line, `the server log should have a line naming ${names.join(", ")}`);
+}
 
 /** POST `event` to the webhook, signed the way Stripe signs it. */
 export function deliver(event) {
@@ -91,6 +106,32 @@ export function subscriptionCompleted(stripe, user, { priceId = RESOLVED_PRICE_I
     { id: session.customer, object: "customer", email: user.email },
     stripeSubscription(session.subscription, { customer: session.customer, priceId })
   );
+  return { type: "checkout.session.completed", data: { object: session } };
+}
+
+// What one unit of oneTimePurchaseCompleted's purchase costs, in cents.
+export const ONE_TIME_UNIT_AMOUNT = 1999;
+
+/**
+ * The checkout.session.completed event for `user` buying `quantity` of a
+ * one-time purchase, with its session added to `stripe` (a fake-stripe.mjs
+ * instance), since the webhook looks it up for its line items.
+ */
+export function oneTimePurchaseCompleted(stripe, user, { quantity = 1 } = {}) {
+  const session = {
+    id: `cs_test_${crypto.randomUUID()}`,
+    object: "checkout.session",
+    mode: "payment",
+    client_reference_id: user.id,
+    metadata: { type: "one_time_purchase" },
+    payment_status: "paid",
+    amount_total: ONE_TIME_UNIT_AMOUNT * quantity,
+    currency: "usd",
+  };
+  stripe.add({
+    ...session,
+    line_items: { object: "list", data: [{ quantity, price: { id: "price_test_one_time" } }] },
+  });
   return { type: "checkout.session.completed", data: { object: session } };
 }
 
