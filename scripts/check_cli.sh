@@ -396,6 +396,16 @@ for name in inventory vault ssh; do
 done
 pass "config reports the inventory, the vault and SSH reachability as ok — using only ~/.ssh/config"
 
+# A freshly generated config.ts still has its REPLACE_WITH_ legal settings:
+# config warns about each, and still concludes it looks good.
+for name in legal.marketingPostalAddress legal.dmcaAgent legal.accessibility.contactEmail; do
+  grep -qE "^\[warn\][[:space:]]+$name:" <<<"$config_output" \
+    || fail "config did not warn about the placeholder '$name' (see output above)"
+done
+grep -q "Looks good, with 3 warnings" <<<"$config_output" \
+  || fail "config failed on, or did not count, the legal warnings (see output above)"
+pass "config warns about placeholder legal settings without failing on them"
+
 # ── status: docker compose ps, over SSH ──────────────────────────────────────
 echo "==> status"
 status_output="$("${OPSCTL[@]}" status 2>&1)" || true

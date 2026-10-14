@@ -557,7 +557,7 @@ Running it with no arguments lists what it can do:
 
 | Command | What it does |
 |---------|--------------|
-| `opsctl config` | First-run check: is a host configured, is `ansible/vault.yml` encrypted, does the host answer over SSH. Observes only — changes nothing |
+| `opsctl config` | First-run check: is a host configured, is `ansible/vault.yml` encrypted, does the host answer over SSH. Also warns about [legal settings](docs/compliance.md#the-legal-settings) in `config.ts` still left as placeholders. Observes only — changes nothing |
 | `opsctl status` | `docker compose ps` on the host |
 | `opsctl logs <service>` | `docker compose logs`; every argument passes straight through, so `-f` follows and `--tail=100` limits, exactly as it would locally |
 | `opsctl shell <service> [command]` | `docker compose exec -it`; defaults to `sh` when no command is given |
@@ -566,7 +566,11 @@ Running it with no arguments lists what it can do:
 even start", not "will a deploy succeed" (no DNS check, no disk space, no
 migrator image). Run it first on a fresh clone; a placeholder host or a
 plaintext vault is refused by name rather than surfacing as a confusing
-failure three commands later.
+failure three commands later. Placeholder legal settings (the marketing
+postal address, the DMCA agent, the accessibility contact, an unset minimum
+age) are warnings, not failures, so a fresh clone still works for local
+development and CI; each names the setting and the section of
+[docs/compliance.md](docs/compliance.md) that says what to put there.
 
 Those four are read-only. The rest change the host, and each wraps a playbook
 or tool this README already documents rather than reimplementing it — there

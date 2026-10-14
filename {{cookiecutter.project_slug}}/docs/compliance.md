@@ -15,7 +15,11 @@ still owe a lot.
 
 Everything an operator has to supply lives in the `legal` section of
 `config.ts`. Each string ships as a `REPLACE_WITH_...` placeholder; replace
-every one before you launch.
+every one before you launch. `opsctl config` and `opsctl preflight` warn about
+the marketing postal address, the DMCA agent, the accessibility contact and
+an unset minimum age while they are still placeholders. The warnings do not
+fail either command. They don't check `accessibility.reviewDate`,
+`consentTextVersion` or the other settings, so check those yourself.
 
 | Setting | What it is |
 |---------|------------|
