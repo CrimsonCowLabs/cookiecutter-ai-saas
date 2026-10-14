@@ -512,7 +512,7 @@ an `ansible-playbook` command remembered over SSH — see the
 | Command | Description |
 |---------|-------------|
 | `opsctl` | List every command |
-| `opsctl config` | First-run check: host configured, vault encrypted, SSH reachable |
+| `opsctl config` | First-run check: host configured, vault encrypted, SSH reachable; warns about placeholder legal settings |
 | `opsctl status` | Container status on the host |
 | `opsctl logs <service>` | Logs from the host (`-f` to follow) |
 | `opsctl shell <service>` | An interactive shell in a running service |

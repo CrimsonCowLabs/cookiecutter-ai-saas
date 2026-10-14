@@ -521,7 +521,7 @@ opsctl        # no arguments: lists every command
 
 | Command | What it does |
 |---------|--------------|
-| `opsctl config` | First-run check: is a host configured, is the vault encrypted, does it answer over SSH. Observes only |
+| `opsctl config` | First-run check: is a host configured, is the vault encrypted, does it answer over SSH. Warns about legal settings in `config.ts` still left as placeholders. Observes only |
 | `opsctl status` | Container status on the host (`docker compose ps`) |
 | `opsctl logs <service>` | Logs from the host; arguments pass straight through, so `-f` follows |
 | `opsctl shell <service>` | An interactive shell in a running service (`docker compose exec -it`) |

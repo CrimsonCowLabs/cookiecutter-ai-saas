@@ -27,10 +27,14 @@
 // A placeholder inventory address is also `config`'s to catch by name;
 // deploy.yml would otherwise report it as an ordinary DNS resolution failure,
 // which is correct but less immediately actionable.
+//
+// `config`'s legal-readiness warnings (placeholder legal settings in
+// config.ts) come along with its checks unchanged. They are warnings, so they
+// never stop a preflight from passing.
 
 import { findProjectRoot } from "../inventory";
 import { buildPlaybookArgv, runLocal } from "../ansible";
-import { runConfigChecks, printConfigChecks } from "./config";
+import { runConfigChecks, printConfigChecks, warningSummary } from "./config";
 import type { CliCommand } from "../types";
 
 export const preflightCommand: CliCommand = {
@@ -45,7 +49,7 @@ export const preflightCommand: CliCommand = {
       return 1;
     }
 
-    console.log("==> opsctl config's own checks (inventory, vault, SSH reachability)\n");
+    console.log("==> opsctl config's own checks (inventory, vault, SSH reachability, legal settings)\n");
     const checks = await runConfigChecks(projectRoot);
     const configFailures = printConfigChecks(checks);
 
@@ -61,7 +65,7 @@ export const preflightCommand: CliCommand = {
       );
       return 1;
     }
-    console.log("\nLooks good — a deploy can proceed.");
+    console.log(`\nLooks good${warningSummary(checks)} — a deploy can proceed.`);
     return 0;
   },
 };
