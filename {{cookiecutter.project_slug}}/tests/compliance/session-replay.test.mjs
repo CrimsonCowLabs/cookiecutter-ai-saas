@@ -115,7 +115,7 @@ async function captured(count) {
 }
 
 /** Assert that, over QUIET_MS, no recording PostHog received since `since` says `text`. */
-async function neverRecorded(text, since, why) {
+async function assertNotRecorded(text, since, why) {
   await sleep(QUIET_MS);
   const leaks = posthog.recordings(since).filter((r) => r.includes(text));
   assert.equal(leaks.length, 0, `${why}, but a recording containing "${text}" reached PostHog`);
@@ -194,10 +194,11 @@ test("recording starts only after its own consent, and never captures what is ty
     // What a visitor types into any input, and text the app marks as
     // sensitive, never leave the browser.
     const typed = marker("typed-secret");
+    const typedDigits = `${process.pid}${Date.now()}`;
     const sensitive = marker("marked-sensitive");
     await page.evaluate((sensitive) => {
       const form = document.createElement("form");
-      for (const type of ["text", "email", "password", "search"]) {
+      for (const type of ["text", "email", "password", "search", "tel", "number", "url"]) {
         const input = document.createElement("input");
         input.type = type;
         input.name = `probe-${type}`;
@@ -215,12 +216,16 @@ test("recording starts only after its own consent, and never captures what is ty
       (document.querySelector("main") ?? document.body).append(form);
     }, sensitive);
     for (const field of await page.$$("form input[name^=probe], form textarea[name^=probe]")) {
-      await field.type(`${typed}@example.com`);
+      // A number field takes only digits.
+      const type = await field.evaluate((el) => el.type);
+      await field.type(type === "number" ? typedDigits : `${typed}@example.com`);
     }
     // Once this is in a recording, so is everything before it.
     await recordingRuns(page, since);
 
-    const leaks = posthog.recordings(since).filter((r) => r.includes(typed) || r.includes(sensitive));
+    const leaks = posthog.recordings(since).filter(
+      (r) => r.includes(typed) || r.includes(typedDigits) || r.includes(sensitive)
+    );
     assert.equal(leaks.length, 0, "typed input or text marked data-mask reached PostHog in a recording");
   });
 });
@@ -236,7 +241,9 @@ test("recording never runs on the sign-in, sign-up, billing or settings pages", 
     });
   }
 
-  // Billing and the account settings share one page.
+  // Billing and the account settings share one page, which only exists with
+  // Stripe.
+  if (!exists("dashboard/settings")) return;
   await asSignedInUser(async (session) => {
     const since = await posthog.settled();
     await open("/dashboard/settings", { cookie: [RECORDING_CONSENT, session] }, async ({ page }) => {
@@ -262,8 +269,8 @@ test("recording stops when the visitor moves to a page that is never recorded", 
     const heading = await page.$eval("main h1", (el) => el.textContent.trim());
     const after = marker("after-navigation");
     await addText(page, after);
-    await neverRecorded(after, since, "recording should stop on /sign-in");
-    await neverRecorded(heading, since, "the sign-in page's content should never be recorded");
+    await assertNotRecorded(after, since, "recording should stop on /sign-in");
+    await assertNotRecorded(heading, since, "the sign-in page's content should never be recorded");
   });
 });
 
@@ -283,7 +290,7 @@ test("withdrawing recording consent stops recording at once", onlyWhenOn, async 
     await clickButton(page, CONTROLS, "Turn recording off");
     const after = marker("after-withdrawal");
     await addText(page, after);
-    await neverRecorded(after, since, "nothing should be recorded after recording consent is withdrawn");
+    await assertNotRecorded(after, since, "nothing should be recorded after recording consent is withdrawn");
 
     // It can be turned back on from the same place.
     await clickButton(page, CONTROLS, "Turn recording on");
@@ -293,6 +300,6 @@ test("withdrawing recording consent stops recording at once", onlyWhenOn, async 
     await clickButton(page, CONTROLS, "Turn analytics off");
     const afterAnalytics = marker("after-analytics-off");
     await addText(page, afterAnalytics);
-    await neverRecorded(afterAnalytics, since, "nothing should be recorded once analytics is off");
+    await assertNotRecorded(afterAnalytics, since, "nothing should be recorded once analytics is off");
   });
 });

@@ -70,20 +70,25 @@ export default function AnalyticsPage() {
           <p>
             <strong className="text-base-content">Session recording, only if you ask for it.</strong>{" "}
             We can also record your visits, to replay how a page was used and
-            find what is confusing or broken. It is a separate choice from
-            analytics, it is off unless you tick &ldquo;Also record my
-            visits&rdquo; or use the controls below, and it needs analytics on
-            too. A recording captures the pages you see, where you move,
-            click and scroll, but never what you type: every field you type
-            in is replaced with asterisks in your browser before anything is
-            sent. We never record the sign-in and sign-up pages or your
-            account and billing settings. Recordings go to PostHog the same
-            way as the measurements below, and are kept for the same time.
+            find what is confusing or broken. A recording shows far more than
+            a page count, so it is off unless you turn it on yourself: tick
+            &ldquo;Also record my visits&rdquo; or use the controls below. It
+            is a separate choice from analytics, and needs analytics on too. A
+            recording captures the pages you see, where you move, click and
+            scroll, but never what you type: every field you type in is
+            replaced with asterisks in your browser before anything is sent,
+            and so is any text we mark as private. We never record the sign-in
+            and sign-up pages or your account and billing settings. Recordings
+            go to PostHog the same way as the measurements below, and are kept
+            for the same time.
           </p>
         ) : (
           <p>
             <strong className="text-base-content">No session recording.</strong>{" "}
-            We don&apos;t record your screen or replay your visits.
+            We don&apos;t record your screen or replay your visits. Recording
+            can capture far more than which pages you view, so it stays off
+            unless we decide we need it, and even then only for visitors who
+            agree to it separately.
           </p>
         )}
         <p>

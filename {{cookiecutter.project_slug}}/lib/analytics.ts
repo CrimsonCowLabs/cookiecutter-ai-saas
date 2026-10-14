@@ -28,9 +28,13 @@ let starting: Promise<void> | null = null;
  */
 const NEVER_RECORDED = ["/sign-in", "/sign-up", "/magic-link", "/dashboard/settings"];
 
-/** Whether the page at `pathname` must never be recorded. */
-export function neverRecorded(pathname: string): boolean {
-  return NEVER_RECORDED.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+/**
+ * Whether the page at `pathname` may be recorded right now: the visitor
+ * agreed to recording (and analytics), and it isn't a page that never is.
+ */
+function mayRecord(pathname: string): boolean {
+  const never = NEVER_RECORDED.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  return !never && mayRun("recording");
 }
 
 // The page the visitor is on, as the router last reported it to
@@ -110,7 +114,7 @@ export function startAnalytics(key: string): Promise<void> {
       // recorded, in case one is still buffered when either goes.
       before_send: (event) => {
         if (!event || !mayRun("analytics")) return null;
-        if (event.event === "$snapshot" && !(mayRun("recording") && !neverRecorded(location.pathname))) return null;
+        if (event.event === "$snapshot" && !mayRecord(location.pathname)) return null;
         return event;
       },
       // Send each event as it happens rather than queueing them for a few
@@ -138,7 +142,7 @@ export function startAnalytics(key: string): Promise<void> {
 export function syncRecording(pathname: string) {
   currentPath = pathname;
   if (!posthog) return;
-  if (!mayRun("recording") || neverRecorded(pathname)) {
+  if (!mayRecord(pathname)) {
     posthog.stopSessionRecording();
     return;
   }
@@ -148,7 +152,7 @@ export function syncRecording(pathname: string) {
   recorderLoaded ??= import("posthog-js/dist/lazy-recorder");
   void recorderLoaded.then(() => {
     // The visitor may have moved on, or changed their mind, meanwhile.
-    if (posthog && currentPath === pathname && mayRun("recording") && !neverRecorded(pathname)) {
+    if (posthog && currentPath === pathname && mayRecord(pathname)) {
       posthog.startSessionRecording();
     }
   });
