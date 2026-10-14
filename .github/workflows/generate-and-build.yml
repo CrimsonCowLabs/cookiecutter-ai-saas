@@ -259,6 +259,11 @@ jobs:
             test ! -e "$G/lib/consent.ts" && test ! -e "$G/lib/analytics.ts"
             test ! -e "$G/components/consent" && test ! -e "$G/app/ingest"
             test ! -e "$G/tests/compliance/analytics-consent.test.mjs" && test ! -e "$G/tests/compliance/fake-posthog.mjs"
+            test ! -e "$G/tests/compliance/session-replay.test.mjs"
+            if grep -nE 'sessionReplay|AnalyticsConfig' "$G/config.ts" "$G/types/config.ts"; then
+              echo "The session-replay switch survived analytics=none" >&2
+              exit 1
+            fi
             if grep -rniE 'posthog' "$G/package.json" "$G/package-lock.json" "$G/app" "$G/components" "$G/lib" "$G/middleware.ts" "$G/.env.example" "$G/next.config.ts"; then
               echo "PostHog survived analytics=none" >&2
               exit 1
@@ -275,6 +280,9 @@ jobs:
             test -e "$G/lib/consent.ts" && test -e "$G/lib/analytics.ts"
             test -d "$G/components/consent" && test -e "$G/app/ingest/[...path]/route.ts"
             test -e "$G/tests/compliance/analytics-consent.test.mjs" && test -e "$G/tests/compliance/fake-posthog.mjs"
+            test -e "$G/tests/compliance/session-replay.test.mjs"
+            # Session replay ships switched off (issue #86).
+            grep -q 'sessionReplay: false,' "$G/config.ts"
             test -e "$G/app/(main)/legal/analytics/page.tsx"
             grep -q '"posthog-js":' "$G/package.json" && grep -q '"node_modules/posthog-js":' "$G/package-lock.json"
             grep -q '^POSTHOG_KEY=' "$G/.env.example"
@@ -530,6 +538,13 @@ jobs:
   # join the axe audit, keyboard checks included. Hence the matrix: the
   # default answers (analytics=none, where /legal/analytics says nothing is
   # tracked and no banner exists) and analytics=posthog.
+  # Issue #86 (session replay) adds tests/compliance/session-replay.test.mjs:
+  # with analytics.sessionReplay off (the default), accepting analytics, or
+  # even a cookie saying yes to recording, records nothing; turned on, the
+  # posthog row reruns it with the stand-in PostHog playing a project that
+  # accepts recordings: recording starts only after its own, unticked
+  # consent, typed input and data-mask text never reach PostHog, sign-in,
+  # sign-up and settings are never recorded, and withdrawing stops it.
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an
@@ -577,6 +592,22 @@ jobs:
           sed -i 's/minimumAge: 13,/minimumAge: 16,/' config.ts
           grep -q 'minimumAge: 16,' config.ts
           scripts/check_compliance.sh tests/compliance/age-gate.test.mjs tests/compliance/legal-pages.test.mjs
+
+      # Session replay ships off, which the run above proves records nothing.
+      # Turned on, it records only after its own consent, never what is
+      # typed, and never on the sign-in, sign-up or settings pages; the
+      # banner, with its extra choice, must still pass the analytics and
+      # accessibility checks.
+      - name: Turning session replay on records only with consent, masked
+        if: matrix.analytics == 'posthog'
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        working-directory: .generated-compliance/compliance-app
+        run: |
+          sed -i 's/sessionReplay: false,/sessionReplay: true,/' config.ts
+          grep -q 'sessionReplay: true,' config.ts
+          scripts/check_compliance.sh tests/compliance/session-replay.test.mjs \
+            tests/compliance/analytics-consent.test.mjs tests/compliance/accessibility.test.mjs
 
   # Acceptance criteria for issue #27 (make the billing flow work end to
   # end): subscription lifecycle webhooks move users between plans correctly,

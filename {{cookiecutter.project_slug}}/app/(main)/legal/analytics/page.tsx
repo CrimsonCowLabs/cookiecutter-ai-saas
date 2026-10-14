@@ -63,9 +63,29 @@ export default function AnalyticsPage() {
           screen size, and a random identifier stored in your browser (a cookie
           and local storage named after our PostHog project, beginning
           &ldquo;ph_&rdquo;) so that your visits can be counted together. We
-          don&apos;t record what you click or type, we don&apos;t record your
-          screen, and we don&apos;t link these measurements to your account.
+          don&apos;t record what you click or type, and we don&apos;t link
+          these measurements to your account.
         </p>
+        {config.analytics.sessionReplay ? (
+          <p>
+            <strong className="text-base-content">Session recording, only if you ask for it.</strong>{" "}
+            We can also record your visits, to replay how a page was used and
+            find what is confusing or broken. It is a separate choice from
+            analytics, it is off unless you tick &ldquo;Also record my
+            visits&rdquo; or use the controls below, and it needs analytics on
+            too. A recording captures the pages you see, where you move,
+            click and scroll, but never what you type: every field you type
+            in is replaced with asterisks in your browser before anything is
+            sent. We never record the sign-in and sign-up pages or your
+            account and billing settings. Recordings go to PostHog the same
+            way as the measurements below, and are kept for the same time.
+          </p>
+        ) : (
+          <p>
+            <strong className="text-base-content">No session recording.</strong>{" "}
+            We don&apos;t record your screen or replay your visits.
+          </p>
+        )}
         <p>
           <strong className="text-base-content">Who receives it.</strong>{" "}
           PostHog, Inc. stores and processes it for us, as our processor, and
@@ -91,7 +111,8 @@ export default function AnalyticsPage() {
           <strong className="text-base-content">Changing your mind.</strong>{" "}
           Use the controls below, or &ldquo;Privacy choices&rdquo; at the
           bottom of the home page, at any time. Turning analytics off stops it
-          at once and deletes what PostHog stored in your browser.
+          at once, and recording with it, and deletes what PostHog stored in
+          your browser.
         </p>
         <AnalyticsChoices />
         {/* cc:end analytics */}

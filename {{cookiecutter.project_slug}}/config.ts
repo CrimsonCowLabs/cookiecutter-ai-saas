@@ -92,6 +92,16 @@ const config = {
     loginUrl: "/sign-in",
     callbackUrl: "/dashboard",
   },
+  // cc:begin analytics
+  analytics: {
+    // Session replay records what visitors do on a page, to play it back.
+    // Off, it never runs. On, visitors are asked about it separately from
+    // analytics, and it runs only for those who say yes, with everything
+    // they type hidden. Read docs/compliance.md, "Session recording", before
+    // turning it on.
+    sessionReplay: false,
+  },
+  // cc:end analytics
   // Replace every REPLACE_WITH_ value before you launch. See
   // docs/compliance.md, which says what each one is for and where to get it.
   legal: {

@@ -579,10 +579,11 @@ October 2026.
   requests](#fonts-and-third-party-requests)) still holds with analytics
   on.
 - **Page views only.** It records page views (including Next.js's
-  client-side navigations) and page leaves. Autocapture, session
-  recording, heatmaps, dead clicks, web vitals, exception capture,
-  surveys, feature flags and web experiments are all off, and posthog-js
-  may not load any further script. Events are sent as they happen, not
+  client-side navigations) and page leaves. Autocapture, heatmaps, dead
+  clicks, web vitals, exception capture, surveys, feature flags and web
+  experiments are all off, session recording is off unless you turn it on
+  (see [Session recording](#session-recording)), and posthog-js may not
+  load any further script. Events are sent as they happen, not
   queued, and every event asks `lib/consent.ts` again on its way out.
   Users are not identified, so events are not linked to accounts.
 - **GPC is a refusal.** A browser that sends a Global Privacy Control
@@ -650,6 +651,84 @@ trackEvent("report exported", { format: "pdf" });
 Never put personal data (names, email addresses, free text a user typed)
 in an event's properties.
 
+### Session recording
+
+**The law and the risk.** Session replay records what a visitor does on a
+page (the page itself, their mouse movements, clicks and scrolling, and,
+unless it is masked, what they type) so that it can be played back like a
+video. In California, plaintiffs have sued hundreds of site operators
+under the California Invasion of Privacy Act, arguing that a replay or chat
+vendor capturing a visitor's input without their consent is wiretapping
+(Penal Code §631): statutory damages are $5,000
+per violation (§637.2), which plaintiffs count per session, with no need to
+show harm. Courts are split on whether the claims succeed, but defending
+one costs more than most small apps earn. Under the GDPR and the ePrivacy
+rules a recording is personal data and needs consent just as analytics
+does, and anything the visitor types (a password, a card number, a health
+question) can be special-category data. As of October 2026.
+
+**What the app does.**
+
+- **Off unless you turn it on.** `analytics.sessionReplay` in `config.ts`
+  is `false`. While it is, recording is never offered and never starts,
+  whatever a visitor or a consent cookie says: `lib/consent.ts` answers
+  "denied" for a purpose the site doesn't offer.
+- **Its own consent.** With it on, the banner adds a checkbox, "Also record
+  my visits", that starts unticked. "Accept" agrees to analytics, and to
+  recording only if the visitor ticked the box; "Reject" refuses both. A
+  checkbox rather than a second pair of buttons keeps it to one decision,
+  and an unticked box is consent the visitor has to give themselves, which
+  is what EU law requires (the CJEU's *Planet49* ruling, C-673/17).
+  `/legal/analytics` has "Turn recording on" and "Turn recording off"
+  buttons. Recording rides on analytics: it runs only while analytics does
+  too, and turning analytics off (or a GPC signal) turns it off. A visitor
+  who accepted analytics before you turned recording on is asked about it
+  once, by the banner.
+- **Nothing typed is recorded.** Every input's value, whatever its type, is
+  replaced with asterisks in the browser before the recording is sent
+  (`maskAllInputs`). Text in any element you mark `data-mask` (or class
+  `ph-mask`) is masked the same way, and an element with class
+  `ph-no-capture` isn't recorded at all: use that for an image or a
+  rendered document. Network requests' headers and bodies, canvases and
+  console logs are never recorded, whatever the PostHog project's settings
+  say.
+- **Never on sensitive pages.** Sign-in, sign-up, the magic-link page and
+  `/dashboard/settings` (account and billing) are never recorded: the list
+  is `NEVER_RECORDED` in `lib/analytics.ts`. When a link leads to one,
+  recording stops before the recorder has seen any of the new page, and
+  anything still queued is dropped rather than sent.
+- **The recorder is part of the app.** posthog-js normally downloads its
+  recorder from PostHog's servers; here it is bundled into the app, in a
+  chunk of its own that is loaded only once a visitor agrees to recording,
+  and recordings go through the same `/ingest` proxy as everything else.
+  With recording on, posthog-js also fetches the PostHog project's config
+  once (`/ingest/array/<key>/config`), since it records only if the
+  project accepts recordings. Feature flags stay off.
+- The compliance check proves it: `tests/compliance/session-replay.test.mjs`
+  unpacks every recording that reaches the stand-in PostHog, which plays a
+  project with recording on, and looks for text that must never be in one.
+
+**Turning it on.**
+
+1. Decide whether you need it. Page views answer most questions; a
+   recording is the most invasive thing you can collect.
+2. Mark everything sensitive that isn't an input with `data-mask` (or
+   `ph-no-capture` for images and whole sections): names, email addresses,
+   account details, anything a user wrote. Add any other page that shows
+   such things wholesale to `NEVER_RECORDED`.
+3. Set `analytics.sessionReplay: true` in `config.ts`, and turn on session
+   replay in the PostHog project's settings. Leave the project's masking
+   settings as they are: the app's own settings take precedence.
+4. Say so on `/legal/analytics` and in the Privacy Policy: that recording
+   is offered, what it captures and that what visitors type is hidden.
+   The page already says so once the switch is on, and that recordings are
+   kept as long as `legal.analyticsRetention` says: set the project's
+   recording retention to match. Change `legal.consentTextVersion`, so
+   everyone is asked again with the new text.
+5. Run `scripts/check_compliance.sh`; with the switch on,
+   `session-replay.test.mjs` checks consent, masking and the pages that are
+   never recorded.
+
 ### Adding another purpose
 
 Anything new that tracks visitors, stores something on their device that
@@ -683,8 +762,9 @@ an embedded video, ads, another analytics tool) needs its own consent.
 - Keep `/legal/analytics` true. If you turn on autocapture, session
   recording, surveys or feature flags, call `posthog.identify` to link
   events to accounts, or send personal data in events, say so there and
-  change `legal.consentTextVersion`. Session recording in particular needs
-  its own consent and masking of everything a visitor types.
+  change `legal.consentTextVersion`. For session recording, follow
+  [Turning it on](#session-recording) rather than PostHog's own setup
+  instructions, which record without asking.
 - Keep every tracker behind `lib/consent.ts`. A script pasted into a
   layout, a PostHog snippet copied from its docs, or a second analytics
   tool would run before consent; the third-party request check catches

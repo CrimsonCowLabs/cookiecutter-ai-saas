@@ -378,6 +378,7 @@ def handle_analytics():
         remove_directory("components/consent")
         remove_directory("app/ingest")
         remove_file("tests/compliance/analytics-consent.test.mjs")
+        remove_file("tests/compliance/session-replay.test.mjs")
         remove_file("tests/compliance/fake-posthog.mjs")
         drop_npm_dependency("posthog-js")
 

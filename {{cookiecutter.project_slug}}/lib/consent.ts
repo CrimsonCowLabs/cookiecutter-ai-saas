@@ -8,7 +8,8 @@ import config from "@/config";
  * "Analytics and consent".
  *
  * The choice lives in a first-party cookie, `consent`, as JSON:
- * `{ "version": "<legal.consentTextVersion>", "analytics": "granted" }`.
+ * `{ "version": "<legal.consentTextVersion>", "analytics": "granted",
+ * "recording": "denied" }`.
  * A cookie written against another version of the consent text counts as no
  * choice at all, so changing `legal.consentTextVersion` in config.ts asks
  * everyone again. A browser that sends a Global Privacy Control signal has
@@ -17,8 +18,15 @@ import config from "@/config";
  * Browser-only: on the server every purpose is "unknown".
  */
 
-/** What a visitor can be asked to agree to. Add a purpose here first. */
-export type Purpose = "analytics";
+/**
+ * What a visitor can be asked to agree to. Add a purpose here first.
+ *
+ * - "analytics": PostHog measuring page views (lib/analytics.ts).
+ * - "recording": PostHog session replay. Only ever offered while config.ts
+ *   turns `analytics.sessionReplay` on (see `offered`), and it rides on
+ *   analytics: it may run only while analytics may too.
+ */
+export type Purpose = "analytics" | "recording";
 
 /**
  * "granted" or "denied": the visitor chose (or their browser refused for
@@ -65,25 +73,49 @@ export function refusedByBrowser(): boolean {
   return (navigator as Navigator & { globalPrivacyControl?: boolean }).globalPrivacyControl === true;
 }
 
-/** The visitor's current answer for `purpose`. */
+/**
+ * Whether this site asks about `purpose` at all. Session recording is off in
+ * config.ts by default, and then nobody is asked and it never runs.
+ */
+export function offered(purpose: Purpose): boolean {
+  return purpose !== "recording" || config.analytics.sessionReplay;
+}
+
+/**
+ * The visitor's current answer for `purpose`. A purpose this site doesn't
+ * offer is "denied", whatever the cookie says.
+ */
 export function consentFor(purpose: Purpose): ConsentState {
   if (typeof document === "undefined") return "unknown";
-  if (refusedByBrowser()) return "denied";
+  if (refusedByBrowser() || !offered(purpose)) return "denied";
   return read()?.[purpose] ?? "unasked";
 }
 
-/** May `purpose` run right now? Only with an explicit, current "yes". */
+/**
+ * May `purpose` run right now? Only with an explicit, current "yes" — and,
+ * for recording, a "yes" to analytics as well.
+ */
 export function mayRun(purpose: Purpose): boolean {
+  if (purpose === "recording" && !mayRun("analytics")) return false;
   return consentFor(purpose) === "granted";
 }
 
 /**
  * Record the visitor's answer for `purpose` against the current consent text,
  * and tell everything listening (see `subscribe`), which starts or stops
- * whatever depends on it.
+ * whatever depends on it. Turning analytics off turns recording off too.
  */
 export function setConsent(purpose: Purpose, decision: Decision) {
-  const stored: Stored = { ...read(), version: config.legal.consentTextVersion, [purpose]: decision };
+  setConsents(
+    purpose === "analytics" && decision === "denied"
+      ? { analytics: "denied", recording: "denied" }
+      : { [purpose]: decision }
+  );
+}
+
+/** `setConsent` for several purposes at once, as one choice. */
+export function setConsents(decisions: Partial<Record<Purpose, Decision>>) {
+  const stored: Stored = { ...read(), ...decisions, version: config.legal.consentTextVersion };
   const secure = location.protocol === "https:" ? "; Secure" : "";
   document.cookie =
     `${COOKIE}=${encodeURIComponent(JSON.stringify(stored))}; Path=/; Max-Age=${MAX_AGE_SECONDS}; SameSite=Lax${secure}`;

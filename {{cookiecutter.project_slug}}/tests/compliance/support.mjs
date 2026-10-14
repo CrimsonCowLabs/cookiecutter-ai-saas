@@ -128,15 +128,73 @@ export function consentTextVersion() {
   return value;
 }
 
+/** analytics.sessionReplay, read out of config.ts (the project root is the cwd). */
+export function sessionReplay() {
+  const value = fs.readFileSync("config.ts", "utf8").match(/sessionReplay:\s*(true|false)/)?.[1];
+  if (!value) throw new Error("config.ts should set analytics.sessionReplay to true or false");
+  return value === "true";
+}
+
 /**
- * A `name=value` consent cookie for a visitor who has already answered the
- * analytics question with `decision` ("granted" or "denied"), against consent
- * text `version` (the configured one unless given). This is the format
- * lib/consent.ts writes; the tests write it themselves to start from a
- * visitor who chose on an earlier visit.
+ * A `name=value` consent cookie for a visitor who has already answered, on an
+ * earlier visit, against consent text `version` (the configured one unless
+ * given). `decisions` is the answer to the analytics question ("granted" or
+ * "denied"), or the answers to several, as { analytics, recording }. This is
+ * the format lib/consent.ts writes; the tests write it themselves to start
+ * from a visitor who already chose.
  */
-export function consentCookie(decision, version = consentTextVersion()) {
-  return `consent=${encodeURIComponent(JSON.stringify({ version, analytics: decision }))}`;
+export function consentCookie(decisions, version = consentTextVersion()) {
+  const answers = typeof decisions === "string" ? { analytics: decisions } : decisions;
+  return `consent=${encodeURIComponent(JSON.stringify({ version, ...answers }))}`;
+}
+
+/**
+ * Open `path` the way withPage() does, as a visitor's own browser would:
+ * also recording every request the page makes to /ingest (in `ingest`) and,
+ * with `gpc`, sending a Global Privacy Control signal. fn gets withPage's
+ * arguments plus `ingest`.
+ */
+export function openAsVisitor(browser, path, { cookie, gpc = false } = {}, fn) {
+  const ingest = [];
+  const base = new URL(config.baseUrl);
+  const prepare = async (page) => {
+    // posthog-js drops events from browsers it takes for bots, and a headless
+    // Chrome driven by puppeteer looks like one three ways (its user agent,
+    // its client hints and navigator.webdriver); a visitor's browser doesn't.
+    await page.setUserAgent((await browser.userAgent()).replace("HeadlessChrome", "Chrome"));
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(Navigator.prototype, "webdriver", { get: () => false, configurable: true });
+      Object.defineProperty(Navigator.prototype, "userAgentData", { get: () => undefined, configurable: true });
+    });
+    page.on("request", (req) => {
+      const url = new URL(req.url());
+      if (url.host === base.host && url.pathname.startsWith("/ingest")) ingest.push(url.pathname);
+    });
+    if (gpc) {
+      // What a browser with GPC turned on (Firefox's setting, Brave, the
+      // DuckDuckGo app, privacy extensions) exposes to every page.
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(Navigator.prototype, "globalPrivacyControl", { get: () => true, configurable: true });
+      });
+    }
+  };
+  return withPage(browser, path, { cookie, prepare }, (args) => fn({ ...args, ingest }));
+}
+
+/** Whether the element `selector` is on the page and visible. */
+export const shown = (page, selector) =>
+  page.$eval(selector, (el) => el.checkVisibility()).catch(() => false);
+
+/** Click the button labelled `label` inside `scope`, with the mouse. */
+export async function clickButton(page, scope, label) {
+  const buttons = await page.$$(`${scope} button`);
+  for (const button of buttons) {
+    if ((await button.evaluate((el) => el.textContent.trim())) === label) {
+      await button.click();
+      return;
+    }
+  }
+  throw new Error(`no "${label}" button in ${scope} on ${page.url()}`);
 }
 // cc:end analytics
 

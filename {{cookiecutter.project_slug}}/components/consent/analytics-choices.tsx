@@ -1,6 +1,6 @@
 "use client";
 
-import { refusedByBrowser, setConsent, useConsent } from "@/lib/consent";
+import { offered, refusedByBrowser, setConsent, useConsent } from "@/lib/consent";
 import { CHOICE_BUTTON, useChoices } from "@/components/consent/choices";
 
 const DESCRIBE = {
@@ -9,14 +9,22 @@ const DESCRIBE = {
   unasked: "off: you haven't chosen yet",
 } as const;
 
+const DESCRIBE_RECORDING = {
+  granted: "on: you agreed to it",
+  denied: "off: you didn't agree to it",
+  unasked: "off: you haven't chosen yet",
+} as const;
+
 /**
  * The analytics choice on /legal/analytics: what it is now, and buttons to
  * turn analytics on or off. Turning it off stops PostHog at once and clears
  * what it stored in the browser (the banner reacts to the change; see
- * ConsentBanner).
+ * ConsentBanner). When config.ts turns session replay on, the same again for
+ * recording, which needs analytics on.
  */
 export function AnalyticsChoices() {
   const consent = useConsent("analytics");
+  const recording = useConsent("recording");
   const { configured } = useChoices();
 
   let body;
@@ -46,6 +54,32 @@ export function AnalyticsChoices() {
             Turn analytics off
           </button>
         </div>
+        {offered("recording") &&
+          (consent === "granted" ? (
+            <>
+              <p role="status">
+                Session recording is{" "}
+                <strong className="text-base-content">
+                  {recording === "unknown" ? "off" : DESCRIBE_RECORDING[recording]}
+                </strong>
+                .
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className={CHOICE_BUTTON} onClick={() => setConsent("recording", "granted")}>
+                  Turn recording on
+                </button>
+                <button type="button" className={CHOICE_BUTTON} onClick={() => setConsent("recording", "denied")}>
+                  Turn recording off
+                </button>
+              </div>
+            </>
+          ) : (
+            <p>
+              Session recording is <strong className="text-base-content">off</strong>.
+              It needs analytics, so turn analytics on first if you want to
+              allow it.
+            </p>
+          ))}
       </>
     );
   }
