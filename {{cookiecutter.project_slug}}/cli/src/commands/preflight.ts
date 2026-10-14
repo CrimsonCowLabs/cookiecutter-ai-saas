@@ -27,10 +27,6 @@
 // A placeholder inventory address is also `config`'s to catch by name;
 // deploy.yml would otherwise report it as an ordinary DNS resolution failure,
 // which is correct but less immediately actionable.
-//
-// `config`'s legal-readiness warnings (placeholder legal settings in
-// config.ts) come along with its checks unchanged. They are warnings, so they
-// never stop a preflight from passing.
 
 import { findProjectRoot } from "../inventory";
 import { buildPlaybookArgv, runLocal } from "../ansible";

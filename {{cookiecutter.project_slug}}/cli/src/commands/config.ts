@@ -18,6 +18,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isPlaceholder, readSetting } from "../config-source";
 import { buildHostConfig, findProjectRoot, type HostConfig } from "../inventory";
 import { probeSshReachable } from "../ssh";
 import type { CliCommand } from "../types";
@@ -116,71 +117,60 @@ export async function runConfigChecks(projectRoot: string, deps: ConfigCheckDeps
   return checks;
 }
 
-const PLACEHOLDER_PREFIX = "REPLACE_WITH_";
 const GUIDE = "docs/compliance.md";
 
-/** Reads the `legal` section of config.ts as text — the CLI cannot import the
- * app's own config — and warns about each setting an operator must supply
- * that is still a placeholder. A setting given as an expression rather than a
- * literal (say, `process.env.X`) counts as filled in: this cannot tell. */
+// The text settings in config.ts's `legal` section an operator must supply
+// before launch, each with the section of the guide that says what to put
+// there. A row with several settings is one check that names those unset.
+const LEGAL_SETTINGS: { name: string; settings: string[]; guideSection: string }[] = [
+  {
+    name: "legal.marketingPostalAddress",
+    settings: ["legal.marketingPostalAddress"],
+    guideSection: "marketing-email-can-spam",
+  },
+  {
+    name: "legal.dmcaAgent",
+    settings: ["name", "postalAddress", "phone", "email"].map((field) => `legal.dmcaAgent.${field}`),
+    guideSection: "registering-a-designated-agent",
+  },
+  {
+    name: "legal.accessibility.contactEmail",
+    settings: ["legal.accessibility.contactEmail"],
+    guideSection: "accessibility",
+  },
+];
+
+/** Warns about each legal setting in config.ts an operator must supply that
+ * is still a placeholder, and about an unset minimum age. */
 export function legalReadinessChecks(configSource: string): ConfigCheck[] {
-  const legal = objectBody(stripComments(configSource), "legal");
   const checks: ConfigCheck[] = [];
 
-  const minimumAge = rawValue(legal, "minimumAge");
+  const minimumAge = readSetting(configSource, "legal.minimumAge");
   const age = minimumAge === null ? NaN : Number(minimumAge);
   if (minimumAge === null || ["undefined", "null"].includes(minimumAge) || (!Number.isNaN(age) && age <= 0)) {
-    checks.push(warning("legal.minimumAge", "is unset", "childrens-privacy-coppa"));
+    checks.push(legalWarning("legal.minimumAge", "is unset", "childrens-privacy-coppa"));
   } else {
-    checks.push({
-      name: "legal.minimumAge",
-      status: "ok",
-      detail: `visitors under ${minimumAge} cannot sign up`,
-    });
+    checks.push({ name: "legal.minimumAge", status: "ok", detail: `visitors under ${minimumAge} cannot sign up` });
   }
 
-  checks.push(
-    isPlaceholder(rawValue(legal, "marketingPostalAddress"))
-      ? warning("legal.marketingPostalAddress", "is still a placeholder", "marketing-email-can-spam")
-      : { name: "legal.marketingPostalAddress", status: "ok", detail: "set" },
-  );
-
-  const dmcaAgent = objectBody(legal, "dmcaAgent");
-  const unsetDmca = ["name", "postalAddress", "phone", "email"].filter((field) =>
-    isPlaceholder(rawValue(dmcaAgent, field)),
-  );
-  checks.push(
-    unsetDmca.length > 0
-      ? warning(
-          "legal.dmcaAgent",
-          `${unsetDmca.map((field) => `legal.dmcaAgent.${field}`).join(", ")} ${
-            unsetDmca.length === 1 ? "is still a placeholder" : "are still placeholders"
-          }`,
-          "registering-a-designated-agent",
-        )
-      : {
-          name: "legal.dmcaAgent",
-          status: "ok",
-          detail: "name, postal address, phone and email set",
-        },
-  );
-
-  checks.push(
-    isPlaceholder(rawValue(objectBody(legal, "accessibility"), "contactEmail"))
-      ? warning("legal.accessibility.contactEmail", "is still a placeholder", "accessibility")
-      : {
-          name: "legal.accessibility.contactEmail",
-          status: "ok",
-          detail: "set",
-        },
-  );
+  for (const { name, settings, guideSection } of LEGAL_SETTINGS) {
+    const unset = settings.filter((setting) => isPlaceholder(readSetting(configSource, setting)));
+    if (unset.length === 0) {
+      checks.push({ name, status: "ok", detail: "set" });
+    } else if (unset.length === 1 && settings.length === 1) {
+      checks.push(legalWarning(name, "is still a placeholder", guideSection));
+    } else {
+      const problem = unset.length === 1 ? "is still a placeholder" : "are still placeholders";
+      checks.push(legalWarning(name, `${unset.join(", ")} ${problem}`, guideSection));
+    }
+  }
 
   return checks;
 }
 
-/** A legal-readiness warning. `problem` reads after the setting's name, which
+/** A legal-readiness warning. `problem` reads after the check's name, which
  * the printed line already starts with. */
-function warning(name: string, problem: string, guideSection: string): ConfigCheck {
+function legalWarning(name: string, problem: string, guideSection: string): ConfigCheck {
   return {
     name,
     status: "warn",
@@ -188,105 +178,12 @@ function warning(name: string, problem: string, guideSection: string): ConfigChe
   };
 }
 
-/** True for a missing setting, an empty string or a REPLACE_WITH_ placeholder. */
-function isPlaceholder(value: string | null): boolean {
-  if (value === null) return true;
-  const literal = value.match(/^(["'`])(.*)\1$/);
-  if (!literal) return false;
-  const text = literal[2].trim();
-  return text === "" || text.startsWith(PLACEHOLDER_PREFIX);
-}
-
-/** The source text of `key`'s value — a whole string literal, or anything
- * else up to the comma or line end that closes it — looked up only at the top
- * level of `body` (not inside nested objects). */
-function rawValue(body: string, key: string): string | null {
-  const value = String.raw`((["'\`])(?:\\.|(?!\2)[^\\])*\2|[^,\n]+)`;
-  const match = topLevel(body).match(new RegExp(String.raw`(?:^|[\s,{])${key}\s*:\s*` + value));
-  return match ? match[1].trim() : null;
-}
-
-/** The text inside the braces of the first `key: { ... }` in `source`, or ""
- * when there is no such object. */
-function objectBody(source: string, key: string): string {
-  const match = new RegExp(String.raw`(?:^|[\s,{])${key}\s*:\s*\{`).exec(source);
-  if (!match) return "";
-  const start = match.index + match[0].length;
-  const end = matchingBrace(source, start);
-  return source.slice(start, end);
-}
-
-/** `body` with every nested `{ ... }` blanked out, so a key lookup only sees
- * this level. String contents are kept as they are. */
-function topLevel(body: string): string {
-  let out = "";
-  let i = 0;
-  while (i < body.length) {
-    if (body[i] === '"' || body[i] === "'" || body[i] === "`") {
-      const end = stringEnd(body, i);
-      out += body.slice(i, end + 1);
-      i = end + 1;
-    } else if (body[i] === "{") {
-      const end = matchingBrace(body, i + 1);
-      out += " ".repeat(end + 1 - i);
-      i = end + 1;
-    } else {
-      out += body[i];
-      i += 1;
-    }
-  }
-  return out;
-}
-
-/** End of the string literal opening at `start`: the index of its closing quote. */
-function stringEnd(source: string, start: number): number {
-  let i = start + 1;
-  while (i < source.length && source[i] !== source[start]) i += source[i] === "\\" ? 2 : 1;
-  return i;
-}
-
-/** `source` with its comments removed, string literals left as they are, so
- * a comment mentioning a setting cannot be read as the setting. */
-function stripComments(source: string): string {
-  let out = "";
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === '"' || ch === "'" || ch === "`") {
-      const end = stringEnd(source, i);
-      out += source.slice(i, end + 1);
-      i = end + 1;
-    } else if (ch === "/" && source[i + 1] === "/") {
-      while (i < source.length && source[i] !== "\n") i += 1;
-    } else if (ch === "/" && source[i + 1] === "*") {
-      const close = source.indexOf("*/", i + 2);
-      i = close === -1 ? source.length : close + 2;
-    } else {
-      out += ch;
-      i += 1;
-    }
-  }
-  return out;
-}
-
-/** Index of the "}" closing a brace opened just before `from`, skipping
- * braces inside string literals. The end of `source` if none. */
-function matchingBrace(source: string, from: number): number {
-  let depth = 1;
-  let i = from;
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === '"' || ch === "'" || ch === "`") {
-      i = stringEnd(source, i);
-    } else if (ch === "{") {
-      depth += 1;
-    } else if (ch === "}") {
-      depth -= 1;
-      if (depth === 0) return i;
-    }
-    i += 1;
-  }
-  return source.length;
+/** ", with N warnings to fill in before you launch" when any check warned,
+ * else "", for the summary line `config` and `preflight` print. */
+export function warningSummary(checks: ConfigCheck[]): string {
+  const warnings = checks.filter((c) => c.status === "warn").length;
+  if (warnings === 0) return "";
+  return `, with ${warnings} warning${warnings === 1 ? "" : "s"} to fill in before you launch`;
 }
 
 /** Prints one line per check and returns how many failed (a warning is not a
@@ -322,11 +219,3 @@ export const configCommand: CliCommand = {
     return 0;
   },
 };
-
-/** ", with N warnings to fill in before you launch" when any check warned,
- * else "", for the summary line `config` and `preflight` print. */
-export function warningSummary(checks: ConfigCheck[]): string {
-  const warnings = checks.filter((c) => c.status === "warn").length;
-  if (warnings === 0) return "";
-  return `, with ${warnings} warning${warnings === 1 ? "" : "s"} to fill in before you launch`;
-}
