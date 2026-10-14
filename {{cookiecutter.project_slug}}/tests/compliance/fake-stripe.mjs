@@ -15,7 +15,9 @@
 //     off-origin request is aborted, see support.mjs's withPage()); listing a
 //     customer's sessions, and expiring an open one;
 //   - creating a billing portal session, recorded and handed back a URL here;
-//   - listing a customer's subscriptions, out of those a test added;
+//   - listing a customer's subscriptions, a payment intent's Checkout
+//     Sessions, a charge's disputes and a payment intent's invoice payments
+//     (expanding their invoices when asked), out of those a test added;
 //   - retrieving an object a test added beforehand, by its id, whatever its
 //     type;
 //   - during an outage a test starts, every request, with a 503.
@@ -71,6 +73,8 @@ export async function startFakeStripe() {
   let down = false;
 
   const list = (data) => ({ object: "list", data, has_more: false, url: "" });
+  // Every object a test added of Stripe type `type` ("dispute", say).
+  const added = (type) => [...objects.values()].filter((o) => o.object === type);
 
   const server = http.createServer((req, res) => {
     let body = "";
@@ -94,7 +98,27 @@ export async function startFakeStripe() {
       }
       if (route === "GET /v1/subscriptions") {
         const customer = url.searchParams.get("customer");
-        return json(200, list([...objects.values()].filter((o) => o.object === "subscription" && o.customer === customer)));
+        return json(200, list(added("subscription").filter((o) => o.customer === customer)));
+      }
+      if (route === "GET /v1/checkout/sessions" && url.searchParams.has("payment_intent")) {
+        const paymentIntent = url.searchParams.get("payment_intent");
+        return json(200, list(added("checkout.session").filter((s) => s.payment_intent === paymentIntent)));
+      }
+      if (route === "GET /v1/disputes") {
+        const charge = url.searchParams.get("charge");
+        return json(200, list(added("dispute").filter((d) => d.charge === charge)));
+      }
+      if (route === "GET /v1/invoice_payments") {
+        const paymentIntent = url.searchParams.get("payment[payment_intent]");
+        const expanded = [...url.searchParams.values()].includes("data.invoice");
+        return json(
+          200,
+          list(
+            added("invoice_payment")
+              .filter((p) => p.payment.payment_intent === paymentIntent)
+              .map((p) => (expanded ? { ...p, invoice: objects.get(p.invoice) ?? p.invoice } : p))
+          )
+        );
       }
       if (route === "GET /v1/checkout/sessions") {
         const customer = url.searchParams.get("customer");

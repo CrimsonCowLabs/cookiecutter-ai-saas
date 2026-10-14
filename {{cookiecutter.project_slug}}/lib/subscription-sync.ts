@@ -1,7 +1,7 @@
 import Stripe from "stripe";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, exists, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { users, subscriptions, subscriptionStatusEnum } from "@/lib/db/schema";
+import { users, subscriptions, subscriptionStatusEnum, chargeReversals } from "@/lib/db/schema";
 import { getStripe } from "@/lib/stripe";
 import { audit } from "@/lib/audit";
 import { planForPrice } from "@/lib/plans";
@@ -66,7 +66,34 @@ function getSubscriptionPeriod(sub: Stripe.Subscription): {
   };
 }
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Set user `userId`'s plan, which the rest of the app reads, to what their
+ * subscriptions entitle them to: the newest that grants its tier, and none
+ * that one of its charges withholds (a disputed one, by default; see
+ * lib/revocation-policy.ts). So an event for an old, ended subscription
+ * can't take away the plan a newer one grants. Lock the user's row first.
+ */
+export async function refreshPlan(tx: Tx, userId: string) {
+  const owned = await tx
+    .select({
+      plan: subscriptions.plan,
+      status: subscriptions.status,
+      awaitingFirstPayment: subscriptions.awaitingFirstPayment,
+      withheld: exists(
+        tx
+          .select({ id: chargeReversals.id })
+          .from(chargeReversals)
+          .where(and(eq(chargeReversals.subscriptionId, subscriptions.id), eq(chargeReversals.withholds, true)))
+      ),
+    })
+    .from(subscriptions)
+    .where(eq(subscriptions.userId, userId))
+    .orderBy(desc(subscriptions.createdAt));
+  const plan = owned.find((sub) => entitles(sub) && !sub.withheld)?.plan ?? "free";
+  await tx.update(users).set({ plan, updatedAt: new Date() }).where(eq(users.id, userId));
+}
 
 const customerIdOf = (customer: Stripe.Subscription["customer"]) =>
   typeof customer === "string" ? customer : customer?.id;
@@ -205,20 +232,7 @@ export async function syncSubscription(
       .values({ userId: ownerId, stripeSubscriptionId: sub.id, ...state })
       .onConflictDoUpdate({ target: subscriptions.stripeSubscriptionId, set: state });
 
-    // users.plan, which the rest of the app reads, is what the user's
-    // subscriptions entitle them to, so an event for an old, ended
-    // subscription can't take away the plan a newer one grants.
-    const owned = await tx
-      .select({
-        plan: subscriptions.plan,
-        status: subscriptions.status,
-        awaitingFirstPayment: subscriptions.awaitingFirstPayment,
-      })
-      .from(subscriptions)
-      .where(eq(subscriptions.userId, ownerId))
-      .orderBy(desc(subscriptions.createdAt));
-    const plan = owned.find(entitles)?.plan ?? "free";
-    await tx.update(users).set({ plan, updatedAt: new Date() }).where(eq(users.id, ownerId));
+    await refreshPlan(tx, ownerId);
 
     return { tier, entitles: entitles(state) };
   });

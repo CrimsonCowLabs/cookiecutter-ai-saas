@@ -125,6 +125,7 @@ export function oneTimePurchaseCompleted(stripe, user, { quantity = 1 } = {}) {
     client_reference_id: user.id,
     metadata: { type: "one_time_purchase" },
     payment_status: "paid",
+    payment_intent: `pi_test_${crypto.randomUUID()}`,
     amount_total: ONE_TIME_UNIT_AMOUNT * quantity,
     currency: "usd",
   };

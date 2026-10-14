@@ -6,6 +6,8 @@
 # its money arrives (issue #73), and that unknown Stripe prices are refused at
 # checkout and reported by the webhook (issue #74), and that a webhook handler
 # that fails asks Stripe to retry and the retry grants it once (issue #75),
+# and that refunds and disputes are recorded and revoke what the revocation
+# policy says (issue #76),
 # actually hold, against a really running instance of a generated project —
 # not mocks, and not the route handler imported in-process. See
 # tests/billing/integration/*.test.mjs for what is asserted and why; this

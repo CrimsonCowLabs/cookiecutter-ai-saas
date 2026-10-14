@@ -177,6 +177,8 @@ def handle_stripe():
         remove_file("lib/stripe.ts")
         remove_file("lib/checkout.ts")
         remove_file("lib/subscription-sync.ts")
+        remove_file("lib/charge-reversal.ts")
+        remove_file("lib/revocation-policy.ts")
         # lib/plans.ts stays: app/actions/jobs.ts reads plan limits to rate
         # limit job submission, which has nothing to do with billing.
         remove_directory("app/api/webhook/stripe")
