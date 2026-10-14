@@ -305,6 +305,31 @@ nothing about renewal.
   Subscriptions recorded before the column existed start out null, so
   resending one of their old events from the Dashboard sends another
   acknowledgment.
+- **Refunds and disputes.** A refund (`charge.refunded`) or a dispute
+  (`charge.dispute.created`, `charge.dispute.closed`) is recorded in the
+  audit log, once per event however often Stripe redelivers it, as
+  `billing.charge_refunded`, `billing.dispute_created` or
+  `billing.dispute_closed` against the purchase or subscription the charge
+  paid for, with the amounts and the dispute's outcome. What it takes away
+  is your decision, made in one place: `withholds` in
+  `lib/revocation-policy.ts`, called for every one of these events with the
+  charge as Stripe has it then. By default a fully refunded one-time
+  purchase has its credits taken back (never more than the user has left);
+  a partial refund, or a refunded subscription invoice, is only recorded,
+  since cancelling the subscription is what ends its plan; and a disputed
+  charge withholds what it paid for, the purchase's credits or the
+  subscription's plan, while the dispute is open and for good if it is
+  lost, giving it back if it is won. The webhook fetches the charge afresh
+  on every event (`lib/charge-reversal.ts`), so late or out-of-order events
+  converge on Stripe's state, and records each charge's current decision in
+  `charge_reversals`. One that arrives before its purchase or subscription
+  is recorded (its checkout's paid event still being retried) is answered
+  500, so Stripe redelivers it once it is. Your webhook endpoint must send
+  all three events. A charge that paid for nothing the app recorded, or
+  ever will, is logged as `[Webhook] … charge <id> paid for no purchase or
+  subscription the app recorded`. Mind what a lost dispute means for a
+  subscription: by default it keeps the plan withheld while Stripe goes on
+  billing it, so cancel the subscription in Stripe, or change the policy.
 - **The notice.** `/legal/subscriptions` explains renewal, cancellation and
   refunds and lists each plan's terms; the Terms of Service have a
   "Payment and Automatic Renewal" section linking to it.

@@ -202,6 +202,27 @@ export const purchases = pgTable("purchases", {
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
 });
 
+// A Stripe charge that has been refunded or disputed, against the one-time
+// purchase or the subscription it paid for (lib/charge-reversal.ts). One row
+// per charge, upserted on every refund and dispute event for it.
+export const chargeReversals = pgTable("charge_reversals", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  stripeChargeId: text("stripe_charge_id").notNull().unique(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  purchaseId: uuid("purchase_id").references(() => purchases.id, { onDelete: "cascade" }),
+  subscriptionId: uuid("subscription_id").references(() => subscriptions.id, { onDelete: "cascade" }),
+  // lib/revocation-policy.ts's decision, as of the last event: withhold what
+  // the charge paid for. A subscription grants nothing while any of its
+  // charges withholds (lib/subscription-sync.ts).
+  withholds: boolean("withholds").notNull().default(false),
+  // The purchase's credits taken back while it withholds, given back if it
+  // stops: never more than the user had left.
+  creditsWithheld: integer("credits_withheld").notNull().default(0),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
+});
+
 export const auditLogs = pgTable("audit_logs", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),

@@ -8,6 +8,7 @@ import { getStripe } from "@/lib/stripe";
 import { audit } from "@/lib/audit";
 import { sendSubscriptionAcknowledgment } from "@/lib/subscription-acknowledgment";
 import { syncSubscription } from "@/lib/subscription-sync";
+import { reconcileCharge } from "@/lib/charge-reversal";
 import config from "@/config";
 
 /**
@@ -306,6 +307,20 @@ export async function POST(req: NextRequest) {
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
         await syncSubscription(sub.id, { event });
+        break;
+      }
+
+      // A refund or a dispute: recorded against the purchase or subscription
+      // the charge paid for, and lib/revocation-policy.ts decides what it
+      // takes away. The charge is fetched afresh, like a subscription above.
+      case "charge.refunded": {
+        await reconcileCharge((event.data.object as Stripe.Charge).id, event);
+        break;
+      }
+      case "charge.dispute.created":
+      case "charge.dispute.closed": {
+        const dispute = event.data.object as Stripe.Dispute;
+        await reconcileCharge(typeof dispute.charge === "string" ? dispute.charge : dispute.charge.id, event);
         break;
       }
 
