@@ -285,7 +285,9 @@ counts as a refusal, "Privacy choices" in the footer and the controls on
 only through the app's own `/ingest` proxy, without the visitor's cookies or
 IP address. Set `POSTHOG_KEY` (and, for an EU project, `POSTHOG_HOST` and
 `POSTHOG_ASSETS_HOST`) to turn it on; `lib/consent.ts` is the one place that
-knows what a visitor agreed to.
+knows what a visitor agreed to. Session replay is off (`analytics.sessionReplay`
+in `config.ts`); turned on, it is a separate, unticked choice, masks every
+input, and never runs on the sign-in, sign-up or settings pages.
 {%- else %} The project has no analytics, and `/legal/analytics` says
 nothing is tracked.
 {%- endif %}

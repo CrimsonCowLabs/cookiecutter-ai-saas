@@ -61,6 +61,14 @@ export interface LegalConfig {
   // cc:end analytics
 }
 
+// cc:begin analytics
+export interface AnalyticsConfig {
+  // Whether visitors may be asked to have their visits recorded (PostHog
+  // session replay). False: never offered, never recorded.
+  sessionReplay: boolean;
+}
+// cc:end analytics
+
 export interface ConfigProps {
   appName: string;
   appDescription: string;
@@ -81,5 +89,8 @@ export interface ConfigProps {
     loginUrl: string;
     callbackUrl: string;
   };
+  // cc:begin analytics
+  analytics: AnalyticsConfig;
+  // cc:end analytics
   legal: LegalConfig;
 }

@@ -73,7 +73,10 @@ export default function PrivacyPolicyPage() {
               PostHog, which processes the measurements for us. Nothing is
               measured until you choose &ldquo;Accept&rdquo;, a Global Privacy
               Control signal from your browser counts as a refusal, and you
-              can withdraw at any time. See{" "}
+              can withdraw at any time.
+              {config.analytics.sessionReplay &&
+                " If you also choose to have your visits recorded, a separate choice, we record the pages you see and how you use them, but never what you type, and never the sign-in pages or your account settings."}{" "}
+              See{" "}
               <Link href="/legal/analytics" className="link link-primary">
                 Analytics &amp; recording
               </Link>{" "}

@@ -8,7 +8,8 @@ import { NextRequest } from "next/server";
  * cookies and IP address stay here. See docs/compliance.md, "Analytics and
  * consent".
  *
- * /ingest/static/* (PostHog's scripts) goes to POSTHOG_ASSETS_HOST and
+ * /ingest/static/* (PostHog's scripts) and /ingest/array/* (the project's
+ * config, which session replay waits for) go to POSTHOG_ASSETS_HOST and
  * everything else to POSTHOG_HOST, both read at request time. The defaults are
  * PostHog's US cloud; an EU project sets https://eu.i.posthog.com and
  * https://eu-assets.i.posthog.com.
@@ -30,7 +31,7 @@ const FORWARDED_REQUEST_HEADERS = ["accept", "content-type", "content-encoding",
 const FORWARDED_RESPONSE_HEADERS = ["content-type", "cache-control"];
 
 function upstream(path: string[]): string {
-  const assets = path[0] === "static";
+  const assets = path[0] === "static" || path[0] === "array";
   const host = assets
     ? process.env.POSTHOG_ASSETS_HOST || "https://us-assets.i.posthog.com"
     : process.env.POSTHOG_HOST || "https://us.i.posthog.com";

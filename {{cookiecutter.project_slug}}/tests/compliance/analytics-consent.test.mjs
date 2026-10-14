@@ -16,7 +16,15 @@
 // FAKE_POSTHOG_PORT; plus CHROME_PATH (see ./support.mjs).
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { config, launchBrowser, withPage, consentCookie, consentTextVersion } from "./support.mjs";
+import {
+  config,
+  launchBrowser,
+  openAsVisitor,
+  shown,
+  clickButton as click,
+  consentCookie,
+  consentTextVersion,
+} from "./support.mjs";
 import { startFakePostHog } from "./fake-posthog.mjs";
 
 // The app has posthog-js send each event as it happens, and posthog-js would
@@ -42,53 +50,11 @@ after(async () => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Open `path` the way withPage() does, also recording every request the page
- * makes to /ingest (in `ingest`) and, with `gpc`, sending a Global Privacy
- * Control signal. fn gets withPage's arguments plus `ingest`.
- */
-function open(path, { cookie, gpc = false } = {}, fn) {
-  const ingest = [];
-  const base = new URL(config.baseUrl);
-  const prepare = async (page) => {
-    // posthog-js drops events from browsers it takes for bots, and a headless
-    // Chrome driven by puppeteer looks like one three ways (its user agent,
-    // its client hints and navigator.webdriver); a visitor's browser doesn't.
-    await page.setUserAgent((await browser.userAgent()).replace("HeadlessChrome", "Chrome"));
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(Navigator.prototype, "webdriver", { get: () => false, configurable: true });
-      Object.defineProperty(Navigator.prototype, "userAgentData", { get: () => undefined, configurable: true });
-    });
-    page.on("request", (req) => {
-      const url = new URL(req.url());
-      if (url.host === base.host && url.pathname.startsWith("/ingest")) ingest.push(url.pathname);
-    });
-    if (gpc) {
-      // What a browser with GPC turned on (Firefox's setting, Brave, the
-      // DuckDuckGo app, privacy extensions) exposes to every page.
-      await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(Navigator.prototype, "globalPrivacyControl", { get: () => true, configurable: true });
-      });
-    }
-  };
-  return withPage(browser, path, { cookie, prepare }, (args) => fn({ ...args, ingest }));
-}
+/** Open `path` as a visitor's browser (see openAsVisitor in ./support.mjs). */
+const open = (path, options, fn) => openAsVisitor(browser, path, options, fn);
 
 /** Whether the consent banner is on the page and visible. */
-const bannerShown = (page) =>
-  page.$eval(BANNER, (el) => el.checkVisibility()).catch(() => false);
-
-/** Click the button labelled `label` inside `scope`, with the mouse. */
-async function click(page, scope, label) {
-  const buttons = await page.$$(`${scope} button`);
-  for (const button of buttons) {
-    if ((await button.evaluate((el) => el.textContent.trim())) === label) {
-      await button.click();
-      return;
-    }
-  }
-  throw new Error(`no "${label}" button in ${scope} on ${page.url()}`);
-}
+const bannerShown = (page) => shown(page, BANNER);
 
 /** Wait until the stand-in has received more than `count` event captures. */
 async function captureAfter(count) {
@@ -111,19 +77,8 @@ const posthogStorage = (page) =>
     ];
   });
 
-/**
- * The number of requests PostHog has received, once it has received none for
- * a second: a page closed by the previous test can still send what it had
- * queued as it unloads.
- */
-async function settled() {
-  let count = -1;
-  while (count !== posthog.requests.length) {
-    count = posthog.requests.length;
-    await sleep(1000);
-  }
-  return count;
-}
+/** The number of requests PostHog has received, once it has gone quiet. */
+const settled = () => posthog.settled();
 
 /** Assert that, over QUIET_MS, nothing went to /ingest or reached PostHog. */
 async function assertNothingSent(ingest, since, why) {
