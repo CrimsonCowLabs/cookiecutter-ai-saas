@@ -39,6 +39,18 @@ test("the legal hub loads and sits next to the Privacy Policy and Terms", async 
   );
 });
 
+test("the Privacy Policy and Terms are dated, lead back to the hub, and do not disclaim themselves", async () => {
+  for (const path of ["/privacy-policy", "/tos"]) {
+    const { status, html } = await get(path);
+    assert.equal(status, 200, `${path} should load unauthenticated, got ${status}`);
+    assert.ok(links(html).includes("/legal"), `${path} should link back to the legal hub`);
+    assert.match(html, /Last updated/, `${path} should say when it was last updated`);
+    // These are the operator's own terms, not an explanation of the app: a
+    // "not legal advice" notice on them would undercut them.
+    assert.doesNotMatch(html, /not legal advice/i, `${path} should not say it is not legal advice`);
+  }
+});
+
 test("every subpage the hub links to loads, explains itself and disclaims legal advice", async () => {
   const hub = await get("/legal");
   const subpages = [...new Set(links(hub.html).filter((h) => h.startsWith("/legal/")))];

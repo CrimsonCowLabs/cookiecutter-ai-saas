@@ -38,8 +38,11 @@ fail either command. They don't check `accessibility.reviewDate`,
 `/legal` is a hub, linked from the footer, that lists the Privacy Policy, the
 Terms of Service and one page per topic below. Each topic page has two parts,
 "The risk" and "How this app handles it", and says it is not legal advice.
-The topics are listed in `lib/legal-topics.ts`; one is linked only once its
-page exists.
+The Privacy Policy and Terms are your own documents, not explanations of the
+app, so they have no such parts and no such notice; they say when they were
+last updated instead. Every legal page is built on one shell,
+`components/legal/legal-page.tsx`. The topics are listed in
+`lib/legal-topics.ts`; one is linked only once its page exists.
 
 If you change how the app behaves on one of these topics, change its page
 too. Every statement on them has to stay true of your app.

@@ -1,167 +1,120 @@
 import Link from "next/link";
 import config from "@/config";
-import { Main } from "@/components/ui/skip-link";
+import { LegalPage, LegalSection } from "@/components/legal/legal-page";
 
 export default function PrivacyPolicyPage() {
   return (
-    <Main className="min-h-screen bg-base-100">
-      <div className="mx-auto w-full max-w-3xl px-6 py-16">
-        <Link href="/" className="mb-8 inline-flex items-center gap-2 text-sm text-base-content/60 hover:text-base-content">
-          <span>&larr;</span>
-          Back to home
-        </Link>
+    <LegalPage title="Privacy Policy" lastUpdated={new Date()}>
+      <LegalSection title="1. Overview">
+        <p>
+          This Privacy Policy explains how __PROJECT_NAME__ collects, uses, and
+          protects your information when you use our services.
+        </p>
+      </LegalSection>
 
-        <div className="space-y-3">
-          <p className="text-sm font-medium text-primary">__PROJECT_NAME__ Privacy Policy</p>
-          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">
-            Privacy Policy
-          </h1>
-          <p className="text-sm text-base-content/60">
-            Last updated: {new Date().toLocaleDateString("en-US", {
-              year: "numeric",
-              month: "long",
-              day: "numeric",
-            })}
-          </p>
-        </div>
+      <LegalSection title="2. What We Collect">
+        <p>
+          We collect the information you provide, such as your name, email
+          address, and the data you submit for processing. We also collect
+          technical data required to operate the service and deliver results.
+        </p>
+      </LegalSection>
 
-        <div className="mt-10 space-y-8 text-base-content/80">
-          <section className="space-y-3">
-            <h2 className="text-xl font-semibold text-base-content">
-              1. Overview
-            </h2>
-            <p>
-              This Privacy Policy explains how __PROJECT_NAME__ collects, uses, and
-              protects your information when you use our services.
-            </p>
-          </section>
+      <LegalSection title="3. How We Use Your Data">
+        <p>
+          We use your information to operate the service, process jobs,
+          deliver results, provide support, and improve product quality.
+        </p>
+        {/* cc:begin resend */}
+        <p>
+          If we send you marketing email, every message has a link to
+          unsubscribe, and once you do we stop. Emails that are part of
+          using the service, such as sign-in links and billing notices,
+          are not marketing. See{" "}
+          <Link href="/legal/email-preferences" className="link link-primary">
+            Email preferences
+          </Link>{" "}
+          for which is which.
+        </p>
+        {/* cc:end resend */}
+        {/* cc:begin analytics */}
+        <p>
+          If you agree to it, we measure which pages are used with
+          PostHog, which processes the measurements for us. Nothing is
+          measured until you choose &ldquo;Accept&rdquo;, a Global Privacy
+          Control signal from your browser counts as a refusal, and you
+          can withdraw at any time.
+          {config.analytics.sessionReplay &&
+            " If you also choose to have your visits recorded, a separate choice, we record the pages you see and how you use them, but never what you type, and never the sign-in pages or your account settings."}{" "}
+          See{" "}
+          <Link href="/legal/analytics" className="link link-primary">
+            Analytics &amp; recording
+          </Link>{" "}
+          for what is collected and for how long.
+        </p>
+        {/* cc:end analytics */}
+        {/* cc:begin no-analytics */}
+        <p>
+          We use no analytics and no session recording: nothing is tracked
+          about which pages you visit. See{" "}
+          <Link href="/legal/analytics" className="link link-primary">
+            Analytics &amp; recording
+          </Link>
+          .
+        </p>
+        {/* cc:end no-analytics */}
+      </LegalSection>
 
-          <section className="space-y-3">
-            <h2 className="text-xl font-semibold text-base-content">
-              2. What We Collect
-            </h2>
-            <p>
-              We collect the information you provide, such as your name, email
-              address, and the data you submit for processing. We also collect
-              technical data required to operate the service and deliver results.
-            </p>
-          </section>
+      <LegalSection title="4. We Do Not Sell Your Data">
+        <p>
+          We do not sell your personal information or job data to third
+          parties.
+        </p>
+      </LegalSection>
 
-          <section className="space-y-3">
-            <h2 className="text-xl font-semibold text-base-content">
-              3. How We Use Your Data
-            </h2>
-            <p>
-              We use your information to operate the service, process jobs,
-              deliver results, provide support, and improve product quality.
-            </p>
-            {/* cc:begin resend */}
-            <p>
-              If we send you marketing email, every message has a link to
-              unsubscribe, and once you do we stop. Emails that are part of
-              using the service, such as sign-in links and billing notices,
-              are not marketing. See{" "}
-              <Link href="/legal/email-preferences" className="link link-primary">
-                Email preferences
-              </Link>{" "}
-              for which is which.
-            </p>
-            {/* cc:end resend */}
-            {/* cc:begin analytics */}
-            <p>
-              If you agree to it, we measure which pages are used with
-              PostHog, which processes the measurements for us. Nothing is
-              measured until you choose &ldquo;Accept&rdquo;, a Global Privacy
-              Control signal from your browser counts as a refusal, and you
-              can withdraw at any time.
-              {config.analytics.sessionReplay &&
-                " If you also choose to have your visits recorded, a separate choice, we record the pages you see and how you use them, but never what you type, and never the sign-in pages or your account settings."}{" "}
-              See{" "}
-              <Link href="/legal/analytics" className="link link-primary">
-                Analytics &amp; recording
-              </Link>{" "}
-              for what is collected and for how long.
-            </p>
-            {/* cc:end analytics */}
-            {/* cc:begin no-analytics */}
-            <p>
-              We use no analytics and no session recording: nothing is tracked
-              about which pages you visit. See{" "}
-              <Link href="/legal/analytics" className="link link-primary">
-                Analytics &amp; recording
-              </Link>
-              .
-            </p>
-            {/* cc:end no-analytics */}
-          </section>
+      <LegalSection title="5. Data Protection">
+        <p>
+          We implement reasonable security measures to protect your information.
+          Your data is encrypted in transit and at rest.
+        </p>
+      </LegalSection>
 
-          <section className="space-y-3">
-            <h2 className="text-xl font-semibold text-base-content">
-              4. We Do Not Sell Your Data
-            </h2>
-            <p>
-              We do not sell your personal information or job data to third
-              parties.
-            </p>
-          </section>
+      <LegalSection title="6. Data Retention">
+        <p>
+          We retain data only as long as needed to provide the service and
+          meet legal obligations. You may request deletion of your data at
+          any time.
+        </p>
+      </LegalSection>
 
-          <section className="space-y-3">
-            <h2 className="text-xl font-semibold text-base-content">
-              5. Data Protection
-            </h2>
-            <p>
-              We implement reasonable security measures to protect your information.
-              Your data is encrypted in transit and at rest.
-            </p>
-          </section>
+      <LegalSection title="7. Children's Privacy">
+        <p>
+          You must be at least {config.legal.minimumAge} to create an
+          account, and we do not knowingly collect personal information
+          from anyone younger. Before an account is created, we ask for a
+          date of birth, check it and throw it away; we keep only the fact
+          that the check was passed, and when. If you believe your child
+          has given us personal information, contact us at the address
+          below and we will delete it. See{" "}
+          <Link href="/legal/children" className="link link-primary">
+            Children&apos;s privacy
+          </Link>{" "}
+          for the details.
+        </p>
+      </LegalSection>
 
-          <section className="space-y-3">
-            <h2 className="text-xl font-semibold text-base-content">
-              6. Data Retention
-            </h2>
-            <p>
-              We retain data only as long as needed to provide the service and
-              meet legal obligations. You may request deletion of your data at
-              any time.
-            </p>
-          </section>
-
-          <section className="space-y-3">
-            <h2 className="text-xl font-semibold text-base-content">
-              7. Children&apos;s Privacy
-            </h2>
-            <p>
-              You must be at least {config.legal.minimumAge} to create an
-              account, and we do not knowingly collect personal information
-              from anyone younger. Before an account is created, we ask for a
-              date of birth, check it and throw it away; we keep only the fact
-              that the check was passed, and when. If you believe your child
-              has given us personal information, contact us at the address
-              below and we will delete it. See{" "}
-              <Link href="/legal/children" className="link link-primary">
-                Children&apos;s privacy
-              </Link>{" "}
-              for the details.
-            </p>
-          </section>
-
-          <section className="space-y-3">
-            <h2 className="text-xl font-semibold text-base-content">
-              8. Contact
-            </h2>
-            <p>
-              If you have questions about this Privacy Policy, contact{" "}
-              <a
-                href="mailto:__AUTHOR_EMAIL__"
-                className="link link-primary"
-              >
-                __AUTHOR_EMAIL__
-              </a>
-              .
-            </p>
-          </section>
-        </div>
-      </div>
-    </Main>
+      <LegalSection title="8. Contact">
+        <p>
+          If you have questions about this Privacy Policy, contact{" "}
+          <a
+            href="mailto:__AUTHOR_EMAIL__"
+            className="link link-primary"
+          >
+            __AUTHOR_EMAIL__
+          </a>
+          .
+        </p>
+      </LegalSection>
+    </LegalPage>
   );
 }
