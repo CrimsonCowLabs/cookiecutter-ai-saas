@@ -15,9 +15,10 @@ import { encode } from "@auth/core/jwt";
 const DEFAULT_BASE_URL = "http://localhost:3000";
 // A fixed, low-entropy placeholder, not a real credential — the same idea as
 // the dummy NEXTAUTH_SECRET scripts/check_tls_stack.sh writes into its own
-// throwaway env file. scripts/check_auth.sh sets this exact value as the
-// NEXTAUTH_SECRET of the server it boots AND as the NEXTAUTH_SECRET these
-// tests run with, so the default here only has to agree with that script.
+// throwaway env file. scripts/lib/running_app.sh, which boots the app for
+// every suite that mints session cookies, defines this exact value once on
+// the shell side, and its callers pass it as the NEXTAUTH_SECRET these tests
+// run with, so the default here only has to agree with that one file.
 // Running this by hand against a real project: export NEXTAUTH_SECRET to
 // that project's own secret first, or minting a session cookie the app
 // actually accepts is impossible.

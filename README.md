@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **222 files** with
+Every generated project is a complete distributed system — **224 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -299,7 +299,8 @@ None of it is legal advice, and the pages and guide say so.
 ├── .env.example                   # All env vars documented
 ├── scripts/
 │   ├── migrate.sh                 # Database migrations (the migrator image's command)
-│   └── check_compliance.sh        # Proves the /legal claims against a running app
+│   ├── check_compliance.sh        # Proves the /legal claims against a running app
+│   └── lib/running_app.sh         # Boots the app for it (and the template's auth/billing checks)
 ├── tests/compliance/              # What check_compliance.sh asserts, in a headless Chrome
 ├── docs/compliance.md             # Operator guide to the legal risks the app handles
 ├── cli/
