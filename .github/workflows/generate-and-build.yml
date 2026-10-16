@@ -767,7 +767,12 @@ jobs:
           # Every name in it is prefixed vault_, so a secret is recognisable
           # wherever it is used and a plain group_vars variable cannot shadow
           # one. Anything the example gains has to keep that true.
-          ! grep -E '^[a-z][a-z0-9_]*:' ansible/vault.yml.example | grep -qv '^vault_'
+          # `if` rather than `! grep`: bash -e does not stop on a negated
+          # command, so `! grep` mid-step would never fail it.
+          if grep -E '^[a-z][a-z0-9_]*:' ansible/vault.yml.example | grep -v '^vault_'; then
+            echo "ansible/vault.yml.example has keys not prefixed vault_ (above)" >&2
+            exit 1
+          fi
           # .gitignore keeps out the password file and never the vault itself.
           grep -q '^\.vault-pass$' .gitignore
           grep -q '^ansible/\.vault-pass$' .gitignore
@@ -820,7 +825,12 @@ jobs:
         # intent — hence the negative assertion.
         run: |
           test -f ansible/vault.yml.example
-          ! grep -q '^[$]ANSIBLE_VAULT' ansible/vault.yml.example
+          # `if grep` rather than `! grep`: bash -e does not stop on a negated
+          # command, so `! grep` mid-step would never fail it.
+          if grep -n '^[$]ANSIBLE_VAULT' ansible/vault.yml.example; then
+            echo "ansible/vault.yml.example is already encrypted; it must ship plaintext" >&2
+            exit 1
+          fi
           grep -q '^vault_backup_remote:' ansible/vault.yml.example
           grep -q '^ansible/[.]vault-pass$' .gitignore
           ! grep -qx 'ansible/vault.yml' .gitignore
