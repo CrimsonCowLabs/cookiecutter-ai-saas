@@ -47,12 +47,25 @@ VARS=ansible/group_vars/all.yml
 DEPLOY_USER="$(sed -n 's/^deploy_user: *//p' "$VARS" | head -1)"
 APP_DIR="$(sed -n 's/^app_dir: *//p' "$VARS" | head -1)"
 JOURNAL_MAX="$(sed -n 's/^journal_max_use: *//p' "$VARS" | head -1)"
+CADDY_SCANNER_MAXRETRY="$(sed -n 's/^fail2ban_caddy_scanner_maxretry: *//p' "$VARS" | head -1)"
+CADDY_ERRORS_MAXRETRY="$(sed -n 's/^fail2ban_caddy_errors_maxretry: *//p' "$VARS" | head -1)"
+CADDY_FINDTIME="$(sed -n 's/^fail2ban_caddy_findtime: *//p' "$VARS" | head -1)"
+CADDY_BANTIME="$(sed -n 's/^fail2ban_caddy_bantime: *//p' "$VARS" | head -1)"
 [[ -n $DEPLOY_USER && -n $APP_DIR && -n $JOURNAL_MAX ]] \
   || fail "could not read deploy_user/app_dir/journal_max_use out of $VARS"
+[[ -n $CADDY_SCANNER_MAXRETRY && -n $CADDY_ERRORS_MAXRETRY && -n $CADDY_FINDTIME && -n $CADDY_BANTIME ]] \
+  || fail "could not read the fail2ban_caddy_* settings out of $VARS"
 echo "==> Provisioning for deploy user '$DEPLOY_USER', app dir '$APP_DIR'"
 
+# fail2ban_ignoreip ships empty, and an empty list proves nothing about whether
+# entries reach the jails. So every run here adds one — every run, so that the
+# second still has to change nothing. TEST-NET-1 (RFC 5737): nothing real is
+# ever there, least of all the address this check arrives from.
+IGNORED_NET=192.0.2.0/24
+
 run_playbook() {
-  ansible-playbook -i "$TH_INVENTORY" ansible/provision.yml "$@"
+  ansible-playbook -i "$TH_INVENTORY" ansible/provision.yml \
+    -e "{\"fail2ban_ignoreip\": [\"$IGNORED_NET\"]}" "$@"
 }
 
 # ── First run: a fresh host, reached as root ─────────────────────────────────
@@ -126,6 +139,65 @@ th_exec "fail2ban-client status sshd" >/dev/null \
 th_exec "fail2ban-client status sshd | grep -q 'Journal matches'" \
   || fail "the sshd jail is not reading the journal, so it will never see a failure"
 pass "fail2ban is banning SSH authentication failures from the journal"
+
+# The web server's jails. Nothing here runs Caddy, so this is configuration:
+# that both jails are up, reading the file the stack's proxy writes, at the
+# strictness group_vars asks for, and banning only the web server's ports.
+# That they ban anybody is scripts/check_deploy.sh's job, against a real
+# Caddy; what their filters count is scripts/check_ban_filters.sh's.
+
+CADDY_LOG="$APP_DIR/logs/caddy/access.log"
+for jail in caddy-scanner caddy-errors; do
+  th_exec "fail2ban-client status $jail" >/dev/null || fail "fail2ban has no $jail jail running"
+  th_exec "fail2ban-client get $jail logpath" | grep -qF -- "- $CADDY_LOG" \
+    || fail "the $jail jail is not watching $CADDY_LOG"
+  if [[ $jail == caddy-scanner ]]; then maxretry=$CADDY_SCANNER_MAXRETRY; else maxretry=$CADDY_ERRORS_MAXRETRY; fi
+  for setting in "maxretry $maxretry" "findtime $(fail2ban_seconds "$CADDY_FINDTIME")" \
+                 "bantime $(fail2ban_seconds "$CADDY_BANTIME")"; do
+    read -r key want <<<"$setting"
+    got="$(th_exec "fail2ban-client get $jail $key")"
+    [[ "$got" == "$want" ]] || fail "the $jail jail has $key $got, expected $want from $VARS"
+  done
+  # What a ban would drop, read from each action: the web server's ports and
+  # nothing else, SSH's above all, so that whoever is banned by mistake can
+  # still get in to lift it.
+  actions="$(th_exec "fail2ban-client get $jail actions" | tail -1)"
+  [[ "$actions" == "nftables, nftables-h3" ]] \
+    || fail "the $jail jail bans through '$actions', expected 'nftables, nftables-h3'"
+  drops=""
+  for action in nftables nftables-h3; do
+    proto="$(th_exec "fail2ban-client get $jail action $action protocol")"
+    port="$(th_exec "fail2ban-client get $jail action $action port")"
+    blocktype="$(th_exec "fail2ban-client get $jail action $action blocktype")"
+    drops+="$proto/$port/$blocktype "
+  done
+  [[ "$drops" == "tcp/80,443/drop udp/443/drop " ]] \
+    || fail "a $jail ban would apply as '$drops', expected 'tcp/80,443/drop udp/443/drop'"
+done
+pass "the caddy-scanner and caddy-errors jails watch $CADDY_LOG as group_vars configures them, and drop only 80/tcp, 443/tcp and 443/udp"
+
+# The command those actions run. Ubuntu's fail2ban only recommends nftables,
+# and the iptables ufw brings satisfies that, so without the playbook's say-so
+# a ban is recorded and nothing is dropped.
+th_exec "command -v nft" >/dev/null || fail "nft is not installed, so no jail's ban would drop anything"
+
+# The log the jails read has to exist before Caddy has ever run, or fail2ban
+# would not have started at all. Caddy's own owner and mode, so that its first
+# write is not a change for the second run to report.
+log_attrs="$(th_exec "stat -c '%U %G %a' $CADDY_LOG")"
+[[ "$log_attrs" == "root root 640" ]] \
+  || fail "$CADDY_LOG is '$log_attrs', expected 'root root 640', as Caddy writes it"
+pass "$CADDY_LOG is waiting for Caddy, and nft for the bans"
+
+# The ignore list holds for every jail, SSH's included, and keeps loopback.
+for jail in sshd caddy-scanner caddy-errors; do
+  ignored="$(th_exec "fail2ban-client get $jail ignoreip")"
+  for net in 127.0.0.0/8 ::1 "$IGNORED_NET"; do
+    awk '{print $2}' <<<"$ignored" | grep -qxF -- "$net" \
+      || fail "the $jail jail does not ignore $net: $ignored"
+  done
+done
+pass "every jail ignores loopback and the addresses in fail2ban_ignoreip"
 
 # Criterion: unattended security upgrades are active.
 th_exec "systemctl is-enabled unattended-upgrades" >/dev/null \
@@ -339,7 +411,7 @@ attempt_login() {
 
 for _ in $(seq 12); do
   attempt_login
-  if [[ -n "$(th_exec "fail2ban-client status sshd" | sed -n 's/.*Banned IP list:[[:space:]]*//p')" ]]; then
+  if [[ -n "$(jail_banned sshd)" ]]; then
     banned=yes
     break
   fi

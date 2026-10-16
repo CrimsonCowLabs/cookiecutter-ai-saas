@@ -154,3 +154,26 @@ th_ssh() { ssh "${TH_SSH_OPTS[@]}" "$1@127.0.0.1" "$2"; }
 # the host. It allocates no TTY, so it changes nothing for callers that pipe
 # nothing.
 th_exec() { docker exec -i "$TH_NAME" bash -c "$1"; }
+
+# fail2ban's own time syntax — a bare number of seconds, or a number with one
+# unit, as group_vars writes them (10m, 1h) — as the seconds fail2ban-client
+# reports back. Anything fancier fails here loudly rather than being compared
+# wrongly.
+fail2ban_seconds() {
+  local n unit
+  [[ $1 =~ ^([0-9]+)([smhdw]?)$ ]] || fail "cannot read '$1' as a fail2ban time"
+  n="${BASH_REMATCH[1]}"
+  unit="${BASH_REMATCH[2]}"
+  case "$unit" in
+    "" | s) echo "$n" ;;
+    m) echo $((n * 60)) ;;
+    h) echo $((n * 3600)) ;;
+    d) echo $((n * 86400)) ;;
+    w) echo $((n * 604800)) ;;
+  esac
+}
+
+# The addresses a jail on the host currently bans, space-separated; empty if none.
+jail_banned() {
+  th_exec "fail2ban-client status $1" | sed -n 's/.*Banned IP list:[[:space:]]*//p' | tr -d '\r'
+}
