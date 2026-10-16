@@ -3,9 +3,10 @@
 // plumbing.
 //
 // The database and session helpers are the auth suite's own (see
-// tests/auth/support.mjs): scripts/check_compliance.sh boots the app with the
-// same NEXTAUTH_SECRET and DATABASE_URL that scripts/check_auth.sh does, so a
-// cookie minted there is one this app accepts here too.
+// tests/auth/support.mjs): scripts/check_compliance.sh boots the app through
+// scripts/lib/running_app.sh, as the template's auth check does, with the
+// same NEXTAUTH_SECRET and DATABASE_URL, so a cookie minted there is one this
+// app accepts here too.
 // cc:begin resend
 import crypto from "node:crypto";
 // cc:end resend

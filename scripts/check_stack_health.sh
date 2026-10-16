@@ -32,26 +32,19 @@ if [[ -e "$ENV_FILE" ]]; then
   fail "$PWD/$ENV_FILE exists; this check would overwrite it. Run it against a freshly generated project."
 fi
 
-# Read the database name out of the compose file rather than re-deriving it
-# from the project directory name, which is only the same thing until somebody
-# renames the directory. Mirrors scripts/check_auth.sh.
+# Read the database name and the published ports out of the compose file
+# rather than re-deriving or assuming them, so a renamed directory or ports
+# overridden at generation time are still talked to correctly. Mirrors the
+# generated project's scripts/lib/running_app.sh.
 DB_NAME="$(sed -n 's/^ *POSTGRES_DB: *//p' docker-compose.yml | head -1)"
 [[ -n "$DB_NAME" ]] || fail "could not read POSTGRES_DB out of docker-compose.yml"
-
-# docker-compose.yml's postgres/redis services publish the ports answered at
-# generation time (cookiecutter.json's postgres_port/redis_port). The CI job
-# that calls this script does not override either, so the defaults apply —
-# asserted below rather than assumed, so a future default change fails loudly
-# here instead of silently talking to the wrong port. Mirrors check_auth.sh.
-POSTGRES_PORT=5432
-REDIS_PORT=6379
-grep -qF "\"${POSTGRES_PORT}:5432\"" docker-compose.yml \
-  || fail "expected postgres to publish ${POSTGRES_PORT} (cookiecutter.json's default postgres_port) — was it overridden at generation time?"
-grep -qF "\"${REDIS_PORT}:6379\"" docker-compose.yml \
-  || fail "expected redis to publish ${REDIS_PORT} (cookiecutter.json's default redis_port) — was it overridden at generation time?"
+POSTGRES_PORT="$(sed -n 's/^ *- "\([0-9]*\):5432"$/\1/p' docker-compose.yml | head -1)"
+REDIS_PORT="$(sed -n 's/^ *- "\([0-9]*\):6379"$/\1/p' docker-compose.yml | head -1)"
+[[ -n "$POSTGRES_PORT" && -n "$REDIS_PORT" ]] \
+  || fail "could not read the published postgres/redis ports out of docker-compose.yml"
 
 # A fixed, low-entropy placeholder, not a real credential — the same value
-# scripts/check_auth.sh and scripts/check_tls_stack.sh use, kept identical so
+# scripts/lib/running_app.sh and scripts/check_tls_stack.sh use, kept identical so
 # a secret value never needs agreeing on across scripts by accident.
 NEXTAUTH_SECRET="0000000000000000000000000000000000000000000000000000000000000000"
 

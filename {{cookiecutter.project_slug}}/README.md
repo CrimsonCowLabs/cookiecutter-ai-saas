@@ -755,6 +755,7 @@ workers/
 scripts/
   migrate.sh            # Migration runner (the migrator image's command)
   check_compliance.sh   # Runs tests/compliance against a real, running app
+  lib/running_app.sh    # Boots and stops that app (sourced by check_compliance.sh)
 cli/
   src/                  # opsctl — status, logs and shell over your own SSH
   tsconfig.json         # Built by `npm run cli:build` / the `prepare` script
