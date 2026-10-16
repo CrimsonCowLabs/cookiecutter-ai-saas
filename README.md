@@ -598,6 +598,8 @@ Taking and restoring database backups, and operating a deployed instance with
 
 CI generates, typechecks, lints and builds eight named flag combinations (the `flag-matrix` job in `.github/workflows/generate-and-build.yml`). `python scripts/check_ci_matrix.py` fails if any value of any choice in `cookiecutter.json` is missing from the matrix, so a new choice value needs a matrix entry.
 
+`python scripts/check_ci_negations.py` fails if a workflow step has a bare negated command (`! cmd`) before its last line: Actions runs steps with `bash -e`, which ignores a failing negated command, so write `if cmd; then echo "..." >&2; exit 1; fi` instead.
+
 Six further jobs cover the parts no flag varies — serving, provisioning, deploying, backing up and operating:
 
 | Job | What it proves |
