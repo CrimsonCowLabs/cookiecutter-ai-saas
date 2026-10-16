@@ -1,10 +1,11 @@
 """Tests for scripts/check_ci_negations.py.
 
-Run: python -m unittest discover -s scripts/tests
+Run: python -m unittest discover -s scripts/tests -p test_check_ci_negations.py -v
 """
 
 import importlib.util
 import pathlib
+import tempfile
 import textwrap
 import unittest
 
@@ -131,6 +132,68 @@ class FindBareNegations(unittest.TestCase):
         [finding] = check.find_bare_negations(text)
         self.assertEqual((finding.line, finding.in_file), (2, False))
         self.assertIn("script line 2", check.message("ci.yml", finding))
+
+    def test_flags_a_negation_after_and_or_semicolon(self):
+        text = workflow("""\
+            - run: |
+                cd out && ! grep -q secret out.txt
+                x=1; ! grep -q secret out.txt
+                echo done
+            """)
+        findings = check.find_bare_negations(text)
+        self.assertEqual([f.line for f in findings], [7, 8])
+        self.assertEqual(findings[0].text, "cd out && ! grep -q secret out.txt")
+
+    def test_passes_a_mid_line_negation_on_the_last_line_or_followed_by_or(self):
+        text = workflow("""\
+            - run: |
+                cd out && ! grep -q secret out.txt || exit 1
+                cd out && ! grep -q secret out.txt
+            """)
+        self.assertEqual(check.find_bare_negations(text), [])
+
+    def test_passes_a_mid_line_negation_in_a_condition(self):
+        text = workflow("""\
+            - run: |
+                if test -e out.txt && ! grep -q secret out.txt; then exit 1; fi
+                until x=1; ! test -e ready; do sleep 1; done
+                elif true && ! false; then
+                echo done
+            """)
+        self.assertEqual(check.find_bare_negations(text), [])
+
+    def test_passes_a_negation_ending_a_case_branch(self):
+        # Its status is the branch's, so the case's, as with a step's last line.
+        text = workflow("""\
+            - run: |
+                case "$x" in
+                  a) grep -q a f; ! grep -q b f ;;
+                esac
+            """)
+        self.assertEqual(check.find_bare_negations(text), [])
+
+    def test_passes_not_equal_and_a_bang_without_a_space(self):
+        text = workflow("""\
+            - run: |
+                [ "$a" != b ] && echo differs
+                x=1; [ "$a" != b ]
+                !grep -q secret out.txt
+                echo done
+            """)
+        self.assertEqual(check.find_bare_negations(text), [])
+
+    def test_message_for_a_mid_line_negation_rewrites_just_the_negated_command(self):
+        msg = check.message("ci.yml", check.Finding("build", "s", 8, "cd out && ! grep -q secret out.txt", True))
+        self.assertIn("`cd out && ! grep -q secret out.txt`", msg)
+        self.assertIn("Rewrite `! grep -q secret out.txt` as `if grep -q secret out.txt; then", msg)
+
+
+class WorkflowPaths(unittest.TestCase):
+    def test_lists_yml_and_yaml_workflows_sorted(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ("b.yaml", "a.yml", "c.yml", "notes.txt"):
+                (pathlib.Path(d) / name).write_text("")
+            self.assertEqual([p.name for p in check.workflow_paths(pathlib.Path(d))], ["a.yml", "b.yaml", "c.yml"])
 
 
 if __name__ == "__main__":

@@ -3,15 +3,18 @@
 
 Actions runs `run:` scripts with `bash -e`, which does not stop on a negated
 command (`! cmd`) that fails, so such a line checks nothing unless it is the
-script's last line (whose status is the step's). A negation inside an `if`/
-`while` condition or followed by `|| ...` is fine. Fails naming the workflow,
-job, step and line of each bare negation.
+script's last line (whose status is the step's). That holds whether the `!`
+starts the line or a command after `&&` or `;` on it. A negation inside an
+`if`/`elif`/`while`/`until` condition, followed by `|| ...` or ending a `case`
+branch (`;;`) is fine. Fails naming the workflow, job, step and line of each
+bare negation.
 
 Usage: python scripts/check_ci_negations.py   (needs PyYAML)
 """
 
 import collections
 import pathlib
+import re
 import sys
 
 import yaml
@@ -45,8 +48,26 @@ def logical_lines(script):
     return out
 
 
+# `!` plus whitespace starting the line or a command after `&&` or `;`.
+NEGATION = re.compile(r"(?:^|&&|;)\s*!\s+(\S.*)")
+CONDITION = re.compile(r"(?:if|elif|while|until)\s")
+
+
+def negated_command(line):
+    """The command a bare negation on this line negates, else None.
+
+    Lines that start an `if`/`elif`/`while`/`until` condition, contain `||`
+    or end a `case` branch with `;;` (whose last status is the branch's) are
+    exempt.
+    """
+    if "||" in line or CONDITION.match(line) or line.endswith(";;"):
+        return None
+    match = NEGATION.search(line)
+    return match.group(1) if match else None
+
+
 def is_bare_negation(line):
-    return line[:1] == "!" and line[1:2].isspace() and "||" not in line
+    return negated_command(line) is not None
 
 
 def find_bare_negations(text):
@@ -82,15 +103,21 @@ def dict_of(node):
 
 
 def message(path, f):
+    cmd = negated_command(f.text)
     where = f"{path}:{f.line}" if f.in_file else f"{path} (script line {f.line})"
     return (f"{where}: job {f.job}, step \"{f.step}\": `{f.text}` can never fail the step "
-            "(bash -e ignores a failing negated command). Write "
-            f"`if {f.text[1:].strip()}; then echo \"...\" >&2; exit 1; fi` instead.")
+            f"(bash -e ignores a failing negated command). Rewrite `! {cmd}` as "
+            f"`if {cmd}; then echo \"...\" >&2; exit 1; fi`.")
+
+
+def workflow_paths(directory=WORKFLOWS):
+    """Every `.yml` and `.yaml` workflow in the directory, sorted."""
+    return sorted([*directory.glob("*.yml"), *directory.glob("*.yaml")])
 
 
 def main():
     failed = False
-    paths = sorted(WORKFLOWS.glob("*.yml"))
+    paths = workflow_paths()
     for path in paths:
         for f in find_bare_negations(path.read_text()):
             print(message(path.relative_to(ROOT), f))
