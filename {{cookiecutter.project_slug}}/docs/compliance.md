@@ -470,9 +470,14 @@ suppression mechanism for anything else.
   apps send. Either way the address is suppressed at once, doing it twice
   changes nothing, and the response never says whether the address has an
   account.
-- **Transactional email is untouched.** Whichever of magic-link sign-in,
-  the contact form and the subscription acknowledgment this project has
-  still send directly through Resend and ignore suppressions.
+{#- The enclosing section only renders when one of these three is on, so the list is never empty. #}
+{%- set transactional = [] %}
+{%- if cookiecutter.include_magic_link == "yes" %}{% set _ = transactional.append("magic-link sign-in") %}{% endif %}
+{%- if cookiecutter.include_marketing_extras == "yes" %}{% set _ = transactional.append("the contact form") %}{% endif %}
+{%- if cookiecutter.include_stripe == "yes" %}{% set _ = transactional.append("the subscription acknowledgment") %}{% endif %}
+- **Transactional email is untouched.** Email from
+  {{ (transactional[:-1] | join(", ") ~ " and " ~ transactional[-1]) if transactional | length > 1 else transactional[0] }}
+  still goes directly through Resend and ignores suppressions.
 - **A notice.** `/legal/email-preferences` explains which emails are
   marketing and which are transactional, and how to opt out; the Privacy
   Policy links to it.

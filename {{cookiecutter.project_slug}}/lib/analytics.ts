@@ -26,7 +26,14 @@ let starting: Promise<void> | null = null;
  * and up (with the age screen), and the account settings, where billing is.
  * A path matches its own subpaths too.
  */
-const NEVER_RECORDED = ["/sign-in", "/sign-up", "/magic-link", "/dashboard/settings"];
+const NEVER_RECORDED = [
+  "/sign-in",
+  "/sign-up",
+  // cc:begin magic-link
+  "/magic-link",
+  // cc:end magic-link
+  "/dashboard/settings",
+];
 
 /**
  * Whether the page at `pathname` may be recorded right now: the visitor

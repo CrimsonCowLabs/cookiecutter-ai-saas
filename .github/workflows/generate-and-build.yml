@@ -172,7 +172,20 @@ jobs:
             test ! -e "$G/lib/renewal-terms.ts" && test ! -e "$G/components/billing"
             test ! -e "$G/app/(main)/legal/subscriptions" && test ! -e "$G/tests/compliance/renewal-terms.test.mjs"
             test ! -e "$G/lib/subscription-acknowledgment.ts" && test ! -e "$G/tests/compliance/subscription-acknowledgment.test.mjs"
-            ! grep -rqiE 'renew|subscription|STRIPE_API_BASE|RESEND_BASE_URL' "$G/app" "$G/components" "$G/lib/legal-topics.ts" "$G/scripts/check_compliance.sh" "$G/docs/compliance.md"
+            # `if grep` rather than `! grep`: bash -e does not stop on a
+            # negated command, so `! grep` alone would never fail the step.
+            if grep -rniE 'renew|subscription|STRIPE_API_BASE|RESEND_BASE_URL' "$G/app" "$G/components" "$G/lib/legal-topics.ts" "$G/scripts/check_compliance.sh"; then
+              echo "Renewal or subscription wording, or a Stripe/Resend base URL, survived include_stripe=no" >&2
+              exit 1
+            fi
+            # docs/compliance.md also explains renewing the DMCA agent
+            # designation every 3 years, which has nothing to do with Stripe,
+            # so there the forbidden wording is "renewal" or "auto-renew", not
+            # any "renew".
+            if grep -niE 'renewal|auto-?renew|subscription|STRIPE_API_BASE|RESEND_BASE_URL' "$G/docs/compliance.md"; then
+              echo "Renewal or subscription wording, or a Stripe/Resend base URL, survived include_stripe=no in docs/compliance.md" >&2
+              exit 1
+            fi
           else
             test -e "$G/lib/renewal-terms.ts" && test -e "$G/app/(main)/legal/subscriptions/page.tsx"
             # New subscribers are acknowledged by email, so Resend's key ships
@@ -186,8 +199,14 @@ jobs:
             test ! -e "$G/app/(main)/unsubscribe" && test ! -e "$G/app/api/unsubscribe"
             test ! -e "$G/tests/compliance/unsubscribe.test.mjs" && test ! -e "$G/tests/compliance/marketing-email.test.mjs"
             test ! -e "$G/tests/compliance/fake-resend.mjs" && test ! -e "$G/app/(main)/legal/email-preferences"
-            ! grep -rqiE 'email-preferences|sendMarketingEmail' "$G/lib/legal-topics.ts" "$G/app/(main)/privacy-policy" "$G/tests/compliance/legal-pages.test.mjs" "$G/AGENTS.md" "$G/README.md" "$G/docs/compliance.md"
-            ! grep -rqiE 'email_suppressions|unsubscribe' "$G/lib/db/schema.ts" "$G/middleware.ts" "$G/tests/compliance/support.mjs" "$G/tests/compliance/accessibility.test.mjs" "$G/tests/compliance/third-party-requests.test.mjs" "$G/scripts/check_compliance.sh"
+            if grep -rniE 'email-preferences|sendMarketingEmail' "$G/lib/legal-topics.ts" "$G/app/(main)/privacy-policy" "$G/tests/compliance/legal-pages.test.mjs" "$G/AGENTS.md" "$G/README.md" "$G/docs/compliance.md"; then
+              echo "Email preferences or marketing email survived with nothing sending email" >&2
+              exit 1
+            fi
+            if grep -rniE 'email_suppressions|unsubscribe' "$G/lib/db/schema.ts" "$G/middleware.ts" "$G/tests/compliance/support.mjs" "$G/tests/compliance/accessibility.test.mjs" "$G/tests/compliance/third-party-requests.test.mjs" "$G/scripts/check_compliance.sh"; then
+              echo "Unsubscribe or the suppression table survived with nothing sending email" >&2
+              exit 1
+            fi
           else
             test -e "$G/lib/marketing-email.ts" && test -e "$G/app/(main)/unsubscribe/page.tsx" && test -e "$G/app/api/unsubscribe/route.ts"
             test -e "$G/tests/compliance/unsubscribe.test.mjs" && test -e "$G/tests/compliance/fake-resend.mjs"
@@ -202,7 +221,10 @@ jobs:
           if [ "${{ matrix.database_extensions }}" = pgvector ]; then
             grep -q 'pgvector/pgvector:pg18' "$G/docker-compose.yml" "$G/docker-compose.prod.yml"
           else
-            ! grep -q 'pgvector/pgvector' "$G/docker-compose.yml" "$G/docker-compose.prod.yml"
+            if grep -nE 'pgvector/pgvector' "$G/docker-compose.yml" "$G/docker-compose.prod.yml"; then
+              echo "The pgvector image survived database_extensions=none" >&2
+              exit 1
+            fi
           fi
           # The proxy config is flag-independent, so every combination must
           # still produce a Caddyfile naming the default domain.
@@ -215,7 +237,10 @@ jobs:
           grep -q '^domain_name: myapp.example.com$' "$G/ansible/group_vars/all.yml"
           grep -q "^LLM_PROVIDER=${{ matrix.llm_provider }}$" "$G/ansible/templates/env-production.j2"
           test -f "$G/ansible/deploy.yml" && test -f "$G/ansible/vault.yml.example"
-          ! grep -rqE '__[A-Z_]+__' "$G/ansible"
+          if grep -rnE '__[A-Z_]+__' "$G/ansible"; then
+            echo "An unreplaced __PLACEHOLDER__ survived in the Ansible tree" >&2
+            exit 1
+          fi
           grep -q '^LLM_PROVIDER=${{ matrix.llm_provider }}' "$G/.env.example"
           # The answer decides which credentials a project is asked for, so the
           # chosen provider's key is there and the other three are not — in the
@@ -291,7 +316,10 @@ jobs:
           # RESEND_API_KEY stays when the contact form or Stripe still sends email.
           if [ "${{ matrix.include_magic_link }}" = no ]; then
             test ! -e "$G/app/(main)/(auth)/magic-link" && test ! -e "$G/components/auth/magic-link-form.tsx"
-            ! grep -rE 'MagicLink|/magic-link|providers/resend' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts"
+            if grep -rnE 'MagicLink|/magic-link|providers/resend' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts"; then
+              echo "Magic-link UI, route or provider survived include_magic_link=no" >&2
+              exit 1
+            fi
             # With nothing else sending email, no trace of Resend ships at all.
             if [ "${{ matrix.include_marketing_extras }}" = no ] && [ "${{ matrix.include_stripe }}" = no ]; then
               if grep -rE 'Resend|RESEND' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts" "$G/.env.example"; then
