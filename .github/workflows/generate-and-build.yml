@@ -180,8 +180,9 @@ jobs:
             fi
             # docs/compliance.md also explains renewing the DMCA agent
             # designation every 3 years, which has nothing to do with Stripe,
-            # so there the forbidden wording is "renewal", not any "renew".
-            if grep -niE 'renewal|subscription|STRIPE_API_BASE|RESEND_BASE_URL' "$G/docs/compliance.md"; then
+            # so there the forbidden wording is "renewal" or "auto-renew", not
+            # any "renew".
+            if grep -niE 'renewal|auto-?renew|subscription|STRIPE_API_BASE|RESEND_BASE_URL' "$G/docs/compliance.md"; then
               echo "Renewal or subscription wording, or a Stripe/Resend base URL, survived include_stripe=no in docs/compliance.md" >&2
               exit 1
             fi

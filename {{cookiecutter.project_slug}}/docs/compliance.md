@@ -470,6 +470,7 @@ suppression mechanism for anything else.
   apps send. Either way the address is suppressed at once, doing it twice
   changes nothing, and the response never says whether the address has an
   account.
+{#- The enclosing section only renders when one of these three is on, so the list is never empty. #}
 {%- set transactional = [] %}
 {%- if cookiecutter.include_magic_link == "yes" %}{% set _ = transactional.append("magic-link sign-in") %}{% endif %}
 {%- if cookiecutter.include_marketing_extras == "yes" %}{% set _ = transactional.append("the contact form") %}{% endif %}
