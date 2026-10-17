@@ -22,6 +22,11 @@
 #                                  app rate-limits by it from X-Forwarded-For
 #   * the app is loopback-only   — bound on 127.0.0.1:3000 and unreachable on
 #                                  the host's address
+#   * probers are banned, and    — browsing, sign-in, checkout, bad OAuth
+#     customers are not            callbacks and failing Stripe webhooks ban
+#                                  nobody; scanner probes get the client's 80
+#                                  and 443 dropped at the firewall, SSH still
+#                                  answering it, until the ban expires
 #   * a failure leaves the       — a deliberately broken release, carrying a
 #     previous version serving     configuration change as well as an app that
 #                                  cannot start, is deployed over a working one;
@@ -83,6 +88,11 @@ RANDOM_TAG="$(openssl rand -hex 8)"
 AUTH_SECRET="nextauth-sentinel-$RANDOM_TAG"
 PG_PASSWORD="p@ss/word:$RANDOM_TAG"
 PG_PASSWORD_ENCODED="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$PG_PASSWORD")"
+# Not a real Stripe secret, and never used to talk to Stripe: it is there so the
+# webhook route checks a signature (and answers 400) instead of answering 501
+# for being unconfigured — the ban jail's check below needs webhook calls that
+# fail the way a misconfigured Stripe endpoint's would.
+WEBHOOK_SECRET="whsec_deploycheck$RANDOM_TAG"
 
 cleanup() {
   # The Dockerfile and the compose file are both edited below, to build a
@@ -125,7 +135,7 @@ deploy() {
 # Filled in from the example the template ships, so that the example being
 # wrong is a failure here rather than a surprise for whoever copies it.
 cp ansible/vault.yml.example ansible/vault.yml
-python3 - "$AUTH_SECRET" "$PG_PASSWORD" <<'PY'
+python3 - "$AUTH_SECRET" "$PG_PASSWORD" "$WEBHOOK_SECRET" <<'PY'
 import re, sys
 
 path = "ansible/vault.yml"
@@ -134,6 +144,9 @@ for name, value in (("vault_nextauth_secret", sys.argv[1]),
                     ("vault_postgres_password", sys.argv[2])):
     text, n = re.subn('^%s: ""$' % name, '%s: "%s"' % (name, value), text, flags=re.M)
     assert n == 1, "%s is not in vault.yml.example with an empty value" % name
+# Only in a build with billing; without it the example has no Stripe block.
+text = re.sub('^vault_stripe_webhook_secret: ""$',
+              'vault_stripe_webhook_secret: "%s"' % sys.argv[3], text, flags=re.M)
 open(path, "w").write(text)
 PY
 pass "ansible/vault.yml.example has the required names in it, with empty values"
@@ -412,6 +425,206 @@ if ! grep -qE 'changed=0 +unreachable=0 +failed=0' <<<"$recap"; then
   fail "re-deploying unchanged code changed something: $recap"
 fi
 pass "re-deploying unchanged code transfers nothing and changes nothing ($recap)"
+
+# ── Criterion: clients that keep probing are banned at the firewall ──────────
+# provision.yml installs two fail2ban jails reading Caddy's access log on the
+# host: caddy-scanner, counting the requests Caddy itself refused as scanner
+# probes, and caddy-errors, counting 4xx responses of any kind. Both are only
+# worth having if they can tell an attacker from a customer, so this checks the
+# customer half first — a ban of an honest client is an outage for that client —
+# and then that a prober really is cut off, and then that the ban ends.
+#
+# It comes after everything else that uses $CLIENT, and the ban it provokes has
+# expired again before it ends, so nothing after it is talking to a banned
+# address. What follows only uses the published port, which arrives from a
+# Docker gateway — and the first thing asserted here is that that address was
+# never banned either.
+echo "==> Checking the Caddy ban jails"
+
+# The configured values, as provisioning was told them. A trailing comment is
+# allowed in group_vars, so strip one; read_var already drops quotes.
+read_tunable() {
+  local value
+  value="$(read_var "$1" | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//')"
+  [[ -n $value ]] || fail "could not read $1 out of $VARS"
+  printf '%s\n' "$value"
+}
+SCANNER_MAXRETRY="$(read_tunable fail2ban_caddy_scanner_maxretry)"
+ERRORS_MAXRETRY="$(read_tunable fail2ban_caddy_errors_maxretry)"
+CADDY_FINDTIME="$(fail2ban_seconds "$(read_tunable fail2ban_caddy_findtime)")"
+CADDY_BANTIME="$(fail2ban_seconds "$(read_tunable fail2ban_caddy_bantime)")"
+
+jail_get() { th_exec "fail2ban-client get $1 $2" | tr -d '[:space:]'; }
+
+# The tunables reach the running jails, not just the file they are written to.
+for jail in caddy-scanner caddy-errors; do
+  th_exec "fail2ban-client status $jail" >/dev/null \
+    || fail "fail2ban has no $jail jail running"
+  [[ "$(jail_get "$jail" findtime)" == "$CADDY_FINDTIME" ]] \
+    || fail "$jail's findtime is $(jail_get "$jail" findtime)s, not fail2ban_caddy_findtime's ${CADDY_FINDTIME}s"
+  [[ "$(jail_get "$jail" bantime)" == "$CADDY_BANTIME" ]] \
+    || fail "$jail's bantime is $(jail_get "$jail" bantime)s, not fail2ban_caddy_bantime's ${CADDY_BANTIME}s"
+done
+[[ "$(jail_get caddy-scanner maxretry)" == "$SCANNER_MAXRETRY" ]] \
+  || fail "caddy-scanner bans after $(jail_get caddy-scanner maxretry), not fail2ban_caddy_scanner_maxretry's $SCANNER_MAXRETRY"
+[[ "$(jail_get caddy-errors maxretry)" == "$ERRORS_MAXRETRY" ]] \
+  || fail "caddy-errors bans after $(jail_get caddy-errors maxretry), not fail2ban_caddy_errors_maxretry's $ERRORS_MAXRETRY"
+pass "both Caddy jails run with the group_vars thresholds ($SCANNER_MAXRETRY and $ERRORS_MAXRETRY in ${CADDY_FINDTIME}s, banning for ${CADDY_BANTIME}s)"
+
+# ── Ordinary traffic never trips them ──
+# What a visitor's browser does on the way to paying, and what the services the
+# app talks to do: pages, NextAuth's JSON endpoints, a real sign-in POST with a
+# CSRF token, an unauthenticated go at the billing page and its server action,
+# and an honest 404 or two. Whatever each answers is fine — some of it is a
+# redirect, some is a 4xx on a host with no OAuth credentials — because none of
+# it adds up to the errors jail's threshold, which is the point of the
+# threshold. Twice over, as a visitor clicking around does.
+codes=()
+# curl prints 000 for a request that got no answer, so `|| true` loses nothing.
+browse() { codes+=("$(client_curl -o /dev/null -w '%{http_code}' "$@" || true)"); }
+for _ in 1 2; do
+  for page in / /sign-in /sign-up /blog /contact /tos /privacy-policy \
+              /api/auth/session /api/auth/providers /dashboard; do
+    browse "https://localhost$page"
+  done
+  browse https://localhost/no-such-page
+done
+# A sign-in as the form submits it: the CSRF cookie and token first, then a POST
+# to the first provider that is not the email one (which would send mail).
+client_curl -o /dev/null -c /tmp/jar -b /tmp/jar https://localhost/api/auth/csrf
+csrf="$(client_curl -c /tmp/jar -b /tmp/jar https://localhost/api/auth/csrf \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["csrfToken"])' || true)"
+provider="$(client_curl https://localhost/api/auth/providers \
+  | python3 -c 'import json,sys; print(next(p["id"] for p in json.load(sys.stdin).values() if p["type"] != "email"))' || true)"
+[[ -n $csrf && -n $provider ]] || fail "could not read a CSRF token and a sign-in provider from NextAuth"
+browse -c /tmp/jar -b /tmp/jar -X POST \
+  --data-urlencode "csrfToken=$csrf" --data-urlencode "callbackUrl=https://localhost/dashboard" \
+  "https://localhost/api/auth/signin/$provider"
+# Checkout is a server action on the settings page. Signed out, the page
+# redirects and the action is refused, which is what a visitor whose session
+# expired mid-purchase sends.
+browse https://localhost/dashboard/settings
+browse -X POST -H 'Next-Action: 0000000000000000000000000000000000000000' \
+  -H 'content-type: text/plain;charset=UTF-8' -d '["pro"]' https://localhost/dashboard/settings
+
+# Then the two paths the errors jail must never count, sent more times than its
+# threshold, so that counting them would ban: OAuth callbacks (a provider
+# redirect gone wrong lands the user on one with bad parameters, and they will
+# retry) and Stripe's webhook (which retries a failing delivery for days, from
+# Stripe's own addresses — ban those and billing stops). The webhook's answers
+# are asserted to be 4xx: this half proves nothing about the exclusion if they
+# were not. The callbacks' are whatever NextAuth makes of them.
+excluded=$((ERRORS_MAXRETRY + 10))
+callback_codes=()
+for _ in $(seq "$excluded"); do
+  callback_codes+=("$(client_curl -o /dev/null -w '%{http_code}' \
+    "https://localhost/api/auth/callback/$provider?code=bogus&state=bogus" || true)")
+done
+webhook_note=""
+if [[ -d app/api/webhook/stripe ]]; then
+  rejected=0
+  for _ in $(seq "$excluded"); do
+    code="$(client_curl -o /dev/null -w '%{http_code}' -X POST \
+      -H 'stripe-signature: t=1,v1=bogus' -H 'content-type: application/json' \
+      -d '{"id":"evt_check","type":"checkout.session.completed"}' \
+      https://localhost/api/webhook/stripe || true)"
+    if [[ $code == 4* ]]; then rejected=$((rejected + 1)); fi
+  done
+  [[ $rejected -eq $excluded ]] \
+    || fail "only $rejected of $excluded badly signed Stripe webhooks were answered 4xx, so the errors jail's exclusion of them went untested"
+  webhook_note=", $excluded badly signed Stripe webhooks answered 4xx"
+fi
+
+# fail2ban reads the log as it grows, so give it the time a ban would take to
+# land before calling the absence of one a result: by the time Caddy has logged
+# the last request, and a few polls after, a jail that was going to ban has.
+await "Caddy to log the last of the client's requests" \
+  th_exec "tail -n 5 $APP_DIR/logs/caddy/access.log | grep -qF '\"remote_ip\":\"$CLIENT_IP\"'"
+sleep 5
+for jail in caddy-scanner caddy-errors; do
+  banned="$(jail_banned "$jail")"
+  [[ -z $banned ]] \
+    || fail "ordinary browsing, sign-in and checkout traffic got '$banned' banned by $jail (pages answered: ${codes[*]}; callbacks: ${callback_codes[*]})"
+done
+[[ "$(client_curl -o /dev/null -w '%{http_code}' https://localhost/)" == 200 ]] \
+  || fail "the stack stopped answering $CLIENT_IP after ordinary traffic"
+serving || fail "the stack stopped answering through the published port after ordinary traffic"
+pass "browsing, sign-in, an unauthenticated checkout, $excluded bad OAuth callbacks$webhook_note: nothing in either Caddy jail is banned, this check's own gateway address included"
+
+# ── A prober is dropped at the firewall ──
+# The ban time is shortened on the live jail so its expiry can be watched in
+# seconds rather than an hour. That still tests expiry: the configured value
+# was asserted above to be what the jail runs with, and what is under test here
+# is the mechanism — fail2ban noticing the ban has run its course and taking
+# its firewall rule away again — which is the same for 20 seconds as for 3600.
+SHORT_BANTIME=20
+th_exec "fail2ban-client set caddy-scanner bantime $SHORT_BANTIME" >/dev/null
+
+# The attempt that trips the ban can be the one that hangs, as with SSH in
+# check_provisioning.sh: the rule may land while the next request is mid-flight.
+# --max-time bounds each one.
+echo "==> Probing scanner paths from $CLIENT_IP until fail2ban bans it"
+probes=(/.env /wp-login.php /.git/config /xmlrpc.php /phpmyadmin/ /admin.php)
+attempts=0
+banned=""
+for i in $(seq $((SCANNER_MAXRETRY + 15))); do
+  attempts=$i
+  docker exec "$CLIENT" curl -sk --connect-timeout 3 --max-time 5 -o /dev/null \
+    --resolve "localhost:443:$HOST_IP" "https://localhost${probes[i % ${#probes[@]}]}" || true
+  if grep -qwF "$CLIENT_IP" <<<"$(jail_banned caddy-scanner)"; then
+    banned=yes
+    break
+  fi
+  sleep 1
+done
+[[ -n $banned ]] \
+  || fail "caddy-scanner banned nobody after $attempts scanner probes from $CLIENT_IP: $(th_exec 'fail2ban-client status caddy-scanner')"
+# fail2ban can notice late, never early: a ban before the threshold means the
+# jail counts something other than what it is configured to.
+[[ $attempts -ge $SCANNER_MAXRETRY ]] \
+  || fail "caddy-scanner banned $CLIENT_IP after $attempts probes, before its threshold of $SCANNER_MAXRETRY"
+pass "caddy-scanner banned $CLIENT_IP after $attempts scanner probes (threshold $SCANNER_MAXRETRY)"
+
+# Dropped, not refused: curl's 28 is a connection that timed out, 7 one that
+# was actively refused. A DROP tells a scanner nothing and costs it a timeout
+# per try. Both web ports; HTTP/3 on 443/udp is in the same rule but curl here
+# speaks no QUIC.
+client_rc() {
+  local rc=0
+  docker exec "$CLIENT" curl -sk --connect-timeout 5 --max-time 8 -o /dev/null "$@" || rc=$?
+  echo "$rc"
+}
+for target in "https://localhost/ --resolve localhost:443:$HOST_IP" \
+              "http://localhost/ --resolve localhost:80:$HOST_IP"; do
+  # shellcheck disable=SC2086 # the URL and its --resolve, split on purpose
+  rc="$(client_rc $target)"
+  [[ $rc == 28 ]] \
+    || fail "a banned client's request to ${target%% *} ended with curl exit $rc, not 28 (timed out — dropped at the firewall)"
+done
+# The ban is on the web ports only. SSH from the banned address still answers,
+# so an operator who tripped the jail from their own connection can still log in
+# and lift it. One TCP connection that reads the banner and leaves.
+docker exec "$CLIENT" timeout 5 bash -c "exec 3<>/dev/tcp/$HOST_IP/$SSH_PORT && head -c 4 <&3" \
+  | grep -q '^SSH-' || fail "a client banned by caddy-scanner cannot reach SSH on $HOST_IP:$SSH_PORT"
+serving || fail "the stack stopped serving everyone else while $CLIENT_IP was banned"
+pass "the banned client's requests to 443 and 80 are dropped while SSH still answers it, and everyone else is still served"
+
+# ── And the ban ends ──
+# Polled, bounded at a few times the shortened ban: fail2ban checks for expired
+# bans on its own schedule, so the exact second is not part of the contract.
+# Both jails: the probes were 4xx too, and an errors-jail ban on top (it should
+# be nowhere near its threshold) would keep the client out for the full hour.
+expired() {
+  [[ -z "$(jail_banned caddy-scanner)$(jail_banned caddy-errors)" ]] \
+    && [[ "$(client_curl --connect-timeout 3 -o /dev/null -w '%{http_code}' https://localhost/)" == 200 ]] \
+    && docker exec "$CLIENT" curl -sS --connect-timeout 3 --max-time 10 -o /dev/null "http://$HOST_IP/"
+}
+TH_AWAIT_TRIES=$((SHORT_BANTIME * 4)) await "the ban on $CLIENT_IP to expire" expired
+pass "after its ban time neither jail lists anybody and $CLIENT_IP reaches 443 and 80 again"
+
+th_exec "fail2ban-client set caddy-scanner bantime $CADDY_BANTIME" >/dev/null
+[[ "$(jail_get caddy-scanner bantime)" == "$CADDY_BANTIME" ]] \
+  || fail "could not put caddy-scanner's bantime back to ${CADDY_BANTIME}s"
 
 # ── Criterion: a failed deployment leaves the previous version serving ───────
 # A release that builds and ships and migrates cleanly and then cannot serve —

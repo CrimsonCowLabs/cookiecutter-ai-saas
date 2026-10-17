@@ -448,6 +448,15 @@ jobs:
           # The flag matrix runs this on files without a global block.
           scripts/check_caddy_edge.sh "$C"
 
+      # Issue #99. The fail2ban filters provision.yml installs, run by
+      # fail2ban-regex over an access log this Caddyfile really wrote: probes
+      # and 4xx counted against the client that sent them, the Stripe webhook
+      # and auth callbacks never, and a client forging the fields the filters
+      # read framing nobody. Once, not per flag combination: neither the
+      # filters nor the log lines they read depend on any answer.
+      - name: Ban filters count what the jails should, from a real access log
+        run: scripts/check_ban_filters.sh .generated-proxy/proxy-app
+
       - name: A reserved example domain leaves the ACME account anonymous
         run: |
           cookiecutter . --no-input -o .generated-proxy-default project_name="Default App"
@@ -765,7 +774,13 @@ jobs:
   # are encrypted at rest and decrypted only into a 0600 file on the host, the
   # DNS pre-flight aborts when the domain does not resolve to the target,
   # migrations run as part of the deploy, and a failed deploy leaves the
-  # previous release serving.
+  # previous release serving. And for provisioning's Caddy ban jails, which
+  # need a deployed stack writing an access log to have anything to read:
+  # they run with the group_vars thresholds; browsing, sign-in, checkout, bad
+  # OAuth callbacks and badly signed Stripe webhooks ban nobody, the check's
+  # own gateway address included; a client requesting scanner paths is banned
+  # and its 80 and 443 dropped (timing out, not refused) while SSH still
+  # answers it; and the ban expires.
   #
   # scripts/check_deploy.sh does all of that end to end against a throwaway
   # host, with a real Postgres and a real proxy; this job adds what is true of

@@ -53,6 +53,31 @@ fail2ban_maxretry: 5
 fail2ban_findtime: 10m
 fail2ban_bantime: 1h
 
+# How hard to bounce someone the web server keeps refusing, read from Caddy's
+# access log. A ban drops the address's HTTP and HTTPS traffic only, never SSH,
+# so a ban that lands on you by mistake can still be lifted from a shell:
+#
+#     sudo fail2ban-client set caddy-errors unbanip 198.51.100.7
+#
+# Probes for paths this app never serves (/.env, /wp-login.php: see the
+# Caddyfile's @scanner block) are bot-only, so a few are enough.
+fail2ban_caddy_scanner_maxretry: 3
+# Any 4xx — the app's 404s and 401s, its rate limiter's 429s, Caddy's 413s —
+# except on the Stripe webhook and the sign-in callbacks, which are never
+# counted. Deliberately far above what a person clicking around produces, even
+# behind an office or carrier NAT that puts many people on one address; lower
+# it only once the access log has shown you what normal looks like.
+fail2ban_caddy_errors_maxretry: 60
+fail2ban_caddy_findtime: 10m
+fail2ban_caddy_bantime: 1h
+
+# Addresses and CIDR ranges no jail ever bans, SSH's included, on top of the
+# host's own loopback. For your office's fixed address, or a monitor that
+# probes the site:
+#
+#     fail2ban_ignoreip: [203.0.113.10, 198.51.100.0/24]
+fail2ban_ignoreip: []
+
 # Container logs and the journal are the two things most likely to fill a small
 # VPS's disk, and it is the same disk Postgres is on.
 docker_log_max_size: 10m

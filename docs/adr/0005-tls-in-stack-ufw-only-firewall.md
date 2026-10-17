@@ -37,3 +37,8 @@ miss.
   them.
 - Caddy can't be scaled or moved separately from the app host. For a
   single-VPS template that is the intended trade.
+- ufw is the only firewall that decides what is open. fail2ban adds its bans
+  as nftables rules in a table of its own, beside ufw's, which close an
+  address and open nothing: `provision.yml` installs `nftables` for the `nft`
+  command those bans need, and leaves `nftables.service` off, because at boot
+  it would flush ufw's rules.

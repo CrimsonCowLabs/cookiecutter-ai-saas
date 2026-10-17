@@ -134,6 +134,13 @@
           # Ubuntu (see the jail below), which needs these bindings. Without
           # them the sshd jail starts and quietly watches nothing.
           - python3-systemd
+          # The command every jail here bans through: Ubuntu's fail2ban
+          # defaults to its nftables action, and only recommends nftables,
+          # which an iptables already on the host satisfies. Without it a jail
+          # still lists an address as banned while no rule drops anything.
+          # Installing it does not enable nftables.service, which would flush
+          # ufw's rules at boot.
+          - nftables
           - sudo
           - ufw
           - unattended-upgrades
@@ -375,6 +382,22 @@
         state: enabled
 
     # ── Intrusion banning ────────────────────────────────────────────────────
+    - name: Never ban the addresses listed in fail2ban_ignoreip
+      # In [DEFAULT], so it holds for every jail — SSH's and the web server's
+      # below alike — and in a file of its own, so no jail's file has to
+      # repeat it. Loopback is listed because setting ignoreip replaces
+      # fail2ban's default rather than adding to it.
+      ansible.builtin.copy:
+        content: |
+          # Managed by ansible/provision.yml. Edits here are overwritten.
+          [DEFAULT]
+          ignoreip = {{ (['127.0.0.1/8', '::1'] + fail2ban_ignoreip) | join(' ') }}
+        dest: /etc/fail2ban/jail.d/ignoreip.local
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart fail2ban
+
     - name: Ban repeated SSH authentication failures
       ansible.builtin.copy:
         content: |
@@ -646,6 +669,96 @@
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
         mode: "0755"
+
+    # ── Banning what the web server refuses ──────────────────────────────────
+    # Two jails read Caddy's JSON access log: caddy-scanner bans an address
+    # that keeps asking for paths only a scanner wants (/.env, /wp-login.php),
+    # caddy-errors one that keeps being refused with a 4xx. The filters, and
+    # what they will not count, are in files/fail2ban/;
+    # scripts/check_ban_filters.sh runs them against a log the generated
+    # Caddyfile really wrote.
+    - name: Make the directory Caddy's access log is bind-mounted from
+      # deploy.yml makes this too, with the same owner and mode, so neither
+      # playbook reports a change against the other. It has to exist here
+      # because provisioning comes before any deploy, and the jails below
+      # watch a file in it.
+      ansible.builtin.file:
+        path: "{{ app_dir }}/logs/caddy"
+        state: directory
+        owner: "{{ deploy_user }}"
+        mode: "0755"
+
+    - name: Make sure Caddy's access log exists before the jails watch it
+      # fail2ban refuses to start at all — SSH's jail included — while a
+      # jail's log file is missing, and until the first deploy brings Caddy
+      # up nothing has written this one. Owner and mode are the ones Caddy
+      # gives it (root in its container, `mode 0640` in the Caddyfile), and
+      # the times are left alone, so once Caddy is writing it this changes
+      # nothing. Caddy appends to the file it finds.
+      ansible.builtin.file:
+        path: "{{ app_dir }}/logs/caddy/access.log"
+        state: touch
+        owner: root
+        group: root
+        mode: "0640"
+        access_time: preserve
+        modification_time: preserve
+
+    - name: Install the filters that read Caddy's access log
+      ansible.builtin.copy:
+        src: fail2ban/{{ item }}.conf
+        dest: /etc/fail2ban/filter.d/{{ item }}.conf
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [caddy-scanner, caddy-errors]
+      notify: Restart fail2ban
+
+    - name: Ban addresses the web server keeps refusing
+      # backend: the [DEFAULT] Ubuntu ships reads the journal, and Caddy's log
+      # is a file. auto watches it with inotify (fail2ban recommends the
+      # bindings) or else polls it, and either way follows the path, so when
+      # Caddy rolls the file by renaming it fail2ban moves on to the new one.
+      #
+      # action: the same nftables action Ubuntu's defaults give the sshd jail,
+      # but limited to the web server's ports — 80 and 443 over TCP, 443 over
+      # UDP for HTTP/3 — so that a ban never takes SSH with it, and whoever
+      # is banned by mistake can still log in and lift it. Drop rather than
+      # the default reject: a bot learns nothing from silence, and is not sent
+      # a reply for every packet it fires. One action per protocol, because a
+      # single one would ban every listed port on both; actname tells the two
+      # apart, and name keeps their nftables sets apart. blocktype is
+      # spelled the way nft spells it, so it is not portable to the iptables
+      # actions, which want DROP.
+      ansible.builtin.copy:
+        content: |
+          # Managed by ansible/provision.yml. Edits here are overwritten.
+          [caddy-scanner]
+          enabled = true
+          filter = caddy-scanner
+          backend = auto
+          logpath = {{ app_dir }}/logs/caddy/access.log
+          maxretry = {{ fail2ban_caddy_scanner_maxretry }}
+          findtime = {{ fail2ban_caddy_findtime }}
+          bantime = {{ fail2ban_caddy_bantime }}
+          action = nftables[name=caddy-scanner, port="80,443", protocol=tcp, blocktype=drop]
+                   nftables[name=caddy-scanner-h3, actname=nftables-h3, port=443, protocol=udp, blocktype=drop]
+
+          [caddy-errors]
+          enabled = true
+          filter = caddy-errors
+          backend = auto
+          logpath = {{ app_dir }}/logs/caddy/access.log
+          maxretry = {{ fail2ban_caddy_errors_maxretry }}
+          findtime = {{ fail2ban_caddy_findtime }}
+          bantime = {{ fail2ban_caddy_bantime }}
+          action = nftables[name=caddy-errors, port="80,443", protocol=tcp, blocktype=drop]
+                   nftables[name=caddy-errors-h3, actname=nftables-h3, port=443, protocol=udp, blocktype=drop]
+        dest: /etc/fail2ban/jail.d/caddy.local
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart fail2ban
 
     # ── Nothing else may hold the proxy's ports ──────────────────────────────
     - name: Collect the services on this host

@@ -33,7 +33,7 @@ it.
 | Deploy account | A user named from `author_name`, key-only, passwordless sudo, in the `docker` group — the account `ansible/deploy.yml` logs in as |
 | SSH | Key-only, no root login, no passwords, in `/etc/ssh/sshd_config.d/00-hardening.conf` |
 | Firewall | `ufw`, governing every inbound port — containers' included: inbound denied by default; SSH, `80/tcp`, `443/tcp` and `443/udp` (HTTP/3) open; forwarding and NAT for container networks (see [The firewall and Docker](#the-firewall-and-docker)) |
-| Intrusion banning | `fail2ban`'s sshd jail, reading the journal |
+| Intrusion banning | `fail2ban`: an sshd jail reading the journal, and two jails reading Caddy's access log that ban web probers from `80` and `443` (see [Banning probers](#banning-probers)) |
 | Security updates | `unattended-upgrades`, restricted to security origins, no automatic reboot |
 | Log rotation | `logrotate.timer`, the journal capped at 500M, Docker's json-file logs capped |
 | Container runtime | Docker Engine and the compose plugin, from Docker's apt repository, with its iptables management off |
@@ -105,6 +105,62 @@ Two things follow for the stack, both in `docker-compose.prod.yml`:
   `X-Forwarded-For`.
 - **The app publishes its port on loopback** (`127.0.0.1:3000`), which is where
   Caddy proxies to. Nothing outside the host can reach it.
+
+### Banning probers
+
+Caddy already refuses scanner probes (see the `@scanner` matcher in the
+`Caddyfile`), but refusing one costs the scanner nothing, so it keeps going. Two
+`fail2ban` jails read Caddy's JSON access log on the host —
+`/app/<project_slug>/logs/caddy/access.log`, bind-mounted out of the container —
+and ban the address at the firewall instead, the way the sshd jail does for
+failed logins:
+
+| Jail | Counts | Never counts | Bans after (default) |
+|------|--------|--------------|----------------------|
+| `caddy-scanner` | lines Caddy marked `"blocked":"scanner"` — `/.env`, `/wp-login.php`, anything ending `.php` and the rest of `@scanner` | everything else | 3 in 10 minutes |
+| `caddy-errors` | any 4xx answer, the proxy's 413 and the app's 429 included | `/api/webhook/stripe`, `/api/auth/callback/*` | 60 in 10 minutes |
+
+The two exclusions are traffic whose failures are not hostile: Stripe retries a
+failing webhook delivery for days from its own addresses, so banning it stops
+billing; and a user whose OAuth redirect went wrong lands on a callback with bad
+parameters and tries again. The errors threshold is high for the same reason —
+it is there for a client hammering the app, not for a visitor who follows a few
+dead links.
+
+A ban drops the address's packets to `80/tcp`, `443/tcp` and `443/udp` and
+nothing else. It is a DROP, not a reject, so a scanner gets a timeout per try
+rather than a fast answer. SSH is left alone on purpose: an operator who bans
+their own address — testing, or behind a shared office NAT — can still log in
+and lift it. Every value is a variable in `ansible/group_vars/all.yml`, applied
+by re-running `provision.yml`:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `fail2ban_caddy_scanner_maxretry` | `3` | scanner probes before `caddy-scanner` bans |
+| `fail2ban_caddy_errors_maxretry` | `60` | 4xx answers before `caddy-errors` bans |
+| `fail2ban_caddy_findtime` | `10m` | the window both jails count within |
+| `fail2ban_caddy_bantime` | `1h` | how long a ban lasts before it lifts itself |
+| `fail2ban_ignoreip` | `[]` | addresses or CIDRs no jail ever bans — sshd's included — on top of loopback |
+
+An address that legitimately makes a lot of failing requests — an uptime
+checker, a load test, your office — belongs in `fail2ban_ignoreip`, rather than
+in thresholds raised for everyone.
+
+Seeing and lifting bans, on the host:
+
+```bash
+sudo fail2ban-client status caddy-scanner             # "Banned IP list" at the end
+sudo fail2ban-client status caddy-errors
+sudo fail2ban-client set caddy-scanner unbanip 203.0.113.7
+sudo fail2ban-client unban 203.0.113.7                # from every jail, sshd's included
+```
+
+CI holds the jails to this as behaviour against a deployed stack
+(`scripts/check_deploy.sh`): a burst of browsing, sign-in, unauthenticated
+checkout, more bad OAuth callbacks and badly signed Stripe webhooks than the
+errors threshold bans nobody; a client requesting scanner paths is banned, its
+requests to 80 and 443 time out while SSH still answers it and everyone else is
+still served; and once the ban time has passed it is served again.
 
 ## Deploying
 

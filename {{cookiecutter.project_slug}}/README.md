@@ -414,7 +414,9 @@ What it leaves behind:
   iptables management is turned off, and ufw carries the NAT and forwarding
   rules containers need to reach each other and the internet.
 - **`fail2ban`** banning repeated SSH authentication failures, reading the
-  journal rather than the `/var/log/auth.log` this release no longer writes.
+  journal rather than the `/var/log/auth.log` this release no longer writes —
+  and banning web clients that keep probing the site, from Caddy's access log
+  (see [Banning probers](#banning-probers)).
 - **Unattended security upgrades**, restricted to security origins, with no
   automatic reboot — kernel updates wait for a reboot you choose.
 - **Log rotation** that covers the three places logs pile up: `logrotate`, a
@@ -524,7 +526,7 @@ after a deploy, unless you changed `app_dir`. It rolls at 10 MiB and keeps five
 gzipped rolls for at most 30 days, so it stays under about 60 MB. It goes only
 there, not to `docker compose logs caddy`. Every request Caddy refused carries a
 `blocked` field — `"scanner"` or `"body_too_large"` — and nothing else does,
-which is what a ban jail should match:
+which is what the scanner ban jail matches:
 
 ```bash
 sudo jq -c 'select(.blocked) | [.ts, .request.client_ip, .blocked, .request.uri]' \
@@ -533,6 +535,51 @@ sudo jq -c 'select(.blocked) | [.ts, .request.client_ip, .blocked, .request.uri]
 
 The file is root's and mode 0640, because it holds client addresses and full
 request URIs, sign-in link tokens included.
+
+#### Banning probers
+
+Refusing a probe costs the scanner nothing, so it keeps going. `provision.yml`
+installs two `fail2ban` jails that read the access log above and ban the
+address at the host's firewall instead:
+
+| Jail | Counts | Bans after (default) |
+|------|--------|----------------------|
+| `caddy-scanner` | requests Caddy refused as scanner probes (`"blocked":"scanner"`) | 3 in 10 minutes |
+| `caddy-errors` | any 4xx answer, 413 and 429 included | 60 in 10 minutes |
+
+`caddy-errors` never counts `/api/webhook/stripe` or `/api/auth/callback/*`:
+Stripe retries a failing webhook for days from its own addresses, and a user
+whose OAuth redirect went wrong lands on a callback with bad parameters and
+tries again. Banning either would be an outage, not a defence. Its threshold is
+high for the same reason — a visitor clicking a few dead links is nowhere near
+it.
+
+A ban drops the address's traffic to `80/tcp`, `443/tcp` and `443/udp` and
+nothing else: SSH still answers it, so if you ban yourself — testing, or a
+shared office address — you can still log in and lift the ban. It lasts for
+`fail2ban_caddy_bantime` (an hour by default) and then lifts itself. Every
+value is in `ansible/group_vars/all.yml`, and re-running `provision.yml`
+applies a change:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `fail2ban_caddy_scanner_maxretry` | `3` | scanner probes before `caddy-scanner` bans |
+| `fail2ban_caddy_errors_maxretry` | `60` | 4xx answers before `caddy-errors` bans |
+| `fail2ban_caddy_findtime` | `10m` | the window both count within |
+| `fail2ban_caddy_bantime` | `1h` | how long a ban lasts |
+| `fail2ban_ignoreip` | `[]` | addresses or CIDRs no jail ever bans — the SSH jail included — on top of loopback |
+
+Put your office, a monitoring service or an uptime checker in
+`fail2ban_ignoreip` rather than raising the thresholds for everyone.
+
+To see who is banned, and to lift a ban early:
+
+```bash
+sudo fail2ban-client status caddy-scanner            # "Banned IP list" at the end
+sudo fail2ban-client status caddy-errors
+sudo fail2ban-client set caddy-scanner unbanip 203.0.113.7
+sudo fail2ban-client unban 203.0.113.7               # from every jail at once
+```
 
 ## The CLI
 
