@@ -355,8 +355,13 @@ jobs:
       # break `caddy fmt` for a combination nobody tried. Then it is run
       # against a stub upstream: scanner paths blocked before the app, bodies
       # over their cap refused with 413, event streams unbuffered, and every
-      # refusal marked in the JSON access log.
-      - name: Caddyfile is formatted, valid and refuses junk at the edge
+      # refusal marked in the JSON access log. Issue #100: both run the
+      # project's own Caddy build (caddy/Dockerfile, with the rate-limit
+      # module), which stock Caddy would not be — it rejects `rate_limit` —
+      # and the edge check proves the per-address limits: 429 with
+      # Retry-After past each one, another address unaffected, the SSE
+      # stream and the Stripe webhook exempt.
+      - name: Caddyfile is formatted, valid, refuses junk and rate-limits at the edge
         run: |
           scripts/check_caddyfile.sh "$G/Caddyfile"
           scripts/check_caddy_edge.sh "$G/Caddyfile"
@@ -425,11 +430,13 @@ jobs:
   # that condition is generated and handed to Caddy's own parser.
   #
   # scripts/check_caddyfile.sh holds what is true of any Caddyfile; each step
-  # adds only what its own answers imply.
+  # adds only what its own answers imply. Every step validates against the
+  # project's own Caddy build (issue #100); the three generated Dockerfiles
+  # are identical, so the build is paid once and the rest are cache hits.
   proxy-config:
     name: Caddyfile is generated from the answers
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -452,8 +459,10 @@ jobs:
       # fail2ban-regex over an access log this Caddyfile really wrote: probes
       # and 4xx counted against the client that sent them, the Stripe webhook
       # and auth callbacks never, and a client forging the fields the filters
-      # read framing nobody. Once, not per flag combination: neither the
-      # filters nor the log lines they read depend on any answer.
+      # read framing nobody. A 429 from Caddy's rate limiter is counted by the
+      # errors jail like any other 4xx (issue #100). Once, not per flag
+      # combination: neither the filters nor the log lines they read depend on
+      # any answer.
       - name: Ban filters count what the jails should, from a real access log
         run: scripts/check_ban_filters.sh .generated-proxy/proxy-app
 
@@ -494,11 +503,17 @@ jobs:
       - name: Generate project
         run: cookiecutter . --no-input -o .generated-tls project_name="TLS App"
 
-      # docker-compose.prod.yml runs pre-built images. Only the app image is on
-      # the path a request takes, so the worker images are not built here.
+      # docker-compose.prod.yml runs pre-built images. Only the app and the
+      # proxy are on the path a request takes, so the worker images are not
+      # built here. The proxy is the project's own Caddy build (caddy/, with
+      # the rate-limit module), under the name the compose file asks for.
       - name: Build the app image
         working-directory: .generated-tls/tls-app
         run: docker build -t tls-app-app:latest --target runner -f Dockerfile .
+
+      - name: Build the Caddy image
+        working-directory: .generated-tls/tls-app
+        run: docker build -t tls-app-caddy:latest caddy
 
       - name: Serve HTTPS from the stack
         run: scripts/check_tls_stack.sh .generated-tls/tls-app
@@ -780,13 +795,17 @@ jobs:
   # OAuth callbacks and badly signed Stripe webhooks ban nobody, the check's
   # own gateway address included; a client requesting scanner paths is banned
   # and its 80 and 443 dropped (timing out, not refused) while SSH still
-  # answers it; and the ban expires.
+  # answers it; and the ban expires. And for Caddy's rate limits (issue #100):
+  # the deployed proxy is the project's own Caddy build, with the rate-limit
+  # module, shipped and tagged like every other image; caddy_rate_limit_* set
+  # in group_vars reach it, and turn a burst into 429s with Retry-After.
   #
   # scripts/check_deploy.sh does all of that end to end against a throwaway
   # host, with a real Postgres and a real proxy; this job adds what is true of
   # the generated files before anything runs. It is the longest job here — it
-  # builds all five images, ships ~600MB of them over SSH, and deploys three
-  # times (good, unchanged, deliberately broken).
+  # builds all six images (the proxy's own Caddy among them), ships ~600MB of
+  # them over SSH, and deploys three times (good, unchanged, deliberately
+  # broken).
   deploy:
     name: A deploy ships, migrates and can fail safely
     runs-on: ubuntu-latest
@@ -812,6 +831,21 @@ jobs:
         run: |
           ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --syntax-check
           ansible-lint ansible/
+
+      - name: The proxy deployed is the project's own Caddy build
+        working-directory: .generated-deploy/deploy-app
+        run: |
+          # Stock caddy has no rate limiter, so a compose file still naming it
+          # would deploy a Caddyfile that stock Caddy refuses to load. The
+          # proxy has to be this project's image, which deploy.yml builds from
+          # caddy/ and ships by default.
+          grep -qE '^    image: deploy-app-caddy:latest$' docker-compose.prod.yml
+          if grep -qE '^ *image: caddy(:|$)' docker-compose.prod.yml; then
+            echo "docker-compose.prod.yml still runs the stock caddy image" >&2
+            exit 1
+          fi
+          grep -qE '^deploy_targets: ".*\bcaddy\b.*"$' ansible/group_vars/all.yml
+          test -f caddy/Dockerfile
 
       - name: The vault is committed and its password is not
         working-directory: .generated-deploy/deploy-app

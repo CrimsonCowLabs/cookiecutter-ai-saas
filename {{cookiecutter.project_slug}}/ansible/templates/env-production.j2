@@ -36,11 +36,33 @@ DATABASE_URL=postgresql://{{ postgres_user }}:{{ vault_postgres_password | urlen
 
 # ─── Redis (BullMQ) ──────────────────────────────────
 REDIS_URL=redis://redis:6379
-{% if site_address | length > 0 %}
+{#
+  Caddy's settings, read by the compose file's pass-through of each name into
+  the caddy service (and harmless in the app's environment, which never reads
+  them). Each is written only when group_vars sets it, because a line here
+  with an empty value would still be set, and Caddy's {$NAME:default} falls
+  back to its default only for a name that is unset. Compared with equalto
+  rather than measured with length, because a limit set as a bare number in
+  group_vars arrives as an int, which has none.
+#}
+{% set proxy_env = [
+     ('SITE_ADDRESS', site_address | default('')),
+     ('CADDY_RATE_LIMIT_EVENTS', caddy_rate_limit_events | default('')),
+     ('CADDY_RATE_LIMIT_WINDOW', caddy_rate_limit_window | default('')),
+     ('CADDY_STRICT_RATE_LIMIT_EVENTS', caddy_strict_rate_limit_events | default('')),
+     ('CADDY_STRICT_RATE_LIMIT_WINDOW', caddy_strict_rate_limit_window | default('')),
+     ('CADDY_INGEST_RATE_LIMIT_EVENTS', caddy_ingest_rate_limit_events | default('')),
+     ('CADDY_INGEST_RATE_LIMIT_WINDOW', caddy_ingest_rate_limit_window | default('')),
+   ] | rejectattr('1', 'equalto', '') | list %}
+{% if proxy_env | length > 0 %}
 
 # ─── Proxy ────────────────────────────────────────────
-# Overrides the name Caddy serves; unset, the Caddyfile's own default applies.
-SITE_ADDRESS={{ site_address }}
+# Read by Caddy: the name it serves and its per-address rate limits. Only the
+# ones set in ansible/group_vars/all.yml are here; for the rest, the
+# Caddyfile's own default applies.
+{% for name, value in proxy_env %}
+{{ name }}={{ value }}
+{% endfor %}
 {% endif %}
 # cc:begin stripe
 

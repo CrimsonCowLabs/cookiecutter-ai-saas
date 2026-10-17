@@ -118,7 +118,7 @@ failed logins:
 | Jail | Counts | Never counts | Bans after (default) |
 |------|--------|--------------|----------------------|
 | `caddy-scanner` | lines Caddy marked `"blocked":"scanner"` — `/.env`, `/wp-login.php`, anything ending `.php` and the rest of `@scanner` | everything else | 3 in 10 minutes |
-| `caddy-errors` | any 4xx answer, the proxy's 413 and the app's 429 included | `/api/webhook/stripe`, `/api/auth/callback/*` | 60 in 10 minutes |
+| `caddy-errors` | any 4xx answer, the proxy's 413 and 429 and the app's 429 included | `/api/webhook/stripe`, `/api/auth/callback/*` | 60 in 10 minutes |
 
 The two exclusions are traffic whose failures are not hostile: Stripe retries a
 failing webhook delivery for days from its own addresses, so banning it stops
@@ -188,6 +188,7 @@ history.
 | `./scripts/deploy.sh app` | `... -e deploy_targets=app` |
 | `./scripts/deploy.sh worker db-writer` | `... -e deploy_targets=worker,db-writer` |
 | `./scripts/deploy.sh env` | `... -e deploy_targets=none` |
+| — | `... -e deploy_targets=caddy` — the proxy's own image |
 | — | `... --tags preflight` — check the vault and DNS, deploy nothing |
 
 `migrator` is added to any non-empty `deploy_targets`, because the migrator
@@ -195,6 +196,19 @@ image already on the host belongs to the *previous* release: shipping new app
 code and running the previous release's migrations against it is the failure
 the ordering below exists to prevent. `-e run_migrations=false` skips running
 them; nothing skips shipping the right image.
+
+`caddy` is a target like the others because the proxy is an image this project
+builds: stock Caddy has no rate limiter, so `caddy/Dockerfile` compiles one in
+(see [Rate limits](#rate-limits)), and the deploy builds it, ships it under the
+release tag and rolls it back exactly as it does the app. The `Caddyfile` is
+still shipped beside the compose file and mounted into it, so a proxy-rule
+change alone needs no rebuild.
+
+A subset ships only what it names, and the compose file asks for every
+service's image, so each has to be on the host already. On a host first
+deployed while the proxy was still stock Caddy there is no `<slug>-caddy` image:
+deploy with `caddy` in the set — the default includes it — once before
+narrowing `deploy_targets`, or the switch fails and rolls back.
 
 ### The DNS pre-flight
 
@@ -319,6 +333,8 @@ Two prerequisites for the certificate, and neither is optional:
 | Concern | Where it lives |
 |---------|----------------|
 | Proxy config | `Caddyfile`, rendered from `domain_name` at generation time |
+| Proxy image | `caddy/Dockerfile` — Caddy with the rate-limit module; deploy target `caddy` |
+| Rate limits | `caddy_rate_limit_*` in `ansible/group_vars/all.yml`; empty means the `Caddyfile`'s defaults (see [Rate limits](#rate-limits)) |
 | Certificates | the `caddydata` volume — keep it across deploys, or every boot re-issues into a rate limit |
 | Expiry warnings | mailed to `author_email`, unless that is at a reserved example domain (see below) |
 | Listening ports | `80`, `443`, `443/udp` (HTTP/3), bound by `caddy` on the host's network; the app's `3000` on `127.0.0.1` only, for Caddy |
@@ -343,6 +359,38 @@ Responses are not compressed at the proxy. Next.js already compresses its own
 output, and compressing a stream is how the SSE job-progress endpoint stops
 arriving live.
 
+### Rate limits
+
+Caddy limits the requests one client address may make — a generous limit across
+the site, a tighter one on the endpoints that cost something per request, and
+one of its own for the analytics proxy — and answers a request over either with `429` and `Retry-After`. That 429 is in
+the access log, where the `caddy-errors` jail counts it like any other 4xx.
+
+The limits are set without touching the `Caddyfile`: it reads each from the
+environment, with its own default for when it is unset.
+
+| `group_vars/all.yml` | Environment Caddy reads | Means |
+|----------------------|-------------------------|-------|
+| `caddy_rate_limit_events` | `CADDY_RATE_LIMIT_EVENTS` | requests per window, site-wide |
+| `caddy_rate_limit_window` | `CADDY_RATE_LIMIT_WINDOW` | that window, as a Go duration (`30s`, `1m`) |
+| `caddy_strict_rate_limit_events` | `CADDY_STRICT_RATE_LIMIT_EVENTS` | requests per window on the strict endpoints |
+| `caddy_strict_rate_limit_window` | `CADDY_STRICT_RATE_LIMIT_WINDOW` | that window |
+| `caddy_ingest_rate_limit_events` | `CADDY_INGEST_RATE_LIMIT_EVENTS` | requests per window to the analytics proxy (`/ingest`) |
+| `caddy_ingest_rate_limit_window` | `CADDY_INGEST_RATE_LIMIT_WINDOW` | that window |
+
+All six are empty by default. The deploy writes only the ones you set into
+`.env-production`, beside `SITE_ADDRESS`, and the compose file passes each
+through to the `caddy` service — so an unset one is unset inside Caddy too, and
+its default applies. Changing one is `-e deploy_targets=none`; nothing is
+rebuilt. An office or carrier NAT puts many people behind one address, so lower
+the site-wide limit only once the access log has shown you what normal looks
+like.
+
+`scripts/check_deploy.sh` checks this on a real deploy: the running proxy is
+the release's `<slug>-caddy` image with `http.handlers.rate_limit` in it, none
+of them reaches it until one is set, and setting
+`caddy_rate_limit_events=5` turns a burst from one client into 429s.
+
 ### Smoke-testing before DNS exists
 
 `SITE_ADDRESS` overrides the name Caddy serves. Set it to `https://localhost` and
@@ -356,8 +404,9 @@ curl -k https://localhost/
 
 Everything else — the redirect, TLS termination, the proxy hop — is the
 production path; only the issuer differs, so this proves the wiring and not the
-ACME exchange. CI's `tls-stack` job runs exactly this, via
-`scripts/check_tls_stack.sh`.
+ACME exchange. The compose file runs pre-built images, so the app's and the
+proxy's (`docker build -t <slug>-caddy:latest caddy`) have to be built first.
+CI's `tls-stack` job runs exactly this, via `scripts/check_tls_stack.sh`.
 
 ### If `author_email` is at a reserved example domain
 

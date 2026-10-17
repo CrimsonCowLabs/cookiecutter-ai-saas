@@ -1,9 +1,14 @@
 services:
   caddy:
-    image: caddy:2-alpine
-    # The front door: Caddy terminates TLS, redirects HTTP to HTTPS and proxies
-    # to `app`, so bringing this stack up is all that serving the site over
-    # HTTPS takes.
+    image: {{ cookiecutter.project_slug }}-caddy:latest
+    # The front door: Caddy terminates TLS, redirects HTTP to HTTPS, rate-limits
+    # each client address and proxies to `app`, so bringing this stack up is
+    # all that serving the site over HTTPS takes.
+    #
+    # The stack's own build (caddy/Dockerfile), not the stock caddy image,
+    # which has no rate limiter: the same Caddy with the caddy-ratelimit module
+    # compiled in. ansible/deploy.yml builds and ships it like the app's images
+    # (deploy target `caddy`), under a release tag it can roll back to.
     #
     # On the host's network rather than behind published ports, so it binds
     # 80/tcp, 443/tcp and 443/udp (HTTP/3) on the host itself. The host's
@@ -28,6 +33,20 @@ services:
       # https://{{ cookiecutter.domain_name }}. Set it to https://localhost to
       # smoke-test the stack on a box with no DNS for that name.
       - SITE_ADDRESS
+      # The per-client-address rate limits, the same way: unset means the
+      # Caddyfile's own defaults, so a value is only ever written down where
+      # somebody chose it. EVENTS requests per WINDOW (a Go duration: 1m, 30s)
+      # for the site as a whole; the STRICT pair for the endpoints that cost
+      # something per request — sign-in, the contact form, server actions
+      # (job submission among them); the INGEST pair for the analytics proxy.
+      # deploy.yml sets them from the caddy_*rate_limit_* values in
+      # ansible/group_vars/all.yml, through .env-production.
+      - CADDY_RATE_LIMIT_EVENTS
+      - CADDY_RATE_LIMIT_WINDOW
+      - CADDY_STRICT_RATE_LIMIT_EVENTS
+      - CADDY_STRICT_RATE_LIMIT_WINDOW
+      - CADDY_INGEST_RATE_LIMIT_EVENTS
+      - CADDY_INGEST_RATE_LIMIT_WINDOW
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Certificates and the ACME account key. Losing this volume means

@@ -30,6 +30,7 @@
 #
 #     -e deploy_targets=app                 # just the app image
 #     -e deploy_targets=worker,db-writer    # two of them
+#     -e deploy_targets=caddy               # the proxy's own image
 #     -e deploy_targets=none                # re-render .env-production and restart
 #     --tags preflight                      # check the vault and DNS, deploy nothing
 #
@@ -317,6 +318,15 @@
         dockerfile: Dockerfile
         context: .
         target: ops
+      # The proxy: Caddy built with xcaddy and the rate-limit module, which
+      # the stock image lacks. Its final stage is the Dockerfile's last, so it
+      # needs no target. Shipped, tagged and rolled back exactly as the app's
+      # images are. The Caddyfile it serves is still the shipped one, which
+      # the compose file mounts over whatever the image carries, so a change
+      # to a proxy rule alone needs no rebuild.
+      caddy:
+        dockerfile: caddy/Dockerfile
+        context: caddy
 
     # What the operator asked to ship. `none` and an empty value both mean "no
     # images", which is how .env-production is re-rendered on its own.

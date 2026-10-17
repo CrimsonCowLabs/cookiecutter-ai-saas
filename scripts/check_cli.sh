@@ -308,7 +308,7 @@ fi
 sed -n '/TASK \[Build the images this release ships\]/,/^TASK \[/p' "$TH_WORK/migrate.log" > "$TH_WORK/migrate-build.log"
 [[ -s "$TH_WORK/migrate-build.log" ]] || fail "migrate never reached the build task: $(tail -20 "$TH_WORK/migrate.log")"
 grep -q "item=migrator" "$TH_WORK/migrate-build.log" || fail "migrate did not attempt to build the migrator image"
-for other in app worker db-writer ops; do
+for other in app worker db-writer ops caddy; do
   grep -q "item=$other)" "$TH_WORK/migrate-build.log" \
     && fail "opsctl migrate also built '$other' — it should ship only the migrator"
 done

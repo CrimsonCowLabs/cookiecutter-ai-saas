@@ -18,6 +18,12 @@
 #   * the DNS pre-flight aborts  — against a name resolving elsewhere, and
 #                                  proceeds against one resolving here
 #   * migrations run             — asserted against the database afterwards
+#   * the proxy is the stack's   — the running Caddy is this release's
+#     own Caddy build              <slug>-caddy image, with the rate-limit
+#                                  module in it, shipped like the others; its
+#                                  limits are set from group_vars and reach
+#                                  the running proxy, and left unset reach it
+#                                  not at all, so the Caddyfile's defaults hold
 #   * the proxy sees clients     — Caddy logs a client's own address, and the
 #                                  app rate-limits by it from X-Forwarded-For
 #   * the app is loopback-only   — bound on 127.0.0.1:3000 and unreachable on
@@ -108,7 +114,7 @@ cleanup() {
   # Images this check built, so a check does not quietly fill the disk. The
   # layer cache survives, so a re-run is not a cold build.
   docker image ls --format '{{.Repository}}:{{.Tag}}' \
-    | grep -E "^($SLUG-(app|worker|db-writer|migrator|ops)|deploy-check-drizzle):" \
+    | grep -E "^($SLUG-(app|worker|db-writer|migrator|ops|caddy)|deploy-check-drizzle):" \
     | xargs docker image rm -f >/dev/null 2>&1 || true
   throwaway_host_stop
 }
@@ -351,6 +357,42 @@ serving() {
 await "the stack to serve HTTPS" serving
 pass "the deployed stack answers 200 over HTTPS from outside the host"
 
+GOOD_RELEASE="$(th_ssh "$DEPLOY_USER" "sed -n 's/^release: //p' $APP_DIR/RELEASE")"
+[[ -n "$GOOD_RELEASE" ]] || fail "no release was recorded in $APP_DIR/RELEASE"
+pass "the host records release $GOOD_RELEASE"
+
+# ── Criterion: the proxy is the stack's own Caddy build ──────────────────────
+# The stock caddy image has no rate limiter, so the stack builds its own, and
+# that image has to be the one serving — not merely one that was built. Three
+# things, each of which could be true without the others: the running container
+# is this release's <slug>-caddy image (shipped and tagged like every other, so
+# it rolls back like every other), that image carries the rate-limit module,
+# and with no caddy_rate_limit_* set nothing of the sort reaches its
+# environment, so the Caddyfile's own defaults are what it runs with.
+#
+# "Reaches" means NAME=..., an empty value included. An empty one is the
+# failure that matters: Caddy falls back to {$NAME:default} only for a name
+# that is unset, and `events` with an empty argument is a Caddyfile Caddy
+# refuses to load — so group_vars' empty defaults must never be written out as
+# NAME=. A bare NAME is what compose's pass-through records for a variable it
+# did not have, and is not set inside the container; the stack answering above,
+# on group_vars' empty defaults, is Caddy having loaded on its own defaults.
+caddy_env() {
+  th_exec "docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' ${SLUG}-caddy-1" | tr -d '\r'
+}
+GOOD_CADDY_IMAGE="$(th_exec "docker images --no-trunc -q $SLUG-caddy:$GOOD_RELEASE" | tr -d '\r')"
+[[ -n $GOOD_CADDY_IMAGE ]] \
+  || fail "the host has no $SLUG-caddy:$GOOD_RELEASE: the deploy did not ship the Caddy image under the release tag"
+running_caddy="$(th_exec "docker inspect -f '{{.Image}}' ${SLUG}-caddy-1" | tr -d '\r')"
+[[ "$running_caddy" == "$GOOD_CADDY_IMAGE" ]] \
+  || fail "the running Caddy is $running_caddy ($(th_exec "docker inspect -f '{{.Config.Image}}' ${SLUG}-caddy-1" | tr -d '\r')), not release $GOOD_RELEASE's $SLUG-caddy image $GOOD_CADDY_IMAGE"
+th_exec "docker exec ${SLUG}-caddy-1 caddy list-modules" | tr -d '\r' | grep -qxF http.handlers.rate_limit \
+  || fail "the running Caddy has no http.handlers.rate_limit module: $(th_exec "docker exec ${SLUG}-caddy-1 caddy list-modules --skip-standard" | tr -d '\r' | tr '\n' ' ')"
+if grep -E '^CADDY_([A-Z]+_)?RATE_LIMIT_[A-Z]+=' <<<"$(caddy_env)"; then
+  fail "with no caddy_rate_limit_* set, the above still reached Caddy's environment, overriding the Caddyfile's defaults"
+fi
+pass "the running Caddy is release $GOOD_RELEASE's $SLUG-caddy image, with the rate-limit module, booted on the Caddyfile's default limits with every caddy_*rate_limit_* left empty"
+
 # ── Criterion: the proxy sees who is asking ──────────────────────────────────
 # Caddy runs on the host's network rather than behind a published port, because
 # a published port now goes through docker-proxy, which would make every client
@@ -410,9 +452,6 @@ th_exec "curl -sS --max-time 5 -o /dev/null http://127.0.0.1:3000/" \
 pass "the app listens on 127.0.0.1:3000 only, and is unreachable from outside the host"
 
 GOOD_APP_IMAGE="$(th_exec "docker images --no-trunc -q $SLUG-app:latest" | tr -d '\r')"
-GOOD_RELEASE="$(th_ssh "$DEPLOY_USER" "sed -n 's/^release: //p' $APP_DIR/RELEASE")"
-[[ -n "$GOOD_RELEASE" ]] || fail "no release was recorded in $APP_DIR/RELEASE"
-pass "the host records release $GOOD_RELEASE"
 
 # ── Criterion-adjacent: re-running an unchanged deploy changes nothing ───────
 echo "==> Run 2: re-deploying unchanged code"
@@ -685,5 +724,63 @@ still="$(th_ssh "$DEPLOY_USER" "sed -n 's/^release: //p' $APP_DIR/RELEASE")"
 [[ "$still" == "$GOOD_RELEASE" ]] \
   || fail "the host records release $still after a failed deploy, not $GOOD_RELEASE"
 pass "the previous release is serving again, from its own images, and is what the host records"
+# The broken release changed only the app, so its Caddy image is the good
+# release's, and Caddy sits through both the switch and the rollback. It still
+# has to be on that image afterwards, not on anything else tagged :latest.
+[[ "$(th_exec "docker inspect -f '{{.Image}}' ${SLUG}-caddy-1" | tr -d '\r')" == "$GOOD_CADDY_IMAGE" ]] \
+  || fail "after the rollback the running Caddy is not release $GOOD_RELEASE's $SLUG-caddy image"
+pass "Caddy is serving from release $GOOD_RELEASE's image after the rollback too"
+
+# ── Criterion: the rate limits are tunable without editing the Caddyfile ─────
+# Last, because it changes how hard the proxy pushes back and everything above
+# wants the defaults. An env-only deploy, as an operator changing a limit would
+# run one, with all six set: each has to reach the running Caddy's environment
+# through .env-production (as site_address does), and the general one is then
+# made small enough to watch working — a burst from one client to a page the
+# app itself never rate-limits, so a 429 can only be Caddy's.
+echo "==> Tuning Caddy's rate limits from group_vars"
+TUNED=(-e caddy_rate_limit_events=5 -e caddy_rate_limit_window=1m
+       -e caddy_strict_rate_limit_events=3 -e caddy_strict_rate_limit_window=2m
+       -e caddy_ingest_rate_limit_events=7 -e caddy_ingest_rate_limit_window=3m)
+deploy -e deploy_targets=none -e site_address=https://localhost "${TUNED[@]}" \
+  > "$TH_WORK/deploy-tuned.log" 2>&1 \
+  || fail "the env-only deploy with Caddy's limits set failed: $(tail -20 "$TH_WORK/deploy-tuned.log")"
+env_now="$(caddy_env)"
+for pair in CADDY_RATE_LIMIT_EVENTS=5 CADDY_RATE_LIMIT_WINDOW=1m \
+            CADDY_STRICT_RATE_LIMIT_EVENTS=3 CADDY_STRICT_RATE_LIMIT_WINDOW=2m \
+            CADDY_INGEST_RATE_LIMIT_EVENTS=7 CADDY_INGEST_RATE_LIMIT_WINDOW=3m; do
+  grep -qxF "$pair" <<<"$env_now" \
+    || fail "$pair did not reach the running Caddy's environment (it has: $(grep -E '^CADDY_' <<<"$env_now" | tr '\n' ' '))"
+done
+# Recreated on the new environment, so it is waited for — on one request,
+# which spends one of the five.
+client_served() { [[ "$(client_curl -o /dev/null -w '%{http_code}' https://localhost/)" == 200 ]]; }
+await "Caddy to serve on its tuned limits" client_served
+limited=0
+retry_after=""
+for _ in $(seq 15); do
+  headers="$(client_curl -o /dev/null -D - https://localhost/ || true)"
+  if grep -qE '^HTTP/[0-9.]+ 429' <<<"$headers"; then
+    limited=$((limited + 1))
+    retry_after="$(sed -n 's/^[Rr]etry-[Aa]fter: *//p' <<<"$headers" | tr -d '\r' | head -1)"
+  fi
+done
+[[ $limited -ge 1 ]] \
+  || fail "15 requests from $CLIENT_IP in well under a minute drew no 429, with caddy_rate_limit_events=5 per 1m: the tunable reached the environment but not the Caddyfile"
+[[ -n $retry_after ]] || fail "Caddy's 429s carry no Retry-After"
+# On the host, in the file the caddy-errors jail reads, against the client.
+await "Caddy to log a 429 for $CLIENT_IP" \
+  th_exec "grep -F '\"remote_ip\":\"$CLIENT_IP\"' $APP_DIR/logs/caddy/access.log | grep -qF '\"status\":429'"
+pass "caddy_*rate_limit_* reach the running Caddy through .env-production, and 5/1m turns $limited of 15 requests into 429s (Retry-After: $retry_after), logged where the ban jail reads"
+
+# And back: unset again, they leave Caddy's environment again, rather than
+# lingering in .env-production from the run that set them.
+deploy -e deploy_targets=none -e site_address=https://localhost \
+  > "$TH_WORK/deploy-untuned.log" 2>&1 \
+  || fail "the env-only deploy putting Caddy's limits back failed: $(tail -20 "$TH_WORK/deploy-untuned.log")"
+if grep -E '^CADDY_([A-Z]+_)?RATE_LIMIT_[A-Z]+=' <<<"$(caddy_env)"; then
+  fail "caddy_rate_limit_* were unset again, but the above stayed in the running Caddy's environment"
+fi
+pass "unsetting caddy_rate_limit_* takes them out of Caddy's environment, back to the Caddyfile's defaults"
 
 echo "==> Deploy check passed"

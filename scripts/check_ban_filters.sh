@@ -4,8 +4,8 @@
 #
 # Usage: scripts/check_ban_filters.sh <generated-project-dir>
 #
-# The log is not a fixture. The project's own Caddyfile runs in the same Caddy
-# image docker-compose.prod.yml pins, in front of a stub upstream, exactly as
+# The log is not a fixture. The project's own Caddyfile runs in the project's
+# own Caddy build (caddy/Dockerfile), in front of a stub upstream, exactly as
 # scripts/check_caddy_edge.sh runs it; a handful of clients send it traffic;
 # then fail2ban's own `fail2ban-regex` reads the log Caddy wrote, with the
 # filter files ansible/provision.yml installs. A fixture would only prove the
@@ -24,7 +24,8 @@
 # Asserted, per filter, as an exact count of matched lines per client address:
 #   - caddy-scanner counts every probe Caddy blocked, and nothing else — not
 #     the app's own 404s, not a 413;
-#   - caddy-errors counts every 4xx, 413 and 429 included, whoever produced it;
+#   - caddy-errors counts every 4xx, 413 and 429 included, whoever produced it
+#     — the app's own 429s and the ones Caddy's rate limiter answers alike;
 #   - neither counts a 4xx on the Stripe webhook or an auth callback, which
 #     are where a legitimate client's failures pile up;
 #   - neither counts a 2xx, however many;
@@ -49,12 +50,14 @@ for f in caddy-scanner caddy-errors; do
   [[ -f "$FILTERS/$f.conf" ]] || fail "no fail2ban filter at $FILTERS/$f.conf"
 done
 
-# The proxy is the image production runs. fail2ban is the one Ubuntu 24.04
-# packages: the release provision.yml is tested against
-# (scripts/lib/throwaway_host.sh), so the fail2ban that will read these
-# filters on a provisioned host, regex dialect and date handling included.
-CADDY_IMAGE="$(sed -n 's/^ *image: *\(caddy:[^ ]*\).*/\1/p' "$PROJECT_DIR/docker-compose.prod.yml" | head -1)"
-[[ -n "$CADDY_IMAGE" ]] || fail "could not read the caddy image out of docker-compose.prod.yml"
+# The proxy is the image production runs, built from the same Dockerfile.
+# fail2ban is the one Ubuntu 24.04 packages: the release provision.yml is
+# tested against (scripts/lib/throwaway_host.sh), so the fail2ban that will
+# read these filters on a provisioned host, regex dialect and date handling
+# included.
+# shellcheck source=lib/caddy_image.sh
+source "$(dirname "$0")/lib/caddy_image.sh"
+CADDY_IMAGE="$(caddy_image_build "$PROJECT_DIR")" || fail "no Caddy image for $PROJECT_DIR"
 FAIL2BAN_BASE=ubuntu:24.04
 PYTHON_IMAGE=python:3-alpine
 
@@ -162,16 +165,20 @@ PY
 docker network create "$NET" >/dev/null
 docker run -d --name "$STUB" --network "$NET" \
   -v "$WORK/stub.py:/stub.py:ro" "$PYTHON_IMAGE" python -u /stub.py >/dev/null
+# The strict rate limit is lowered so that one client can run into it in a few
+# requests; the general one is left at its default, which none of this
+# traffic comes near.
+STRICT=3
 docker run -d --name "$CADDY" --network "container:$STUB" \
-  -e SITE_ADDRESS=:8080 -v "$CADDYFILE:/etc/caddy/Caddyfile:ro" \
-  "$CADDY_IMAGE" >/dev/null
+  -e SITE_ADDRESS=:8080 -e CADDY_STRICT_RATE_LIMIT_EVENTS=$STRICT \
+  -v "$CADDYFILE:/etc/caddy/Caddyfile:ro" "$CADDY_IMAGE" >/dev/null
 TARGET="$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" "$STUB")"
 [[ -n "$TARGET" ]] || fail "could not find the proxy's address on $NET"
 
 # client NAME [EXTRA-HEADERS] < plan: runs one client, records its address in
 # $WORK/addr-NAME and what it was answered in $WORK/answers-NAME. Each client
 # is a container left running until the end: Docker hands a stopped
-# container's address straight to the next one, and five clients sharing one
+# container's address straight to the next one, and six clients sharing one
 # address would make every attribution below vacuous.
 client() {
   local name="$1" extra="${2:-}"
@@ -243,6 +250,19 @@ expect_answers noisy "GET /no-such-page 404" "GET /no-such-page-either 404" "GET
   "GET /dashboard/settings 403" "POST /api/contact 429" "POST /api/contact 429" \
   "POST /api/contact 413" "GET /pricing 200" "GET /blog 200"
 
+# A client hammering the contact form until Caddy's rate limiter refuses it:
+# one 429 that no upstream wrote, which the errors jail must count all the same.
+# (The noisy client's three contact POSTs fit inside the same limit: it is
+# per address.)
+client flooder <<'PLAN'
+POST /api/contact 200
+POST /api/contact 200
+POST /api/contact 200
+POST /api/contact 200
+PLAN
+expect_answers flooder "POST /api/contact 200" "POST /api/contact 200" \
+  "POST /api/contact 200" "POST /api/contact 429"
+
 # Stripe retrying a webhook the app rejected, and a user whose OAuth sign-in
 # keeps failing at the callback: refused, legitimately, and never counted. A
 # 4xx on the sign-in page itself is not exempt, and is counted.
@@ -285,13 +305,13 @@ GET /dashboard 200
 PLAN
 expect_answers normal "GET / 200" "GET /pricing 200" "GET /api/auth/session 200" \
   "POST /api/webhook/stripe 200" "GET /api/auth/callback/google?code=x&state=y 302" "GET /dashboard 200"
-pass "five clients, each from its own address, were answered as planned"
+pass "six clients, each from its own address, were answered as planned"
 
-for name in scanner noisy exempt forger normal; do
+for name in scanner noisy flooder exempt forger normal; do
   declare "ADDR_${name}=$(cat "$WORK/addr-$name")"
 done
 # shellcheck disable=SC2154  # assigned through declare above
-[[ "$(printf '%s\n' "$ADDR_scanner" "$ADDR_noisy" "$ADDR_exempt" "$ADDR_forger" "$ADDR_normal" | sort -u | wc -l)" == 5 ]] \
+[[ "$(printf '%s\n' "$ADDR_scanner" "$ADDR_noisy" "$ADDR_flooder" "$ADDR_exempt" "$ADDR_forger" "$ADDR_normal" | sort -u | wc -l)" == 6 ]] \
   || fail "the clients did not each get their own address, so attribution proves nothing"
 
 # ── The log Caddy wrote ──────────────────────────────────────────────────────
@@ -299,10 +319,16 @@ docker exec "$CADDY" cat /var/log/caddy/access.log > "$WORK/access.log" \
   || fail "no access log at /var/log/caddy/access.log"
 # Only the clients' lines: the readiness probes came from 127.0.0.1.
 grep -F -e "\"remote_ip\":\"$ADDR_scanner\"" -e "\"remote_ip\":\"$ADDR_noisy\"" \
+  -e "\"remote_ip\":\"$ADDR_flooder\"" \
   -e "\"remote_ip\":\"$ADDR_exempt\"" -e "\"remote_ip\":\"$ADDR_forger\"" \
   -e "\"remote_ip\":\"$ADDR_normal\"" "$WORK/access.log" > "$WORK/clients.log" || true
 lines="$(wc -l < "$WORK/clients.log")"
-[[ "$lines" == 32 ]] || fail "expected 32 access-log lines from the clients, found $lines"
+[[ "$lines" == 36 ]] || fail "expected 36 access-log lines from the clients, found $lines"
+# The rate limiter's refusal has to be in the log as Caddy's own, or the count
+# below would prove nothing about it.
+grep -F "\"remote_ip\":\"$ADDR_flooder\"" "$WORK/clients.log" | grep -qF '"status":429,' \
+  && grep -F "\"remote_ip\":\"$ADDR_flooder\"" "$WORK/clients.log" | grep -qF '"blocked":"rate_limited"' \
+  || fail "the flooder's 429 is not in the access log as Caddy's rate-limit refusal"
 # The forgery has to have reached the log, or it tested nothing.
 grep -qF 'blocked\":\"scanner' "$WORK/clients.log" \
   || fail "the forged header is not in the access log, so this check proved nothing about it"
@@ -338,9 +364,11 @@ expect_counts caddy-scanner "5 $ADDR_scanner"
 pass "caddy-scanner counts the five blocked probes, and nothing else, against the scanner"
 
 # The scanner's five probes are 404s too. The noisy client's seven refusals
-# include the 413 Caddy gave and both 429s. The exempt client is charged for
-# the sign-in page alone, the forger for its one real 404.
-expect_counts caddy-errors "5 $ADDR_scanner" "7 $ADDR_noisy" "1 $ADDR_exempt" "1 $ADDR_forger"
+# include the 413 Caddy gave and both of the app's 429s; the flooder's one
+# refusal is the rate limiter's. The exempt client is charged for the sign-in
+# page alone, the forger for its one real 404.
+expect_counts caddy-errors "5 $ADDR_scanner" "7 $ADDR_noisy" "1 $ADDR_flooder" \
+  "1 $ADDR_exempt" "1 $ADDR_forger"
 pass "caddy-errors counts every 4xx but the webhook's and the auth callbacks', each against its own client"
 
 # Nobody was charged under the forged address, by either filter — which the

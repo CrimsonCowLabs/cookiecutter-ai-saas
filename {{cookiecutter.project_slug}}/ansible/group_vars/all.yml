@@ -110,6 +110,29 @@ domain_name: __DOMAIN_NAME__
 # Let's Encrypt for a name that does not resolve. The DNS precheck follows it.
 site_address: ""
 
+# How hard Caddy pushes back on one client address, exactly as the
+# CADDY_RATE_LIMIT_* variables in the compose file. Empty means the Caddyfile's
+# own default, which is what a fresh project should run with; set one only once
+# the access log has shown you that the default is wrong for your traffic. A
+# request over the limit is answered 429 with Retry-After, and is a 4xx the
+# caddy-errors jail above counts.
+#
+# _events requests per _window (a Go duration: 30s, 1m, 1h): the general pair
+# across the whole site; the strict pair for the endpoints that cost something
+# per request — sign-in and its email link, the contact form, server actions
+# (job submission among them); the ingest pair for the analytics proxy, which
+# is limited on its own and kept out of the general budget. An office or
+# carrier NAT puts many people behind one address, so whatever the
+# general limit is set to has to be generous enough for all of them at once.
+#
+#     ansible-playbook ... -e caddy_strict_rate_limit_events=5
+caddy_rate_limit_events: ""
+caddy_rate_limit_window: ""
+caddy_strict_rate_limit_events: ""
+caddy_strict_rate_limit_window: ""
+caddy_ingest_rate_limit_events: ""
+caddy_ingest_rate_limit_window: ""
+
 # The origin NextAuth builds its callbacks from. It has to match the redirect
 # URIs registered with the OAuth providers, so it follows the domain rather
 # than site_address.
@@ -120,12 +143,19 @@ nextauth_url: "https://__DOMAIN_NAME__"
 #
 #     ansible-playbook ... -e deploy_targets=app
 #     ansible-playbook ... -e deploy_targets=worker,db-writer
+#     ansible-playbook ... -e deploy_targets=caddy     # the proxy's own build
 #
 # migrator joins the set whenever anything ships, because the migrator image on
 # the host is otherwise the previous release's and would apply the previous
 # release's migrations. `-e deploy_targets=none` re-renders .env-production and
 # restarts, shipping no image at all.
-deploy_targets: "app,worker,db-writer,migrator,ops"
+#
+# A subset ships only what it names and leaves every other image on the host as
+# it is, so whatever the compose file asks for has to be there already. On a
+# host first deployed before the proxy had its own image there is no
+# __PROJECT_SLUG__-caddy yet: deploy with caddy in the set (the default does)
+# once before narrowing it, or the switch fails and rolls back.
+deploy_targets: "app,worker,db-writer,migrator,ops,caddy"
 
 # The platform the images are built for. It is the host's architecture, not the
 # control machine's: building on an arm64 laptop for an amd64 VPS is the normal
