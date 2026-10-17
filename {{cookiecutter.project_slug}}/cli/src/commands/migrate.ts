@@ -2,11 +2,11 @@
 // new capability: ansible/deploy.yml already treats `migrator` as an
 // ordinary deploy target (it is one of `deploy_images`' keys), and shipping
 // only it is enough to run the migrations without shipping app, worker,
-// db-writer, ops or caddy — `deploy_shipped` is `deploy_requested` plus `migrator`,
-// which for `deploy_targets=migrator` is just `[migrator]`. So this is
-// `ansible-playbook ansible/deploy.yml -e deploy_targets=migrator`, composing
-// a flag deploy.yml's own comments already document rather than adding any
-// Ansible-side behaviour.
+// db-writer, ops or caddy — `deploy_shipped` is `deploy_requested` plus
+// `migrator`, which for `deploy_targets=migrator` is just `[migrator]`. So
+// this is `ansible-playbook ansible/deploy.yml -e deploy_targets=migrator`,
+// composing a flag deploy.yml's own comments already document rather than
+// adding any Ansible-side behaviour.
 //
 // `-e run_migrations=true` is added explicitly, even though it is
 // deploy.yml's own default, so that an operator who has set

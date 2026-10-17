@@ -367,7 +367,7 @@ pass "the host records release $GOOD_RELEASE"
 # things, each of which could be true without the others: the running container
 # is this release's <slug>-caddy image (shipped and tagged like every other, so
 # it rolls back like every other), that image carries the rate-limit module,
-# and with no caddy_rate_limit_* set nothing of the sort reaches its
+# and with no caddy_*rate_limit_* set nothing of the sort reaches its
 # environment, so the Caddyfile's own defaults are what it runs with.
 #
 # "Reaches" means NAME=..., an empty value included. An empty one is the
@@ -377,6 +377,12 @@ pass "the host records release $GOOD_RELEASE"
 # NAME=. A bare NAME is what compose's pass-through records for a variable it
 # did not have, and is not set inside the container; the stack answering above,
 # on group_vars' empty defaults, is Caddy having loaded on its own defaults.
+#
+# The environment is read into a variable and refused when empty, before
+# anything is looked for in it: an inspect that failed prints nothing, and
+# nothing has no NAME= in it either, so grepping it straight would pass without
+# having looked. A running container's environment is never empty (the image
+# sets PATH, at least).
 caddy_env() {
   th_exec "docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' ${SLUG}-caddy-1" | tr -d '\r'
 }
@@ -388,8 +394,10 @@ running_caddy="$(th_exec "docker inspect -f '{{.Image}}' ${SLUG}-caddy-1" | tr -
   || fail "the running Caddy is $running_caddy ($(th_exec "docker inspect -f '{{.Config.Image}}' ${SLUG}-caddy-1" | tr -d '\r')), not release $GOOD_RELEASE's $SLUG-caddy image $GOOD_CADDY_IMAGE"
 th_exec "docker exec ${SLUG}-caddy-1 caddy list-modules" | tr -d '\r' | grep -qxF http.handlers.rate_limit \
   || fail "the running Caddy has no http.handlers.rate_limit module: $(th_exec "docker exec ${SLUG}-caddy-1 caddy list-modules --skip-standard" | tr -d '\r' | tr '\n' ' ')"
-if grep -E '^CADDY_([A-Z]+_)?RATE_LIMIT_[A-Z]+=' <<<"$(caddy_env)"; then
-  fail "with no caddy_rate_limit_* set, the above still reached Caddy's environment, overriding the Caddyfile's defaults"
+env_now="$(caddy_env)" || fail "could not read the running Caddy's environment"
+[[ -n $env_now ]] || fail "the running Caddy's environment came back empty"
+if grep -E '^CADDY_([A-Z]+_)?RATE_LIMIT_[A-Z]+=' <<<"$env_now"; then
+  fail "with no caddy_*rate_limit_* set, the above still reached Caddy's environment, overriding the Caddyfile's defaults"
 fi
 pass "the running Caddy is release $GOOD_RELEASE's $SLUG-caddy image, with the rate-limit module, booted on the Caddyfile's default limits with every caddy_*rate_limit_* left empty"
 
@@ -745,7 +753,8 @@ TUNED=(-e caddy_rate_limit_events=5 -e caddy_rate_limit_window=1m
 deploy -e deploy_targets=none -e site_address=https://localhost "${TUNED[@]}" \
   > "$TH_WORK/deploy-tuned.log" 2>&1 \
   || fail "the env-only deploy with Caddy's limits set failed: $(tail -20 "$TH_WORK/deploy-tuned.log")"
-env_now="$(caddy_env)"
+env_now="$(caddy_env)" || fail "could not read the running Caddy's environment"
+[[ -n $env_now ]] || fail "the running Caddy's environment came back empty"
 for pair in CADDY_RATE_LIMIT_EVENTS=5 CADDY_RATE_LIMIT_WINDOW=1m \
             CADDY_STRICT_RATE_LIMIT_EVENTS=3 CADDY_STRICT_RATE_LIMIT_WINDOW=2m \
             CADDY_INGEST_RATE_LIMIT_EVENTS=7 CADDY_INGEST_RATE_LIMIT_WINDOW=3m; do
@@ -778,9 +787,11 @@ pass "caddy_*rate_limit_* reach the running Caddy through .env-production, and 5
 deploy -e deploy_targets=none -e site_address=https://localhost \
   > "$TH_WORK/deploy-untuned.log" 2>&1 \
   || fail "the env-only deploy putting Caddy's limits back failed: $(tail -20 "$TH_WORK/deploy-untuned.log")"
-if grep -E '^CADDY_([A-Z]+_)?RATE_LIMIT_[A-Z]+=' <<<"$(caddy_env)"; then
-  fail "caddy_rate_limit_* were unset again, but the above stayed in the running Caddy's environment"
+env_now="$(caddy_env)" || fail "could not read the running Caddy's environment"
+[[ -n $env_now ]] || fail "the running Caddy's environment came back empty"
+if grep -E '^CADDY_([A-Z]+_)?RATE_LIMIT_[A-Z]+=' <<<"$env_now"; then
+  fail "caddy_*rate_limit_* were unset again, but the above stayed in the running Caddy's environment"
 fi
-pass "unsetting caddy_rate_limit_* takes them out of Caddy's environment, back to the Caddyfile's defaults"
+pass "unsetting caddy_*rate_limit_* takes them out of Caddy's environment, back to the Caddyfile's defaults"
 
 echo "==> Deploy check passed"

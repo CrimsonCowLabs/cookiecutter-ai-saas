@@ -28,11 +28,14 @@
 #   - a burst from one client past the general limit gets 429 with a
 #     Retry-After, everywhere on the site, while a client at another address is
 #     unaffected;
-#   - sign-in, the contact form, server actions and ingest trip at their own,
-#     tighter limits, each in its own budget, while an ordinary page from the
-#     same client still passes;
-#   - the SSE progress stream and the Stripe webhook keep passing a client the
-#     general limit has already shut out;
+#   - sign-in, the contact form (with or without a trailing slash), server
+#     actions (with a Next-Action header or as a no-JS form post) and ingest
+#     trip at their own, tighter limits, each in its own budget, while an
+#     ordinary page and an ordinary API POST from the same client still pass;
+#   - the SSE progress stream (a GET) and the Stripe webhook keep passing a
+#     client the general limit has already shut out, while any other method on
+#     the progress path is held to the general limit;
+#   - the Stripe webhook trips at its own, generous limit;
 #   - every 429 is in the access log as `"blocked":"rate_limited"`.
 #
 # The limits are low only in the second half. The first half runs on the
@@ -315,14 +318,20 @@ pass "the JSON access log marks every refusal with \"blocked\", and nothing else
 
 # ── Rate limits ──────────────────────────────────────────────────────────────
 # Caddy again, on limits low enough to reach in a few requests and windows long
-# enough that none of them expires while this runs.
+# enough that none of them expires while this runs. The webhook's limit is not
+# tunable (see the Caddyfile), so WEBHOOK is the Caddyfile's own and has to
+# match it, and its window is a minute however long WINDOW is. WINDOW is the
+# other limits' window, and the bound every Retry-After is checked against.
 GENERAL=20
 STRICT=3
 INGEST=6
+WEBHOOK=300
+WINDOW_SECONDS=300
+WINDOW="${WINDOW_SECONDS}s"
 start_caddy \
-  CADDY_RATE_LIMIT_EVENTS=$GENERAL CADDY_RATE_LIMIT_WINDOW=5m \
-  CADDY_STRICT_RATE_LIMIT_EVENTS=$STRICT CADDY_STRICT_RATE_LIMIT_WINDOW=5m \
-  CADDY_INGEST_RATE_LIMIT_EVENTS=$INGEST CADDY_INGEST_RATE_LIMIT_WINDOW=5m
+  CADDY_RATE_LIMIT_EVENTS=$GENERAL CADDY_RATE_LIMIT_WINDOW=$WINDOW \
+  CADDY_STRICT_RATE_LIMIT_EVENTS=$STRICT CADDY_STRICT_RATE_LIMIT_WINDOW=$WINDOW \
+  CADDY_INGEST_RATE_LIMIT_EVENTS=$INGEST CADDY_INGEST_RATE_LIMIT_WINDOW=$WINDOW
 TARGET="$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" "$STUB")"
 [[ -n "$TARGET" ]] || fail "could not find the proxy's address on $NET"
 
@@ -361,9 +370,10 @@ PY
 
 # client NAME < plan: runs one client from its own container, and leaves the
 # container running until the end. Never at the end of a pipeline: in a
-# subshell it would forget the container, and cleanup would leave it behind. Docker hands a stopped container's address
-# straight to the next one, and two clients sharing an address would make every
-# "another address is unaffected" below vacuous.
+# subshell it would forget the container, and cleanup would leave it behind.
+# Docker hands a stopped container's address straight to the next one, and two
+# clients sharing an address would make every "another address is unaffected"
+# below vacuous.
 client() {
   local name="$1"
   CLIENTS+=("$TAG-$name")
@@ -383,8 +393,8 @@ answers() {
     [[ "$line" == ADDR\ * ]] && continue
     if [[ "$line" == *" retry-after="* ]]; then
       ra="${line##* retry-after=}"
-      [[ "$ra" =~ ^[0-9]+$ ]] && (( ra >= 1 && ra <= 300 )) \
-        || fail "client $1 got Retry-After '$ra' on '${line% retry-after=*}', not 1-300 seconds"
+      [[ "$ra" =~ ^[0-9]+$ ]] && (( ra >= 1 && ra <= WINDOW_SECONDS )) \
+        || fail "client $1 got Retry-After '$ra' on '${line% retry-after=*}', not 1-$WINDOW_SECONDS seconds"
       line="${line% retry-after=*} retry-after"
     fi
     echo "$line"
@@ -408,15 +418,16 @@ repeat() { local i; for ((i = 0; i < $1; i++)); do echo "$2"; done; }
 
 # The general limit. One client spends it on pages and is then refused
 # everywhere — a page it never asked for included — except on the routes
-# exempt from it: the job-progress stream (an EventSource reconnects by
-# itself, and each one is a signed-in user's own job) and the Stripe webhook
-# (Stripe's few addresses retry in bursts, and dropping one loses a billing
-# event).
+# outside it: the job-progress stream (an EventSource reconnects by itself,
+# and each one is a signed-in user's own job) and the Stripe webhook (Stripe's
+# few addresses retry in bursts, and dropping one loses a billing event). Only
+# a GET is the stream, so a POST to the same path is held to the general limit.
 {
   repeat "$GENERAL" "GET /"
   echo "GET /"
   echo "GET /pricing"
   repeat 3 "GET /api/jobs/abc/progress"
+  echo "POST /api/jobs/abc/progress"
   repeat 3 "POST /api/webhook/stripe"
 } > "$WORK/plan-burst"
 client burst < "$WORK/plan-burst"
@@ -424,10 +435,11 @@ want=()
 for _ in $(seq "$GENERAL"); do want+=("GET / 200"); done
 want+=("GET / 429 retry-after" "GET /pricing 429 retry-after")
 for _ in 1 2 3; do want+=("GET /api/jobs/abc/progress 200"); done
+want+=("POST /api/jobs/abc/progress 429 retry-after")
 for _ in 1 2 3; do want+=("POST /api/webhook/stripe 200"); done
 expect burst "${want[@]}"
 pass "a burst past the general limit of $GENERAL gets 429 with Retry-After, site-wide"
-pass "the SSE progress stream and the Stripe webhook still pass a client the general limit has shut out"
+pass "the SSE progress stream (GET only) and the Stripe webhook still pass a client the general limit has shut out"
 
 # Somebody else, at the same moment.
 printf '%s\n' "GET /" "GET /pricing" > "$WORK/plan-bystander"
@@ -436,25 +448,33 @@ expect bystander "GET / 200" "GET /pricing 200"
 pass "a client at another address is unaffected by the burst"
 
 # The tight limits, each its own budget: spending sign-in's does not touch the
-# contact form's. A server action is a POST carrying Next-Action, to whatever
-# page it was rendered on; the same POST without the header is not one. And
-# none of it shuts the client out of an ordinary page.
+# contact form's. The contact form's path with a trailing slash reaches the
+# same route (next.config.ts may skip the redirect), so it spends the same
+# budget. A server action is a POST to whatever page it was rendered on:
+# carrying Next-Action from JavaScript, or as a plain multipart form post with
+# the action's id in the body before hydration, so both spend one budget. An
+# ordinary API POST is not one, and none of it shuts the client out of an
+# ordinary page.
 {
   repeat $((STRICT + 1)) "POST /api/auth/signin/resend"
-  repeat $((STRICT + 1)) "POST /api/contact"
-  repeat $((STRICT + 1)) "POST /dashboard Next-Action: 7f3a9c"
-  echo "POST /dashboard"
+  repeat "$STRICT" "POST /api/contact"
+  echo "POST /api/contact/"
+  repeat $((STRICT + 1)) "POST /dashboard Content-Type: multipart/form-data; boundary=x"
+  echo "POST /dashboard Next-Action: 7f3a9c"
+  echo "POST /api/anything"
   echo "GET /dashboard"
 } > "$WORK/plan-strict"
 client strict < "$WORK/plan-strict"
 want=()
-for route in "POST /api/auth/signin/resend" "POST /api/contact" "POST /dashboard"; do
-  for _ in $(seq "$STRICT"); do want+=("$route 200"); done
-  want+=("$route 429 retry-after")
-done
-want+=("POST /dashboard 200" "GET /dashboard 200")
+for _ in $(seq "$STRICT"); do want+=("POST /api/auth/signin/resend 200"); done
+want+=("POST /api/auth/signin/resend 429 retry-after")
+for _ in $(seq "$STRICT"); do want+=("POST /api/contact 200"); done
+want+=("POST /api/contact/ 429 retry-after")
+for _ in $(seq "$STRICT"); do want+=("POST /dashboard 200"); done
+want+=("POST /dashboard 429 retry-after" "POST /dashboard 429 retry-after")
+want+=("POST /api/anything 200" "GET /dashboard 200")
 expect strict "${want[@]}"
-pass "sign-in, contact and server actions each trip at the strict limit of $STRICT; ordinary pages do not"
+pass "sign-in, contact (slash or not) and server actions (header or form post) each trip at the strict limit of $STRICT; ordinary pages and API POSTs do not"
 
 # Ingest sits between the two: analytics batches are frequent but cheap, so
 # its limit is above the strict one and below the general one.
@@ -469,11 +489,23 @@ want+=("POST /ingest/e/ 429 retry-after" "GET / 200")
 expect ingest "${want[@]}"
 pass "ingest trips at its own limit of $INGEST, between the strict and general ones"
 
-[[ "$(sort -u "$WORK/addrs" | wc -l)" == 4 ]] \
+# The webhook is outside the general limit but not unlimited: one address
+# flooding it is refused past the Caddyfile's own limit, which is generous
+# enough that Stripe's retries never reach it.
+repeat $((WEBHOOK + 1)) "POST /api/webhook/stripe" > "$WORK/plan-webhook"
+client webhook < "$WORK/plan-webhook"
+want=()
+for _ in $(seq "$WEBHOOK"); do want+=("POST /api/webhook/stripe 200"); done
+want+=("POST /api/webhook/stripe 429 retry-after")
+expect webhook "${want[@]}"
+pass "the Stripe webhook trips at its own limit of $WEBHOOK"
+
+[[ "$(sort -u "$WORK/addrs" | wc -l)" == 5 ]] \
   || fail "the clients did not each get their own address, so this proved nothing: $(tr '\n' ' ' < "$WORK/addrs")"
 
-# Two from the burst, one per strict route, one from ingest.
-check_log 0 0 6
+# Three from the burst, one per strict route plus the second server action,
+# one from ingest, one from the webhook.
+check_log 0 0 9
 pass "every 429 is in the access log as \"blocked\":\"rate_limited\", and nothing else is"
 
 echo "==> Edge check passed"

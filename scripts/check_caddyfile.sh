@@ -29,7 +29,8 @@ grep -q '^[[:space:]]*reverse_proxy 127.0.0.1:3000$' "$CADDYFILE" \
 # Every client is rate-limited per address at the edge (issue #100), with each
 # limit read from the environment so it can be tuned without editing this file.
 for var in CADDY_RATE_LIMIT_EVENTS CADDY_RATE_LIMIT_WINDOW \
-  CADDY_STRICT_RATE_LIMIT_EVENTS CADDY_STRICT_RATE_LIMIT_WINDOW; do
+  CADDY_STRICT_RATE_LIMIT_EVENTS CADDY_STRICT_RATE_LIMIT_WINDOW \
+  CADDY_INGEST_RATE_LIMIT_EVENTS CADDY_INGEST_RATE_LIMIT_WINDOW; do
   grep -qF "{\$$var:" "$CADDYFILE" \
     || fail "$CADDYFILE does not read \$$var (with a default) for its rate limits"
 done

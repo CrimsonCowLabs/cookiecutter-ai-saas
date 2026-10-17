@@ -334,7 +334,7 @@ Two prerequisites for the certificate, and neither is optional:
 |---------|----------------|
 | Proxy config | `Caddyfile`, rendered from `domain_name` at generation time |
 | Proxy image | `caddy/Dockerfile` — Caddy with the rate-limit module; deploy target `caddy` |
-| Rate limits | `caddy_rate_limit_*` in `ansible/group_vars/all.yml`; empty means the `Caddyfile`'s defaults (see [Rate limits](#rate-limits)) |
+| Rate limits | `caddy_*rate_limit_*` in `ansible/group_vars/all.yml`; empty means the `Caddyfile`'s defaults (see [Rate limits](#rate-limits)) |
 | Certificates | the `caddydata` volume — keep it across deploys, or every boot re-issues into a rate limit |
 | Expiry warnings | mailed to `author_email`, unless that is at a reserved example domain (see below) |
 | Listening ports | `80`, `443`, `443/udp` (HTTP/3), bound by `caddy` on the host's network; the app's `3000` on `127.0.0.1` only, for Caddy |
@@ -362,12 +362,17 @@ arriving live.
 ### Rate limits
 
 Caddy limits the requests one client address may make — a generous limit across
-the site, a tighter one on the endpoints that cost something per request, and
-one of its own for the analytics proxy — and answers a request over either with `429` and `Retry-After`. That 429 is in
-the access log, where the `caddy-errors` jail counts it like any other 4xx.
+the site, a tighter one on the endpoints that cost something per request, one
+of its own for the analytics proxy, and one for the Stripe webhook, which is
+kept out of the site-wide budget — and answers a request over any of them with
+`429` and `Retry-After`. That 429 is in the access log, where the
+`caddy-errors` jail counts it like any other 4xx (the webhook's excepted, as
+the jail ignores that path).
 
-The limits are set without touching the `Caddyfile`: it reads each from the
-environment, with its own default for when it is unset.
+The first three are set without touching the `Caddyfile`: it reads each from
+the environment, with its own default for when it is unset. The webhook's, 300
+a minute, is fixed in the `Caddyfile`, since it follows Stripe's delivery rate
+rather than your traffic.
 
 | `group_vars/all.yml` | Environment Caddy reads | Means |
 |----------------------|-------------------------|-------|
@@ -388,8 +393,8 @@ like.
 
 `scripts/check_deploy.sh` checks this on a real deploy: the running proxy is
 the release's `<slug>-caddy` image with `http.handlers.rate_limit` in it, none
-of them reaches it until one is set, and setting
-`caddy_rate_limit_events=5` turns a burst from one client into 429s.
+of them reaches it until one is set, and setting `caddy_rate_limit_events=5`
+turns a burst from one client into 429s.
 
 ### Smoke-testing before DNS exists
 

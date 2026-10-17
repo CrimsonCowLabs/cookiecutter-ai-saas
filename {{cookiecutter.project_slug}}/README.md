@@ -505,10 +505,13 @@ rule needs no rebuild.
 
 Caddy limits how many requests one client address may make: a generous limit
 across the whole site, a tighter one on the endpoints that cost something per
-request, and one of its own for the analytics proxy. A request over either is answered `429` with `Retry-After`, and is
-a 4xx the `caddy-errors` jail below counts. Both are set in
-`ansible/group_vars/all.yml`, not in `Caddyfile`; empty, which is the default,
-means the `Caddyfile`'s own value:
+request, one of its own for the analytics proxy, and one for the Stripe
+webhook. A request over any of them is answered `429` with `Retry-After`, and
+is a 4xx the `caddy-errors` jail below counts (except on the webhook, which
+the jail ignores). The first three are set in `ansible/group_vars/all.yml`,
+not in `Caddyfile`; empty, which is the default, means the `Caddyfile`'s own
+value. The webhook's, 300 a minute, is fixed in `Caddyfile`, since it follows
+Stripe's delivery rate rather than your traffic:
 
 | Variable | Sets | Caddy reads |
 |----------|------|-------------|

@@ -7,13 +7,14 @@
 # matching runtime image. Everything else — the entrypoint, the config at
 # /etc/caddy/Caddyfile, /data and /config — is the stock image's.
 #
-# Both are pinned exactly. Caddy's version appears twice and the two must move
-# together: a builder newer than its runtime image would mean the binary and
-# the image it runs in describe different releases. The module has no tagged
-# release past v0.1.0 (2022), so it is pinned to a commit by Go
-# pseudo-version, which go.sum then checks by hash. To upgrade, change the
-# three below and run scripts/check_caddyfile.sh and
-# scripts/check_caddy_edge.sh against a generated project.
+# Both are pinned exactly. Caddy's version is the one ARG below, which both
+# stages read, so the builder and the runtime image cannot drift apart: a
+# builder newer than its runtime image would mean the binary and the image it
+# runs in describe different releases. The module has no tagged release past
+# v0.1.0 (2022), so it is pinned to a commit by Go pseudo-version, which go.sum
+# then checks by hash. To upgrade, change the ARG and the module's pin below
+# and run scripts/check_caddyfile.sh and scripts/check_caddy_edge.sh against a
+# generated project.
 ARG CADDY_VERSION=2.11.7
 
 FROM caddy:${CADDY_VERSION}-builder AS builder

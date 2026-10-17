@@ -359,8 +359,10 @@ jobs:
       # project's own Caddy build (caddy/Dockerfile, with the rate-limit
       # module), which stock Caddy would not be — it rejects `rate_limit` —
       # and the edge check proves the per-address limits: 429 with
-      # Retry-After past each one, another address unaffected, the SSE
-      # stream and the Stripe webhook exempt.
+      # Retry-After past each one, another address unaffected, server
+      # actions limited with or without their header, the SSE stream (GET)
+      # outside the general limit, and the Stripe webhook outside it too but
+      # on a generous limit of its own.
       - name: Caddyfile is formatted, valid, refuses junk and rate-limits at the edge
         run: |
           scripts/check_caddyfile.sh "$G/Caddyfile"
@@ -797,7 +799,7 @@ jobs:
   # and its 80 and 443 dropped (timing out, not refused) while SSH still
   # answers it; and the ban expires. And for Caddy's rate limits (issue #100):
   # the deployed proxy is the project's own Caddy build, with the rate-limit
-  # module, shipped and tagged like every other image; caddy_rate_limit_* set
+  # module, shipped and tagged like every other image; caddy_*rate_limit_* set
   # in group_vars reach it, and turn a burst into 429s with Retry-After.
   #
   # scripts/check_deploy.sh does all of that end to end against a throwaway
