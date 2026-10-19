@@ -4,10 +4,10 @@
 # a plain background `next start`, all of it torn down again on exit.
 #
 # Sourced by scripts/check_compliance.sh, and by the template repository's own
-# auth and billing checks, which source it from inside the generated project
-# they are pointed at. It lives here, not in any one of them, so that booting
-# and stopping the app is written down once and an operator can still run
-# check_compliance.sh from this project alone.
+# auth, billing and job-limit checks, which source it from inside the
+# generated project they are pointed at. It lives here, not in any one of
+# them, so that booting and stopping the app is written down once and an
+# operator can still run check_compliance.sh from this project alone.
 #
 # Usage, from the project root:
 #
@@ -19,6 +19,9 @@
 #     ENV
 #     running_app_start postgres redis
 #     running_app_test "the auth tests" env BASE_URL="$BASE_URL" npm run test:auth
+#
+# A suite that needs only the database calls running_app_database (the same
+# arguments) instead of running_app_start, and skips the build.
 #
 # After running_app_prepare:
 #   DB_NAME          the database docker-compose.yml creates
@@ -85,9 +88,9 @@ running_app_write_env() {
   } >"$RUNNING_APP_ENV_FILE"
 }
 
-# Bring up the named compose services, install, push the schema, build, start
-# the app and wait until it answers.
-running_app_start() {
+# Bring up the named compose services, install and push the schema: all a
+# suite that talks only to the database needs.
+running_app_database() {
   echo "==> Bringing up $*"
   docker compose up -d --wait "$@"
 
@@ -97,6 +100,12 @@ running_app_start() {
   echo "==> Pushing the schema"
   # --force: a brand new database every run, so nothing to confirm.
   npm run db:push -- --force
+}
+
+# Bring up the named compose services, install, push the schema, build, start
+# the app and wait until it answers.
+running_app_start() {
+  running_app_database "$@"
 
   echo "==> Building"
   npm run build

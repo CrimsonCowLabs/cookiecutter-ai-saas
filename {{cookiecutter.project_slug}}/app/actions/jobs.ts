@@ -1,16 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { jobs, users } from "@/lib/db/schema";
-import { getPlanLimits } from "@/lib/plans";
+import { jobs } from "@/lib/db/schema";
+import { createJob } from "@/lib/job-submission";
 import { dispatchJob, cancelJob } from "@/lib/queue/jobs";
 import { getRedis } from "@/lib/redis";
 import { audit } from "@/lib/audit";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { getJobInputSchema } from "@/lib/validations";
 
 type ActionResult<T = unknown> =
   | { success: true; data?: T }
@@ -23,72 +22,38 @@ export async function submitJob(
   const session = await auth();
   if (!session?.user?.id) return { success: false, error: "Not authenticated" };
 
-  // Client-side validation is a convenience; this is the enforcement point.
-  // Job types registered in `jobInputSchemas` cannot be submitted unvalidated.
-  const inputSchema = getJobInputSchema(type);
-  let jobInput: Record<string, unknown> = input;
-  if (inputSchema) {
-    const parsed = inputSchema.safeParse(input);
-    if (!parsed.success) {
-      return {
-        success: false,
-        error: parsed.error.issues[0]?.message ?? "Invalid job input",
-      };
-    }
-    jobInput = parsed.data as Record<string, unknown>;
-  }
-
   try {
     await enforceRateLimit(`job:${session.user.id}`, 10, 60);
   } catch {
     return { success: false, error: "Too many requests. Please try again later." };
   }
 
-  // Get user plan
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-  });
-  if (!user) return { success: false, error: "User not found" };
+  // Client-side validation is a convenience; this is the enforcement point.
+  // createJob refuses unknown job types, input that fails its type's schema,
+  // and anything past the user's plan limits, and records only parsed input.
+  const created = await createJob(db, { userId: session.user.id, type, input });
+  if (!created.ok) return { success: false, error: created.error };
+  const { job, plan } = created;
 
-  const limits = getPlanLimits(user.plan);
-
-  // Check concurrent jobs
-  const runningJobs = await db
-    .select()
-    .from(jobs)
-    .where(
-      and(
-        eq(jobs.userId, session.user.id),
-        sql`${jobs.status} IN ('queued', 'running')`
-      )
-    );
-
-  if (runningJobs.length >= limits.concurrentJobs) {
-    return {
-      success: false,
-      error: `You have ${limits.concurrentJobs} jobs already in progress. Wait for one to finish.`,
-    };
-  }
-
-  // Create job record
-  const [job] = await db
-    .insert(jobs)
-    .values({
+  // Dispatch to BullMQ. If that fails, mark the job failed rather than leave
+  // it queued: a queued row holds one of the plan's concurrent-job slots, and
+  // nothing else would ever move it. (Not deleted: a throw doesn't prove the
+  // queue never got it, so it still counts towards the month.)
+  try {
+    await dispatchJob({
+      jobId: job.id,
       userId: session.user.id,
-      type,
-      input: jobInput,
-      status: "queued",
-    })
-    .returning();
-
-  // Dispatch to BullMQ
-  await dispatchJob({
-    jobId: job.id,
-    userId: session.user.id,
-    type,
-    input: jobInput,
-    userPlan: user.plan ?? "free",
-  });
+      type: job.type,
+      input: job.input,
+      userPlan: plan,
+    });
+  } catch {
+    await db
+      .update(jobs)
+      .set({ status: "failed", completedAt: new Date() })
+      .where(eq(jobs.id, job.id));
+    return { success: false, error: "Couldn't start the job. Please try again." };
+  }
 
   await audit({
     userId: session.user.id,

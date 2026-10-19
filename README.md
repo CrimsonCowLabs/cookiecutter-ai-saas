@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **230 files** with
+Every generated project is a complete distributed system — **234 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -258,6 +258,7 @@ None of it is legal advice, and the pages and guide say so.
 │   ├── redis.ts                   # ioredis singleton
 │   ├── stripe.ts                  # Checkout + portal helpers
 │   ├── checkout.ts                # One Stripe customer, one live subscription per user
+│   ├── job-submission.ts          # Admits a job only within the user's plan limits
 │   ├── rate-limit.ts              # Redis sliding-window limiter
 │   ├── audit.ts                   # Silent audit logging
 │   ├── feature-flags.ts           # ENV-backed toggles
@@ -271,6 +272,7 @@ None of it is legal advice, and the pages and guide say so.
 │   │   ├── worker.py              #   BullMQ consumer (async)
 │   │   ├── runner.py              #   3-step pipeline; step 2 runs the research agent
 │   │   ├── progress.py            #   Monotonic progress + per-step sub-ranges, cancellation
+│   │   ├── job_input.py           #   Refuses unknown job types and oversized input
 │   │   ├── settings.py            #   Config from env vars
 │   │   ├── llm_utils.py           #   LLM provider abstraction
 │   │   ├── tracing.py             #   Opt-in LangSmith tracing (off by default)
@@ -302,8 +304,9 @@ None of it is legal advice, and the pages and guide say so.
 ├── scripts/
 │   ├── migrate.sh                 # Database migrations (the migrator image's command)
 │   ├── check_compliance.sh        # Proves the /legal claims against a running app
-│   └── lib/running_app.sh         # Boots the app for it (and the template's auth/billing checks)
+│   └── lib/running_app.sh         # Boots the app for it (and the template's auth/billing/job checks)
 ├── tests/compliance/              # What check_compliance.sh asserts, in a headless Chrome
+├── tests/jobs/                    # Job submission holds to the plan's limits (real Postgres)
 ├── docs/compliance.md             # Operator guide to the legal risks the app handles
 ├── cli/
 │   ├── src/                       # opsctl — status, logs, shell, over your own SSH

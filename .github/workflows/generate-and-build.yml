@@ -739,6 +739,38 @@ jobs:
       - name: The billing webhooks hold against a running app
         run: scripts/check_billing.sh .generated-billing/billing-app
 
+  # Acceptance criteria for issue #102 (job submission enforces the plan's
+  # limits): a job type with no input schema is refused and nothing is
+  # queued, a user at their plan's jobsPerMonth is refused with a message
+  # naming it, the count starts again with the calendar month (UTC), and N
+  # parallel submissions from a user who may run one job start exactly one.
+  # The race is a database-state bug, so tests/jobs/*.test.mjs runs
+  # lib/job-submission.ts (through tsx) against a real Postgres, firing the
+  # submissions at once. scripts/check_jobs.sh brings up postgres only; the
+  # app is never built. Default answers: job submission doesn't depend on
+  # any flag.
+  job-limits:
+    name: Job submission holds to the plan's limits against a real database
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install cookiecutter
+
+      # Matches "node_version" in cookiecutter.json.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate project
+        run: cookiecutter . --no-input -o .generated-jobs project_name="Jobs App"
+
+      - name: Job submission holds to the plan's limits
+        run: scripts/check_jobs.sh .generated-jobs/jobs-app
+
   # Acceptance criteria for the provisioning playbook: a fresh host reaches a
   # ready state from one command, SSH is key-only with no root login, the
   # firewall exposes only what is needed, unattended upgrades and log rotation

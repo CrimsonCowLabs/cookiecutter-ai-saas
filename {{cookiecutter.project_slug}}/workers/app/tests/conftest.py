@@ -48,7 +48,7 @@ def sample_job_data(sample_input_data):
     """Sample BullMQ job data."""
     return {
         "jobId": "test-job-123",
-        "type": "default",
+        "type": "url-report",
         "userId": "user-456",
         "input": sample_input_data,
     }
