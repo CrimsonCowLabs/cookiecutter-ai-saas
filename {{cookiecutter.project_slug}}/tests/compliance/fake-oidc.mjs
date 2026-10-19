@@ -22,11 +22,17 @@ const b64url = (value) =>
 /**
  * Start the fake provider. Returns { issue, close }:
  *
- *   issue(authorizationUrl, { sub, email, name }) — the query string the
- *     provider would send the browser back to the app's callback with: a
+ *   issue(authorizationUrl, { sub, email, name, claims }) — the query string
+ *     the provider would send the browser back to the app's callback with: a
  *     code the app will exchange for an ID token saying `email` signed in
  *     (bound to that authorization request's client_id and nonce), its state,
- *     and the issuer (RFC 9207).
+ *     and the issuer (RFC 9207). `claims` are added to the ID token as they
+ *     are.
+ * cc:begin microsoft
+ *     Such as Microsoft's verified-domain claim (`xms_edov`), but not its
+ *     `tid`: given one, Auth.js looks that tenant's server up again, over
+ *     HTTPS only, which this one isn't.
+ * cc:end microsoft
  */
 export async function startFakeOidc() {
   const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -79,6 +85,7 @@ export async function startFakeOidc() {
           email: grant.email,
           email_verified: true,
           name: grant.name,
+          ...grant.claims,
           iat: now,
           exp: now + 3600,
           ...(grant.nonce ? { nonce: grant.nonce } : {}),
@@ -94,7 +101,7 @@ export async function startFakeOidc() {
   });
 
   return {
-    issue(authorizationUrl, { sub, email, name = "Age Gate Test User" }) {
+    issue(authorizationUrl, { sub, email, name = "Age Gate Test User", claims = {} }) {
       const url = new URL(authorizationUrl);
       const params = url.searchParams;
       const code = crypto.randomBytes(16).toString("hex");
@@ -104,6 +111,7 @@ export async function startFakeOidc() {
         sub,
         email,
         name,
+        claims,
       });
       return new URLSearchParams({
         code,

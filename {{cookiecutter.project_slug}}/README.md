@@ -251,7 +251,32 @@ provisioning, deploying, editing secrets and taking a backup — is `opsctl`,
 not an npm script or an `ansible-playbook` command remembered over SSH — see
 [The CLI](#the-cli).
 
-## Compliance
+{% if cookiecutter.auth_providers != "google_only" %}## Signing in with Microsoft
+
+`MICROSOFT_ENTRA_ID_TENANT_ID` decides who can sign in with Microsoft. Left
+blank, the app uses Entra's multi-tenant `common` endpoint: anyone with a
+work, school or personal Microsoft account can. Set to your tenant's GUID,
+its "Directory (tenant) ID" in the Azure Portal, only its users and guests
+can. Use the GUID, not a domain such as `contoso.onmicrosoft.com`: the
+tenant check below compares it with the GUID in the ID token, so a domain
+would never match and no sign-in would be linked by it.
+
+Sign-ins are linked to an existing account by email, so one person can sign
+in more than one way. But Entra's `email` claim is set by each tenant's
+admin and nothing verifies it, so on its own it would let anyone with a
+tenant sign in as any user (the "nOAuth" attack). So a Microsoft sign-in is
+linked to an existing account only when the ID token proves the email:
+Microsoft verified its domain (the `xms_edov` optional claim, which you add
+to the app registration's ID token under Token configuration), or it is by a
+member of the tenant set above. Not a guest: a guest signs in through your
+tenant, but their email comes from their own. Otherwise the visitor is sent
+back to the sign-in page and asked to sign in the way they first did. A
+returning Microsoft user, and a new one, are unaffected. The rule is
+`lib/account-linking.ts`, applied in the `signIn` callback in `lib/auth.ts`,
+and `tests/compliance/account-linking.test.mjs` proves it against the
+running app.
+
+{% endif %}## Compliance
 
 The app ships a `/legal` hub, linked from the footer, that explains how it
 handles common legal risks, and the operator details those pages need (your

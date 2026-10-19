@@ -10,6 +10,8 @@ interface AuthFormProps {
   callbackUrl?: string;
   planId?: string;
   footer?: React.ReactNode;
+  /** An error to announce above the sign-in options. */
+  error?: string | null;
 }
 
 export function AuthForm({
@@ -20,6 +22,7 @@ export function AuthForm({
   callbackUrl,
   planId,
   footer,
+  error,
 }: AuthFormProps) {
   return (
     <div className="card w-full max-w-md border border-base-200 bg-base-100 shadow-xs">
@@ -32,6 +35,11 @@ export function AuthForm({
             </p>
           )}
         </div>
+        {error && (
+          <p role="alert" className="alert alert-error text-sm">
+            {error}
+          </p>
+        )}
         {showOAuth && (
           <div>
             <OAuthButtons callbackUrl={callbackUrl} planId={planId} />

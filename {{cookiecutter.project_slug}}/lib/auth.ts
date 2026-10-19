@@ -5,6 +5,9 @@ import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
 import { readAgeCheck } from "@/lib/age-check";
+// cc:begin microsoft
+import { mayLinkByEmail } from "@/lib/account-linking";
+// cc:end microsoft
 import {
   users,
   accounts,
@@ -24,8 +27,17 @@ const adapter = DrizzleAdapter(db, {
   verificationTokensTable: verificationTokens as any,
 });
 
-/** Whether this sign-in is for an account that already exists. */
-async function isExistingAccount(user: User | AdapterUser, account?: Account | null) {
+/**
+ * Which existing account this sign-in is for: "linked" when the provider's
+ * account is already linked to a user, "email" when it isn't but a user has
+ * its email (a magic link for a known address, or an OAuth sign-in Auth.js
+ * will link to that user — see allowDangerousEmailAccountLinking in
+ * lib/auth.config.ts), or null for a new account.
+ */
+async function existingAccount(
+  user: User | AdapterUser,
+  account?: Account | null
+): Promise<"linked" | "email" | null> {
   if (account && account.type !== "email") {
     const [linked] = await db
       .select({ userId: accounts.userId })
@@ -37,18 +49,15 @@ async function isExistingAccount(user: User | AdapterUser, account?: Account | n
         )
       )
       .limit(1);
-    if (linked) return true;
+    if (linked) return "linked";
   }
-  // A magic link for a known address, or an OAuth sign-in Auth.js will link
-  // to the account with that address (see allowDangerousEmailAccountLinking
-  // in lib/auth.config.ts).
-  if (!user.email) return false;
+  if (!user.email) return null;
   const [byEmail] = await db
     .select({ id: users.id })
     .from(users)
     .where(eq(users.email, user.email))
     .limit(1);
-  return !!byEmail;
+  return byEmail ? "email" : null;
 }
 
 /** The age screen, with the destination the visitor was signing in for. */
@@ -102,8 +111,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // account: an OAuth callback, a magic-link request and opening the link.
     // An existing account always signs in. A new one is sent to the age
     // screen unless the visitor has passed it and not been turned away.
-    signIn: async ({ user, account }) => {
-      if (await isExistingAccount(user, account)) return true;
+    signIn: async ({
+      user,
+      account,
+      // cc:begin microsoft
+      profile,
+      // cc:end microsoft
+    }) => {
+      const existing = await existingAccount(user, account);
+      // cc:begin microsoft
+      // Linking by email is only as good as the provider's word for the
+      // email, and Microsoft's isn't always good (see lib/account-linking.ts):
+      // without proof, a Microsoft sign-in with someone's email is refused
+      // rather than signed in as them. Auth.js's own error for this, which
+      // the sign-in page explains.
+      if (
+        existing === "email" &&
+        account &&
+        !mayLinkByEmail(account.provider, profile, process.env.MICROSOFT_ENTRA_ID_TENANT_ID)
+      ) {
+        return "/sign-in?error=OAuthAccountNotLinked";
+      }
+      // cc:end microsoft
+      if (existing) return true;
       if (readAgeCheck(await cookies()).status === "passed") return true;
       return ageScreenUrl();
     },

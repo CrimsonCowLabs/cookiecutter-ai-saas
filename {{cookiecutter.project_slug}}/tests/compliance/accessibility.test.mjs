@@ -46,6 +46,8 @@ let themes;
 const PUBLIC_PAGES = [
   "/",
   "/sign-in",
+  // Where Auth.js sends a sign-in it refused, with its error shown.
+  "/sign-in?error=OAuthAccountNotLinked",
   "/sign-up",
   "/sign-up?age_error=invalid",
   ...(exists("(auth)/magic-link") ? ["/magic-link"] : []),

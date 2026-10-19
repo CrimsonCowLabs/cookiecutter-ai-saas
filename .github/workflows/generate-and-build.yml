@@ -344,6 +344,20 @@ jobs:
           else
             test -e "$G/components/auth/magic-link-form.tsx"
           fi
+          # Issue #101: Microsoft's account-linking rule ships with Microsoft
+          # sign-in, gating the signIn callback, and leaves no trace without it.
+          if [ "${{ matrix.auth_providers }}" = google_only ]; then
+            test ! -e "$G/lib/account-linking.ts"
+            test ! -e "$G/tests/compliance/account-linking.test.mjs"
+            if grep -rnE 'account-linking|mayLinkByEmail|xms_edov' "$G/lib" "$G/app" "$G/components" "$G/tests"; then
+              echo "Microsoft account linking survived auth_providers=google_only" >&2
+              exit 1
+            fi
+          else
+            test -e "$G/lib/account-linking.ts"
+            test -e "$G/tests/compliance/account-linking.test.mjs"
+            grep -q 'mayLinkByEmail(account.provider, profile, process.env.MICROSOFT_ENTRA_ID_TENANT_ID)' "$G/lib/auth.ts"
+          fi
           case "${{ matrix.auth_providers }}" in
             google_only) grep -q '^GOOGLE_ID=' "$G/.env.example"; ! grep -q 'MICROSOFT' "$G/.env.example" ;;
             microsoft_only) grep -q 'MICROSOFT' "$G/.env.example"; ! grep -q '^GOOGLE_ID=' "$G/.env.example" ;;
@@ -606,6 +620,10 @@ jobs:
   # join the axe audit, keyboard checks included. Hence the matrix: the
   # default answers (analytics=none, where /legal/analytics says nothing is
   # tracked and no banner exists) and analytics=posthog.
+  # Issue #101 (nOAuth) adds tests/compliance/account-linking.test.mjs:
+  # Microsoft sign-ins link to an existing account by email only under the
+  # rule in lib/account-linking.ts (see "Signing in with Microsoft" in the
+  # generated README).
   # Issue #86 (session replay) adds tests/compliance/session-replay.test.mjs:
   # with analytics.sessionReplay off (the default), accepting analytics, or
   # even a cookie saying yes to recording, records nothing; turned on, the

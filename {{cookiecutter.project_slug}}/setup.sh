@@ -397,6 +397,8 @@ setup_feature_credentials() {
     echo "  https://portal.azure.com/ -> Microsoft Entra ID -> App registrations"
     prompt_for_credential MICROSOFT_ENTRA_ID_ID "Microsoft Entra ID application (client) ID: "
     prompt_for_credential MICROSOFT_ENTRA_ID_SECRET "Microsoft Entra ID client secret: "
+    echo "  Tenant ID: blank for any Microsoft account, or your tenant's GUID (Directory (tenant) ID)"
+    echo "  for only its users; see \"Signing in with Microsoft\" in README.md."
     prompt_for_credential MICROSOFT_ENTRA_ID_TENANT_ID "Microsoft Entra ID tenant ID: "
   fi
 

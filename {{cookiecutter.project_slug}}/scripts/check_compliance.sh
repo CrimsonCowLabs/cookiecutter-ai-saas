@@ -30,10 +30,11 @@ cd "$(dirname "$0")/.."
 source scripts/lib/running_app.sh
 running_app_prepare
 
-# The age-gate tests sign in through Google and Microsoft by way of a fake
-# identity provider they run on this port (tests/compliance/fake-oidc.mjs);
-# the issuer overrides point the app's providers at it instead of the real
-# ones. Unused providers' settings are harmless.
+# The age-gate{% if cookiecutter.auth_providers != "google_only" %} and account-linking{% endif %} tests sign in through Google and
+# Microsoft by way of a fake identity provider they run on this port
+# (tests/compliance/fake-oidc.mjs); the issuer overrides point the app's
+# providers at it instead of the real ones. Unused providers' settings are
+# harmless.
 FAKE_OIDC_PORT=3999
 FAKE_OIDC="http://localhost:${FAKE_OIDC_PORT}"
 {%- if cookiecutter.include_stripe == "yes" %}
