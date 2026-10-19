@@ -249,7 +249,9 @@ anything changes what is serving:
    touches them. `template` replaces a file by renaming over it, which is why
    the running containers keep reading the copy they opened.
 4. **Migrate**, from this release's migrator image, with Postgres and Redis up
-   but the app not switched. A failing migration stops the deploy here.
+   but the app not switched. First the [database roles](#database-roles) are
+   created or brought up to date; then the migrations run as the schema owner.
+   A failure in either stops the deploy here.
 5. **Switch**: move each `:latest` tag and bring the stack up. If the
    switched-over stack does not answer, put the previous release's images back,
    restart on them, and fail loudly.
@@ -273,6 +275,8 @@ a first deploy, which is what the DNS pre-flight protects instead.
 | Secrets | `ansible/vault.yml`, encrypted; `ansible/vault.yml.example` documents every name |
 | Non-secret settings | `ansible/group_vars/all.yml` |
 | The production env file | `ansible/templates/env-production.j2`, rendered to `/app/<slug>/.env-production` on the host, `0600` |
+| The migrations' connection | `ansible/templates/env-migrations.j2`, rendered to `/app/<slug>/.env-migrations` on the host, `0600`, read by the migrator alone |
+| The database roles | `ansible/files/db-roles.sql`, run on every deploy; their names in `ansible/group_vars/all.yml` |
 | What is deployed | `/app/<slug>/RELEASE` on the host |
 | Previous releases | still on the host, tagged `<slug>-<image>:<release>` |
 
@@ -295,8 +299,8 @@ not a successful deploy and a plaintext secret in a commit.
 
 Be clear about what this buys, because it is not "the secrets never leave the
 vault": `ansible-vault` decrypts on the **control machine**, in memory, and the
-rendered `.env-production` lands on the host at mode `0600` owned by the deploy
-account. Nothing is at rest in plaintext anywhere else — not in the repository,
+rendered `.env-production` and `.env-migrations` land on the host at mode
+`0600` owned by the deploy account. Nothing is at rest in plaintext anywhere else — not in the repository,
 not in a shell history, not in a file on your laptop. The machine running the
 deploy still holds the password and sees the values while it runs; it has to.
 
@@ -304,6 +308,96 @@ Non-secret settings — the domain, the origin NextAuth builds callbacks from,
 feature flags — are in `ansible/group_vars/all.yml` and in
 `ansible/templates/env-production.j2`, in the clear, where they can be read in
 a diff.
+
+## Database roles
+
+In production the app does not connect to Postgres as `postgres`. A superuser
+can do far more than the app ever needs: `COPY ... TO PROGRAM` runs a shell
+command in the database container, and it can create roles and open any
+database on the server. A SQL injection gets whatever its connection can do, so
+the connection the app holds is now the least that serves it. There are three
+roles:
+
+| Role | Name | Who connects as it | What it can do |
+|------|------|--------------------|----------------|
+| Superuser | `postgres` | the role bootstrap, the nightly backup, a restore — all from inside the database container | anything |
+| Schema owner | `<db>_owner` | the migrator, and nothing else | owns the database and everything in it, so migrations can create and alter tables. Not a superuser, cannot create roles or databases |
+| App role | `<db>_app` | app, worker, db-writer, and `docker compose run ops` | select, insert, update and delete rows in `public`, and use its sequences. No DDL, no roles, no databases, no `COPY` to or from programs or files, nothing in drizzle's migrations journal, no other database on the server |
+
+`<db>` is the database name, the slug with dashes turned into underscores. The
+names are `postgres_owner_user` and `postgres_app_user` in
+`ansible/group_vars/all.yml`; choose them before the first deploy, because a
+renamed role leaves the old one behind.
+
+Each has its own password in the vault: `vault_postgres_password`,
+`vault_postgres_owner_password` and `vault_postgres_app_password`. The deploy
+refuses to run while any of them is empty. `DATABASE_URL` in `.env-production`
+is the app role's. The owner's is in `.env-migrations`, a second file on the
+host that only the migrator's `docker run` reads, after `.env-production` so
+that its `DATABASE_URL` wins. It is kept out of `.env-production` because
+compose gives that file whole to every service, and the owner's password there
+would be in the app's environment.
+
+Every deploy runs `ansible/files/db-roles.sql` as the superuser before the
+migrations. It runs whatever is being shipped, `-e deploy_targets=none`
+included. It creates whichever role is missing, sets both passwords from the
+vault, gives the database and everything in `public` and `drizzle` to the
+owner, and grants the app role what it needs. It also sets default privileges,
+so a table a later migration creates can be used by the app with no grant of
+its own. It is idempotent and runs in one transaction. A failure stops the
+deploy before anything is switched, with the previous release still serving.
+Because it sets both passwords every time, rotating either one is a vault edit
+and a deploy. The superuser's password is still the exception: Postgres only
+reads it when it initialises the data directory, so changing it needs an
+`ALTER ROLE` as well.
+
+Only `public` is covered. A migration that creates a schema of its own leaves
+the app role without access to it until the script grants that too.
+
+On the pgvector variant the script also runs `CREATE EXTENSION IF NOT EXISTS
+vector`. pgvector is not a trusted extension, so only a superuser can create
+it, and migrations no longer run as one. A migration of your own that enables
+it should say `IF NOT EXISTS`, and then finds it already there.
+
+`POSTGRES_USER` and `POSTGRES_PASSWORD` are still in `.env-production`,
+because compose reads the postgres service's settings from that file. Nothing
+in the stack connects with them, but they are in the app containers'
+environment. A SQL injection cannot read them, since it only reaches what the
+app role can. Code execution inside the app container can.
+
+Local development (`docker-compose.yml`, `.env.example`) still connects as the
+`postgres` superuser. Its database is on your machine and holds nothing worth
+protecting, and keeping it simple means `npm run db:migrate` and the app share
+one `DATABASE_URL`.
+
+### Upgrading a host deployed before #103
+
+A host deployed before the roles existed runs the app as `postgres`, and
+`postgres` owns every table. Upgrading it is a vault edit and a deploy. Nothing
+is done in the database by hand:
+
+```bash
+ansible-vault edit ansible/vault.yml
+# add, each set to its own `openssl rand -hex 32`:
+#   vault_postgres_owner_password: "..."
+#   vault_postgres_app_password: "..."
+
+ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass
+```
+
+A deploy with the old vault is refused before anything is built. The message
+names the two missing passwords and says this is all the upgrade needs. On the
+deploy that follows, the bootstrap creates both roles and hands the database,
+every table, sequence and enum, and drizzle's journal to the owner. Then the
+migrations run as the owner, and the switch brings the app, worker and
+db-writer up on the app role's `DATABASE_URL`. The previous release keeps
+serving as `postgres` until that switch. If the switch fails, the rollback
+brings the previous release back on the app role. That works, because the roles
+and grants are already in place.
+
+`scripts/check_deploy.sh` checks this path. It puts a deployed host back to how
+deploys used to leave it, checks that the old vault is refused, and checks
+that the next deploy leaves the roles exactly as a fresh one does.
 
 ## HTTPS and TLS
 
@@ -452,15 +546,31 @@ sudo rclone --config /etc/<slug>-db-backup/rclone.conf \
 cd /app/<slug> && docker compose -f docker-compose.prod.yml \
   --env-file .env-production stop app worker db-writer
 
-# 3. Restore. --clean --if-exists drops what is there first, so this is a
-#    replacement and not a merge.
+# 3. Restore, as the superuser. --clean --if-exists drops what is there first,
+#    so this is a replacement and not a merge. No --no-owner: the dump records
+#    the schema owner as the owner of everything and the app role's grants, and
+#    keeping them is what lets the next migration alter these tables.
 docker exec -i <slug>-postgres-1 pg_restore \
-  --clean --if-exists --no-owner -U postgres -d <slug_with_underscores> \
+  --clean --if-exists -U postgres -d <slug_with_underscores> \
   < /tmp/restore.dump
 
-# 4. Bring the stack back, and check the data before you let traffic in.
-docker compose -f docker-compose.prod.yml --env-file .env-production up -d
+# 4. From your own machine, deploy without shipping anything. This runs the
+#    role bootstrap over what was restored and brings the stack back up.
+#    Check the data before you let traffic in.
+ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass \
+  -e deploy_targets=none
 ```
+
+The restore needs the [database roles](#database-roles) to exist, because the
+dump assigns its objects to them. On a host that is already deployed they do.
+On a fresh host, provision it and deploy once first, which creates the roles,
+and then restore. Step 4 fixes ownership and grants whichever way they came out
+of the dump. A dump taken before the roles existed has everything owned by
+`postgres` and has no app-role grants, and the bootstrap hands it all to the
+owner just as it does in an [upgrade](#upgrading-a-host-deployed-before-103).
+`--no-owner` would have the same effect on a current dump, so it is not
+dangerous. It is left out because it throws away ownership the dump already
+has right.
 
 The reason that is four commands in a README rather than a script is that an
 untested restore script is worse than none: it reads as a guarantee, and the day

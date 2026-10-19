@@ -383,7 +383,9 @@ serving: everything that can fail happens before anything changes what serves.
    images, tagged with the release rather than only `:latest`. None of this
    touches the running containers.
 4. **Migrate**, using this release's migrator image, with Postgres up and the
-   app not yet switched. A migration that fails stops the deploy here.
+   app not yet switched. First the database roles are created or brought up to
+   date (see [The database roles](#the-database-roles)); then the migrations
+   run as the schema owner. A failure in either stops the deploy here.
 5. **Switch**: move the `:latest` tags and bring the stack up. If the
    switched-over stack does not answer, the previous release's images *and* its
    compose file and `Caddyfile` are put back, the stack is restarted on them,
@@ -396,9 +398,10 @@ on the host records which release is serving.
 
 Four honest limits:
 
-- **`ansible-vault` decrypts on *your* machine**, and the rendered env file
-  lands on the host. So nothing is at rest in plaintext anywhere except that one
-  `0600` file — but the machine running the deploy does see the values.
+- **`ansible-vault` decrypts on *your* machine**, and the rendered env files
+  land on the host. So nothing is at rest in plaintext anywhere except those two
+  `0600` files (`.env-production`, and `.env-migrations` for the migrator) — but
+  the machine running the deploy does see the values.
 - **The switch is `docker compose up -d`**, which stops a container before
   starting its replacement. A broken release costs the seconds until the
   rollback, not zero.
@@ -410,6 +413,43 @@ Four honest limits:
 - **`.env-production` does not roll back.** It is rendered from the vault and
   `group_vars` — your current values, not the release's content — so a value you
   changed deliberately stays changed. Only release content rolls back.
+
+### The database roles
+
+In production the app does not connect as the `postgres` superuser. A
+superuser can run shell commands in the database container with `COPY ... TO
+PROGRAM`, and can create roles and open other databases. A SQL injection
+inherits whatever its connection can do. So there are three roles:
+
+- **`postgres`**, the superuser. The deploy's role bootstrap, the nightly backup
+  and a restore use it, from inside the database container. Nothing in the
+  running stack connects as it.
+- **`{{ cookiecutter.project_slug | replace('-', '_') }}_owner`**, the schema
+  owner. The migrations run as it, through `.env-migrations`, a second env file
+  that only the migrator reads. It owns the database and every table.
+- **`{{ cookiecutter.project_slug | replace('-', '_') }}_app`**, which app,
+  worker, db-writer and `docker compose run ops` connect as, through
+  `DATABASE_URL` in `.env-production`. It reads and writes rows and does
+  nothing else: no DDL, no roles, no `COPY` to or from programs or files.
+
+Each has a password in the vault: `vault_postgres_password`,
+`vault_postgres_owner_password` and `vault_postgres_app_password`. Every
+deploy runs `ansible/files/db-roles.sql`, before the migrations. It creates
+whichever role is missing, sets both passwords from the vault (so rotating
+one is a vault edit and a deploy), hands everything in the schema to the
+owner, and grants the app role what it needs. Default privileges are
+included, so a table a new migration adds can be used by the app straight
+away.
+
+**A host deployed before these roles existed** upgrades with no manual step
+in the database. Add `vault_postgres_owner_password` and
+`vault_postgres_app_password` to the vault (`ansible-vault edit
+ansible/vault.yml`, each `openssl rand -hex 32`) and deploy. A deploy with the
+old vault is refused, and the message names the two passwords. The deploy
+after you add them creates the roles, gives the existing tables to the owner,
+and switches the app over.
+
+Local development (`docker-compose.yml`, `.env.local`) still uses `postgres`.
 
 ### Provisioning the host
 
@@ -724,15 +764,25 @@ sudo rclone --config /etc/{{ cookiecutter.project_slug }}-db-backup/rclone.conf 
 cd /app/{{ cookiecutter.project_slug }} && docker compose -f docker-compose.prod.yml \
   --env-file .env-production stop app worker db-writer
 
-# 3. Restore. --clean --if-exists drops what is there first, so this replaces
-#    rather than merges.
+# 3. Restore, as the superuser. --clean --if-exists drops what is there first,
+#    so this replaces rather than merges. No --no-owner: the dump says the
+#    schema owner owns everything, and keeping that is what lets the next
+#    migration alter these tables.
 docker exec -i {{ cookiecutter.project_slug }}-postgres-1 pg_restore \
-  --clean --if-exists --no-owner -U postgres \
+  --clean --if-exists -U postgres \
   -d {{ cookiecutter.project_slug | replace('-', '_') }} < /tmp/restore.dump
 
-# 4. Bring it back, and check the data before you let traffic in.
-docker compose -f docker-compose.prod.yml --env-file .env-production up -d
+# 4. From your own machine, deploy without shipping anything. This runs the
+#    role bootstrap over what was restored and brings the stack back up.
+#    Check the data before you let traffic in.
+ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass \
+  -e deploy_targets=none
 ```
+
+The dump assigns its tables to the [database roles](#the-database-roles), so
+they have to exist first. On a fresh host, deploy once and then restore. A dump
+taken before the roles existed is owned by `postgres` throughout, and step 4
+hands it to the owner.
 
 Those are steps in a README rather than a script because an untested restore
 script is worse than none: it reads as a guarantee, and the day you discover it

@@ -117,6 +117,11 @@ services:
     # `docker compose run ops ...` has an image with the dev dependencies in
     # it. `restart: unless-stopped` is what deploy.yml's health gate reads as
     # "meant to stay up", so this must not have it.
+    #
+    # It reads .env-production like the app, so it connects as the app role:
+    # it can read and write rows, and cannot change the schema. Schema changes
+    # are migrations, and migrations run through deploy.yml (`opsctl migrate`),
+    # which alone connects as the schema owner.
     restart: "no"
     # And a profile, so `up` leaves it alone entirely. Without one, every `up`
     # starts a container that immediately exits — which makes a deploy of

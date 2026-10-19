@@ -30,9 +30,19 @@ MICROSOFT_ENTRA_ID_TENANT_ID={{ vault_microsoft_entra_id_tenant_id | default('')
 # Jinja's urlencode keeps `/` unescaped, which is fine in a path and fatal in
 # the userinfo — a password with a slash in it silently truncates the host, and
 # what you get is a connection failure a long way from here.
+#
+# DATABASE_URL is the app role's, not the superuser's: app, worker and
+# db-writer read and write rows and nothing else, so a SQL injection cannot
+# reach a shell through COPY ... TO PROGRAM or create a role. The migrations
+# connect as the schema owner instead, through .env-migrations, which deploy.yml
+# passes to the migrator alone (see ansible/templates/env-migrations.j2).
+#
+# POSTGRES_USER and POSTGRES_PASSWORD are the superuser's, and are here because
+# docker compose interpolates them into the postgres service from this file.
+# Nothing in the stack connects with them.
 POSTGRES_USER={{ postgres_user }}
 POSTGRES_PASSWORD={{ vault_postgres_password }}
-DATABASE_URL=postgresql://{{ postgres_user }}:{{ vault_postgres_password | urlencode | replace('/', '%2F') }}@postgres:5432/{{ postgres_db }}
+DATABASE_URL=postgresql://{{ postgres_app_user }}:{{ vault_postgres_app_password | urlencode | replace('/', '%2F') }}@postgres:5432/{{ postgres_db }}
 
 # ─── Redis (BullMQ) ──────────────────────────────────
 REDIS_URL=redis://redis:6379

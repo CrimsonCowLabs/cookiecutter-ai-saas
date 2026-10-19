@@ -18,6 +18,22 @@
 #   * the DNS pre-flight aborts  — against a name resolving elsewhere, and
 #                                  proceeds against one resolving here
 #   * migrations run             — asserted against the database afterwards
+#   * the app is not a superuser — app, worker and db-writer connect as the app
+#                                  role, which is no superuser and is refused
+#                                  COPY TO PROGRAM, COPY to a file, CREATE ROLE,
+#                                  CREATE DATABASE and DDL, yet can use every
+#                                  table, one created after the deploy included;
+#                                  the migrations ran as the schema owner, whose
+#                                  password reaches only .env-migrations
+#   * backup and restore         — a dump taken the way the backups take it,
+#                                  restored the way the docs say, leaves the
+#                                  owner owning everything and the app working
+#   * an existing host upgrades  — a host put back the way deploys left it
+#                                  before the roles existed (superuser
+#                                  DATABASE_URL, tables owned by postgres, no
+#                                  roles) is refused until the vault has the two
+#                                  new passwords, and then deploys cleanly onto
+#                                  the roles with nothing done by hand
 #   * the proxy is the stack's   — the running Caddy is this release's
 #     own Caddy build              <slug>-caddy image, with the rate-limit
 #                                  module in it, shipped like the others; its
@@ -81,19 +97,39 @@ SLUG="$(read_var project_slug)"
 [[ -n $DEPLOY_USER && -n $APP_DIR && -n $SLUG ]] \
   || fail "could not read deploy_user/app_dir/project_slug out of $VARS"
 DB_NAME="${SLUG//-/_}"
+# The two roles' names, as group_vars derives them from the database's. Read
+# rather than assumed, with the one Jinja expression they are written in
+# substituted; anything else in them fails here rather than being compared
+# wrongly below.
+read_role() {
+  local value
+  value="$(read_var "$1")"
+  value="${value//'{{ postgres_db }}'/$DB_NAME}"
+  [[ -n $value && $value != *'{{'* ]] || fail "could not work out $1 from '$(read_var "$1")' in $VARS"
+  printf '%s\n' "$value"
+}
+OWNER_ROLE="$(read_role postgres_owner_user)"
+APP_ROLE="$(read_role postgres_app_user)"
 NODE_TAG="$(sed -n 's/^FROM node:\(.*\) AS base$/\1/p' Dockerfile | head -1)"
 [[ -n $NODE_TAG ]] || fail "could not read the node base image out of Dockerfile"
 
 echo "==> Deploying '$SLUG' as '$DEPLOY_USER' into '$APP_DIR'"
 
 # ── Secrets, and a sentinel to hunt for ──────────────────────────────────────
-# The database password deliberately contains characters a URL reads as
-# structure, so that DATABASE_URL having them encoded is checked by Postgres
-# accepting the connection rather than by reading the template.
+# The database passwords deliberately contain characters a URL reads as
+# structure, so that each DATABASE_URL having them encoded is checked by
+# Postgres accepting the connection rather than by reading the template. One per
+# role, and all different, so that finding one somewhere says which it was.
 RANDOM_TAG="$(openssl rand -hex 8)"
 AUTH_SECRET="nextauth-sentinel-$RANDOM_TAG"
 PG_PASSWORD="p@ss/word:$RANDOM_TAG"
-PG_PASSWORD_ENCODED="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$PG_PASSWORD")"
+OWNER_PASSWORD="own@er/pw:$RANDOM_TAG"
+APP_PASSWORD="ap@p/pw:$RANDOM_TAG"
+urlencode() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+PG_PASSWORD_ENCODED="$(urlencode "$PG_PASSWORD")"
+OWNER_PASSWORD_ENCODED="$(urlencode "$OWNER_PASSWORD")"
+APP_PASSWORD_ENCODED="$(urlencode "$APP_PASSWORD")"
+DB_SECRETS=("$PG_PASSWORD" "$OWNER_PASSWORD" "$APP_PASSWORD")
 # Not a real Stripe secret, and never used to talk to Stripe: it is there so the
 # webhook route checks a signature (and answers 400) instead of answering 501
 # for being unconfigured — the ban jail's check below needs webhook calls that
@@ -141,18 +177,20 @@ deploy() {
 # Filled in from the example the template ships, so that the example being
 # wrong is a failure here rather than a surprise for whoever copies it.
 cp ansible/vault.yml.example ansible/vault.yml
-python3 - "$AUTH_SECRET" "$PG_PASSWORD" "$WEBHOOK_SECRET" <<'PY'
+python3 - "$AUTH_SECRET" "$PG_PASSWORD" "$OWNER_PASSWORD" "$APP_PASSWORD" "$WEBHOOK_SECRET" <<'PY'
 import re, sys
 
 path = "ansible/vault.yml"
 text = open(path).read()
 for name, value in (("vault_nextauth_secret", sys.argv[1]),
-                    ("vault_postgres_password", sys.argv[2])):
+                    ("vault_postgres_password", sys.argv[2]),
+                    ("vault_postgres_owner_password", sys.argv[3]),
+                    ("vault_postgres_app_password", sys.argv[4])):
     text, n = re.subn('^%s: ""$' % name, '%s: "%s"' % (name, value), text, flags=re.M)
     assert n == 1, "%s is not in vault.yml.example with an empty value" % name
 # Only in a build with billing; without it the example has no Stripe block.
 text = re.sub('^vault_stripe_webhook_secret: ""$',
-              'vault_stripe_webhook_secret: "%s"' % sys.argv[3], text, flags=re.M)
+              'vault_stripe_webhook_secret: "%s"' % sys.argv[5], text, flags=re.M)
 open(path, "w").write(text)
 PY
 pass "ansible/vault.yml.example has the required names in it, with empty values"
@@ -175,11 +213,13 @@ ansible-vault encrypt --vault-password-file "$TH_WORK/vault-pass" ansible/vault.
 head -c 14 ansible/vault.yml | grep -q '^\$ANSIBLE_VAULT' \
   || fail "ansible-vault encrypt did not produce a vault header"
 
-# Criterion: encrypted at rest. Not "the file looks encrypted" — the password
-# itself must not be anywhere in the tree that gets committed.
-if grep -rqF "$PG_PASSWORD" .; then
-  fail "the database password is in plaintext somewhere under $PWD: $(grep -rlF "$PG_PASSWORD" . | head -3)"
-fi
+# Criterion: encrypted at rest. Not "the file looks encrypted" — the passwords
+# themselves must not be anywhere in the tree that gets committed.
+for secret in "${DB_SECRETS[@]}"; do
+  if grep -rqF "$secret" .; then
+    fail "a database password is in plaintext somewhere under $PWD: $(grep -rlF "$secret" . | head -3)"
+  fi
+done
 pass "the vault is encrypted and no secret is in plaintext anywhere in the project"
 
 # ── Criterion: the DNS pre-flight ────────────────────────────────────────────
@@ -282,6 +322,13 @@ pass "there is a migration for the deploy to run"
 echo "==> Deploying"
 deploy -e site_address=https://localhost 2>&1 | tee "$TH_WORK/deploy1.log"
 pass "one command built, shipped, migrated and started the stack"
+# The role bootstrap hands the roles' passwords to psql through its task's
+# environment, which a failing or verbose task would print. It did neither.
+for secret in "${DB_SECRETS[@]}" "$AUTH_SECRET"; do
+  if grep -qF "$secret" "$TH_WORK/deploy1.log"; then
+    fail "the deploy printed a secret (a no_log is missing)"
+  fi
+done
 
 # ── Criterion: the env file, on the host and nowhere else ────────────────────
 env_stat="$(th_ssh "$DEPLOY_USER" "stat -c '%U %a' $APP_DIR/.env-production")"
@@ -292,14 +339,31 @@ grep -qxF "NEXTAUTH_SECRET=$AUTH_SECRET" <<<"$env_body" \
   || fail "the vault's NEXTAUTH_SECRET did not reach .env-production"
 grep -qxF "POSTGRES_PASSWORD=$PG_PASSWORD" <<<"$env_body" \
   || fail "the vault's POSTGRES_PASSWORD did not reach .env-production"
-grep -qF "postgresql://postgres:$PG_PASSWORD_ENCODED@postgres:5432/$DB_NAME" <<<"$env_body" \
-  || fail "DATABASE_URL is not built from the vault password, url-encoded: $(grep '^DATABASE_URL' <<<"$env_body" | sed 's/:[^:@]*@/:REDACTED@/')"
-pass ".env-production is on the host, 0600, owned by $DEPLOY_USER, rendered from the vault"
+grep -qxF "DATABASE_URL=postgresql://$APP_ROLE:$APP_PASSWORD_ENCODED@postgres:5432/$DB_NAME" <<<"$env_body" \
+  || fail "DATABASE_URL is not the app role's, built from the vault's app password, url-encoded: $(grep '^DATABASE_URL' <<<"$env_body" | sed 's/:[^:@]*@/:REDACTED@/')"
+# The owner's password is the one thing that must not be in here: compose hands
+# this file to every service, so anything in it is in the app's environment.
+if grep -qF -e "$OWNER_PASSWORD" -e "$OWNER_PASSWORD_ENCODED" <<<"$env_body"; then
+  fail "the schema owner's password is in .env-production, where the app can read it"
+fi
+pass ".env-production is on the host, 0600, owned by $DEPLOY_USER, rendered from the vault, with the app role's DATABASE_URL and not the owner's password"
+
+# The owner's connection lives in a file of its own, for the migrator alone.
+mig_stat="$(th_ssh "$DEPLOY_USER" "stat -c '%U %a' $APP_DIR/.env-migrations")"
+[[ "$mig_stat" == "$DEPLOY_USER 600" ]] \
+  || fail ".env-migrations is '$mig_stat', expected '$DEPLOY_USER 600'"
+mig_body="$(th_ssh "$DEPLOY_USER" "cat $APP_DIR/.env-migrations")"
+OWNER_URL="postgresql://$OWNER_ROLE:$OWNER_PASSWORD_ENCODED@postgres:5432/$DB_NAME"
+[[ "$(grep -v -e '^#' -e '^$' <<<"$mig_body")" == "DATABASE_URL=$OWNER_URL" ]] \
+  || fail ".env-migrations should hold the owner's DATABASE_URL and nothing else; it has: $(grep -v '^#' <<<"$mig_body" | sed 's/:[^:@]*@/:REDACTED@/')"
+pass ".env-migrations is on the host, 0600, owned by $DEPLOY_USER, holding the owner's DATABASE_URL and nothing else"
 
 # The playbook writes no plaintext secret back into the working tree.
-if grep -rqF "$PG_PASSWORD" .; then
-  fail "deploying left the database password in plaintext under $PWD"
-fi
+for secret in "${DB_SECRETS[@]}"; do
+  if grep -rqF "$secret" .; then
+    fail "deploying left a database password in plaintext under $PWD"
+  fi
+done
 pass "deploying left no plaintext secret in the project"
 
 # ── Criterion: secrets are not printed either ────────────────────────────────
@@ -314,20 +378,24 @@ pass "deploying left no plaintext secret in the project"
 # mode did: deploy_targets=none re-renders .env-production and restarts,
 # shipping no image at all.
 echo "==> Re-rendering the env file on its own, asking for the diff"
-th_ssh "$DEPLOY_USER" "rm -f $APP_DIR/.env-production"
+th_ssh "$DEPLOY_USER" "rm -f $APP_DIR/.env-production $APP_DIR/.env-migrations"
 deploy -e deploy_targets=none -e site_address=https://localhost --diff \
   > "$TH_WORK/deploy-env.log" 2>&1 \
   || fail "the env-only deploy failed: $(tail -20 "$TH_WORK/deploy-env.log")"
 grep -q 'Render .env-production on the host' "$TH_WORK/deploy-env.log" \
   || fail "the env-only deploy did not render the env file at all"
-for secret in "$PG_PASSWORD" "$AUTH_SECRET"; do
+grep -q 'Render .env-migrations on the host' "$TH_WORK/deploy-env.log" \
+  || fail "the env-only deploy did not render the migrations env file at all"
+for secret in "${DB_SECRETS[@]}" "$AUTH_SECRET"; do
   if grep -qF "$secret" "$TH_WORK/deploy-env.log"; then
     fail "the deploy printed a secret from .env-production (a no_log is missing)"
   fi
 done
-env_stat="$(th_ssh "$DEPLOY_USER" "stat -c '%U %a' $APP_DIR/.env-production")"
-[[ "$env_stat" == "$DEPLOY_USER 600" ]] \
-  || fail "the re-rendered .env-production is '$env_stat', expected '$DEPLOY_USER 600'"
+for file in .env-production .env-migrations; do
+  env_stat="$(th_ssh "$DEPLOY_USER" "stat -c '%U %a' $APP_DIR/$file")"
+  [[ "$env_stat" == "$DEPLOY_USER 600" ]] \
+    || fail "the re-rendered $file is '$env_stat', expected '$DEPLOY_USER 600'"
+done
 pass "an env-only deploy re-renders the file, ships no image, and prints no secret even under --diff"
 
 # ── Criterion: migrations ran, against a real database ───────────────────────
@@ -342,10 +410,114 @@ tables="$(psql_q "select count(*) from information_schema.tables where table_sch
 [[ "${tables:-0}" -ge 1 ]] || fail "the schema is empty after a deploy that ran migrations"
 pass "the migrations ran against the stack's Postgres ($applied applied, $tables tables)"
 
-# Postgres accepted a password with URL-structural characters in it, which is
-# the url-encoding in DATABASE_URL working rather than being written down.
-th_exec "docker exec ${SLUG}-postgres-1 psql -U postgres -d $DB_NAME -c 'select 1'" >/dev/null \
-  || fail "the database is not reachable with the password from the vault"
+# ── Criterion: the app connects as a role that is not a superuser ──────────
+# SQL, on stdin, run by psql inside the stack's Postgres container: as the
+# superuser over the container's own socket, or with a connection URL exactly as
+# a container was given it. The URL is used as is — its host is the compose
+# service name, which resolves on the stack's network, the database's own
+# container included — so a connection that works here is the url-encoding of
+# that password working, against Postgres's real password check, rather than
+# being read off the template.
+PG_CONTAINER="${SLUG}-postgres-1"
+sql_super() {
+  th_exec "docker exec -i $PG_CONTAINER psql -X -q -v ON_ERROR_STOP=1 -tA -U postgres -d $DB_NAME"
+}
+sql_url() {
+  th_exec "docker exec -i $PG_CONTAINER psql -X -q -v ON_ERROR_STOP=1 -tA $(printf '%q' "$1")"
+}
+# The DATABASE_URL a running container was started with, and the user in it.
+container_db_url() {
+  th_exec "docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' ${SLUG}-$1-1" \
+    | sed -n 's/^DATABASE_URL=//p'
+}
+url_user() { python3 -c 'import sys,urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).username or "")' "$1"; }
+
+# One statement, as the app role, that has to be refused — and refused for want
+# of privilege: an error for any other reason (a typo, a connection failure)
+# would make the refusal prove nothing.
+refused() {
+  local when="$1" what="$2" sql="$3" out
+  if out="$(sql_url "$APP_URL" <<<"$sql" 2>&1)"; then
+    fail "$when: the app role could $what"
+  fi
+  grep -qi 'permission denied' <<<"$out" \
+    || fail "$when: '$sql' failed as the app role, but not for want of privilege: $out"
+}
+
+# Everything about the roles this deploy left behind that the criteria name, as
+# one function, because the backup/restore and the upgrade below have to leave
+# the database exactly as a fresh deploy does, and are held to the same thing.
+assert_roles() {
+  local when="$1" service url user flags out
+
+  # app, worker and db-writer each run on the app role's URL, read from the
+  # running container rather than the file it came from.
+  for service in app worker db-writer; do
+    url="$(container_db_url "$service")"
+    [[ -n $url ]] || fail "$when: the running $service container has no DATABASE_URL"
+    user="$(url_user "$url")"
+    [[ $user == "$APP_ROLE" ]] \
+      || fail "$when: the running $service container connects as '$user', not the app role $APP_ROLE"
+  done
+  APP_URL="$(container_db_url app)"
+  [[ "$(sql_url "$APP_URL" <<<'select current_user')" == "$APP_ROLE" ]] \
+    || fail "$when: the app's own DATABASE_URL does not log in as $APP_ROLE"
+
+  # Neither new role is a superuser, and neither can create a role or a
+  # database or get round row security.
+  for user in "$APP_ROLE" "$OWNER_ROLE"; do
+    flags="$(sql_super <<<"select rolsuper, rolcreaterole, rolcreatedb, rolbypassrls from pg_roles where rolname = '$user'")"
+    [[ $flags == "f|f|f|f" ]] \
+      || fail "$when: $user has rolsuper|rolcreaterole|rolcreatedb|rolbypassrls = '${flags:-no such role}', expected f|f|f|f"
+  done
+
+  # From the app's own connection, what the issue is about.
+  refused "$when" "run a shell command through COPY ... TO PROGRAM" "COPY (SELECT 1) TO PROGRAM 'true'"
+  refused "$when" "write a file on the database server" "COPY (SELECT 1) TO '/tmp/deploy-check-copy'"
+  refused "$when" "create a role" "CREATE ROLE deploy_check_intruder"
+  refused "$when" "create a database" "CREATE DATABASE deploy_check_intruder"
+  refused "$when" "create a table" "CREATE TABLE public.deploy_check_intruder (id int)"
+
+  # The migrations ran as the owner: everything in the schema is the owner's,
+  # drizzle's own record of what it applied included.
+  out="$(sql_super <<<"select schemaname || '.' || tablename || ' (' || tableowner || ')' from pg_tables
+                       where schemaname in ('public', 'drizzle') and tableowner <> '$OWNER_ROLE'")"
+  [[ -z $out ]] || fail "$when: these tables are not owned by $OWNER_ROLE: $(tr '\n' ' ' <<<"$out")"
+  [[ "$(sql_super <<<"select tableowner from pg_tables where schemaname = 'drizzle' and tablename = '__drizzle_migrations'")" == "$OWNER_ROLE" ]] \
+    || fail "$when: drizzle.__drizzle_migrations is not owned by $OWNER_ROLE — the migrations did not run as the owner"
+
+  # And the app role can use all of it — read, write, and the sequences behind
+  # serial ids — so least privilege has not become no privilege.
+  out="$(sql_url "$APP_URL" <<<"
+    select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and (
+      -- One privilege per call: given a list, has_table_privilege is true if
+      -- any one of them is held.
+      (c.relkind in ('r', 'p') and not (has_table_privilege(c.oid, 'SELECT')
+                                        and has_table_privilege(c.oid, 'INSERT')
+                                        and has_table_privilege(c.oid, 'UPDATE')
+                                        and has_table_privilege(c.oid, 'DELETE')))
+      or (c.relkind = 'S' and not has_sequence_privilege(c.oid, 'USAGE')))")" \
+    || fail "$when: the app role could not even list what it may use"
+  [[ -z $out ]] || fail "$when: the app role cannot read and write: $(tr '\n' ' ' <<<"$out")"
+}
+
+assert_roles "after the first deploy"
+pass "app, worker and db-writer connect as $APP_ROLE, which is no superuser and is refused COPY TO PROGRAM, COPY to a file, CREATE ROLE, CREATE DATABASE and CREATE TABLE, yet can read and write every table; the migrations ran as $OWNER_ROLE, which owns every table"
+
+# Default privileges, which is what makes "usable by the app role" true of a
+# table no deploy has granted anything on: one the owner creates now, as a
+# later migration would, with a serial id so its sequence is covered too. The
+# app role writes a row into it, which the backup and restore below then have to
+# bring back. It is dropped once they have.
+CANARY="deploy-check-canary-$RANDOM_TAG"
+sql_url "$OWNER_URL" <<<'CREATE TABLE public.deploy_check_canary (id serial PRIMARY KEY, note text NOT NULL)' \
+  || fail "the schema owner could not create a table"
+sql_url "$APP_URL" <<<"INSERT INTO public.deploy_check_canary (note) VALUES ('$CANARY')" \
+  || fail "the app role cannot write to a table the owner created after the deploy: default privileges are missing"
+[[ "$(sql_url "$APP_URL" <<<'select note from public.deploy_check_canary')" == "$CANARY" ]] \
+  || fail "the app role cannot read back a table the owner created after the deploy"
+pass "a table the owner creates after the deploy is usable by the app role with no grant of its own (default privileges, sequence included)"
 
 # ── Criterion: the stack serves ──────────────────────────────────────────────
 # From outside the host, over HTTPS, through the proxy the stack runs itself —
@@ -793,5 +965,122 @@ if grep -E '^CADDY_([A-Z]+_)?RATE_LIMIT_[A-Z]+=' <<<"$env_now"; then
   fail "caddy_*rate_limit_* were unset again, but the above stayed in the running Caddy's environment"
 fi
 pass "unsetting caddy_*rate_limit_* takes them out of Caddy's environment, back to the Caddyfile's defaults"
+
+# ── Criterion: backup and restore still work ─────────────────────────────────
+# A dump taken exactly the way ansible/templates/db-backup.sh.j2 takes one — as
+# the superuser, inside the container, from the container's own environment —
+# and put back exactly the way docs/deployment.md says: pg_restore as the
+# superuser, keeping owners, then a deploy. What has to survive is both halves
+# of the role split: the data (the canary row, deleted in between) and the
+# ownership and grants (the owner owning everything, the app role able to use
+# it), with the app serving on top.
+echo "==> Backing up and restoring the database"
+DUMP=/tmp/deploy-check.dump
+th_exec "docker exec -i $PG_CONTAINER sh -c '
+  PGPASSWORD=\"\$POSTGRES_PASSWORD\" exec pg_dump --format=custom \
+    --username \"\${POSTGRES_USER:-postgres}\" --dbname \"\$POSTGRES_DB\"' > $DUMP" \
+  || fail "pg_dump as the superuser failed"
+th_exec "head -c 5 $DUMP | grep -q PGDMP" || fail "the dump is not a Postgres custom-format archive"
+sql_url "$APP_URL" <<<'DELETE FROM public.deploy_check_canary' \
+  || fail "the app role could not delete the canary row"
+
+compose_on_host() {
+  th_exec "cd $APP_DIR && docker compose -p $SLUG -f docker-compose.prod.yml --env-file .env-production $1"
+}
+compose_on_host "stop app worker db-writer" >/dev/null 2>&1 \
+  || fail "could not stop what writes before restoring"
+th_exec "docker exec -i $PG_CONTAINER pg_restore --clean --if-exists -U postgres -d $DB_NAME < $DUMP" \
+  > "$TH_WORK/restore.log" 2>&1 \
+  || fail "the documented pg_restore did not restore cleanly: $(tail -20 "$TH_WORK/restore.log")"
+deploy -e deploy_targets=none -e site_address=https://localhost \
+  > "$TH_WORK/deploy-restore.log" 2>&1 \
+  || fail "the deploy after the restore failed: $(tail -20 "$TH_WORK/deploy-restore.log")"
+await "the stack to serve after the restore" serving
+[[ "$(sql_url "$APP_URL" <<<'select note from public.deploy_check_canary')" == "$CANARY" ]] \
+  || fail "the restore did not bring back the canary row, or the app role cannot read it"
+assert_roles "after a restore"
+pass "a dump taken as the backups take it, restored as the docs say, brings the data back with $OWNER_ROLE owning it and $APP_ROLE using it, and the app serving"
+sql_url "$OWNER_URL" <<<'DROP TABLE public.deploy_check_canary' || fail "the owner could not drop the canary table"
+th_exec "rm -f $DUMP"
+
+# ── Criterion: a host deployed before the roles existed upgrades cleanly ─────
+# Last, because it takes the database apart. The host is put back the way every
+# deploy left it before the app had a role of its own: the app, worker and
+# db-writer on the superuser's DATABASE_URL, no .env-migrations, the database
+# and every table in it owned by postgres, and neither role there. Serving, as
+# such a host was. Then the operator's whole upgrade, as docs/deployment.md
+# gives it: a deploy with the old vault is refused, naming the two passwords to
+# add; with them added it deploys, and nothing is done in the database by hand.
+echo "==> Putting the host back the way deploys left it before the roles existed"
+th_exec "sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:$PG_PASSWORD_ENCODED@postgres:5432/$DB_NAME|' $APP_DIR/.env-production
+  rm -f $APP_DIR/.env-migrations" \
+  || fail "could not put the superuser's DATABASE_URL back in .env-production"
+compose_on_host "up -d app worker db-writer" > "$TH_WORK/downgrade.log" 2>&1 \
+  || fail "could not restart the stack on the superuser's DATABASE_URL: $(tail -20 "$TH_WORK/downgrade.log")"
+# REASSIGN OWNED moves the database, the schemas and every table and sequence
+# back to the superuser; DROP OWNED then takes away every grant and default
+# privilege the roles were given, which is what lets them be dropped. The
+# public schema goes back to its stock owner. One role per statement: the
+# default privileges are one catalog row that both roles depend on, and
+# `DROP OWNED BY owner, app` tries to delete it once for each, failing on the
+# second with "could not find tuple for default ACL".
+sql_super <<SQL || fail "could not take the roles back out of the database"
+REASSIGN OWNED BY "$OWNER_ROLE" TO postgres;
+REASSIGN OWNED BY "$APP_ROLE" TO postgres;
+DROP OWNED BY "$OWNER_ROLE";
+DROP OWNED BY "$APP_ROLE";
+DROP ROLE "$OWNER_ROLE";
+DROP ROLE "$APP_ROLE";
+ALTER SCHEMA public OWNER TO pg_database_owner;
+SQL
+[[ "$(sql_super <<<"select count(*) from pg_roles where rolname in ('$OWNER_ROLE', '$APP_ROLE')")" == 0 ]] \
+  || fail "the roles are still there after dropping them"
+[[ "$(sql_super <<<"select count(*) from pg_tables where schemaname in ('public', 'drizzle') and tableowner <> 'postgres'")" == 0 ]] \
+  || fail "some table is not the superuser's after handing everything back to it"
+[[ "$(sql_super <<<"select pg_get_userbyid(datdba) from pg_database where datname = current_database()")" == postgres ]] \
+  || fail "the database is not the superuser's after handing everything back to it"
+[[ "$(url_user "$(container_db_url app)")" == postgres ]] \
+  || fail "the app is not running on the superuser's DATABASE_URL"
+await "the stack to serve as the superuser" serving
+applied_before="$(psql_q 'select count(*) from drizzle.__drizzle_migrations')"
+pass "the host is as deploys left it before the roles: superuser DATABASE_URL, everything owned by postgres, no roles, serving"
+
+echo "==> Deploying with a vault that predates the roles"
+cp ansible/vault.yml "$TH_WORK/vault.yml.current"
+ansible-vault view --vault-password-file "$TH_WORK/vault-pass" ansible/vault.yml \
+  | grep -v -e '^vault_postgres_owner_password:' -e '^vault_postgres_app_password:' \
+  > "$TH_WORK/vault-old.yml"
+ansible-vault encrypt --vault-password-file "$TH_WORK/vault-pass" \
+  --output ansible/vault.yml "$TH_WORK/vault-old.yml" >/dev/null
+rm -f "$TH_WORK/vault-old.yml"
+if deploy -e site_address=https://localhost > "$TH_WORK/deploy-oldvault.log" 2>&1; then
+  fail "a deploy went ahead with no owner or app role password in the vault"
+fi
+for said in vault_postgres_owner_password vault_postgres_app_password "deploy again"; do
+  grep -qF "$said" "$TH_WORK/deploy-oldvault.log" \
+    || fail "refusing the old vault, the deploy never said '$said': $(tail -20 "$TH_WORK/deploy-oldvault.log")"
+done
+[[ "$(url_user "$(container_db_url app)")" == postgres ]] \
+  || fail "the refused deploy touched the running app anyway"
+serving || fail "the refused deploy stopped the stack serving"
+cp "$TH_WORK/vault.yml.current" ansible/vault.yml
+pass "a vault without the two role passwords is refused before anything is touched, naming both and saying a deploy is the rest of the upgrade"
+
+echo "==> Upgrading: the same deploy, with the two passwords in the vault"
+deploy -e site_address=https://localhost > "$TH_WORK/deploy-upgrade.log" 2>&1 \
+  || fail "the upgrade deploy failed: $(tail -30 "$TH_WORK/deploy-upgrade.log")"
+await "the stack to serve after the upgrade" serving
+assert_roles "after upgrading a host deployed before the roles"
+[[ "$(sql_super <<<"select pg_get_userbyid(datdba) from pg_database where datname = current_database()")" == "$OWNER_ROLE" ]] \
+  || fail "the upgrade left the database itself owned by someone other than $OWNER_ROLE"
+[[ "$(psql_q 'select count(*) from drizzle.__drizzle_migrations')" == "$applied_before" ]] \
+  || fail "the upgrade changed what drizzle records as applied ($applied_before before)"
+th_ssh "$DEPLOY_USER" "test -f $APP_DIR/.env-migrations" || fail "the upgrade did not render .env-migrations"
+for secret in "${DB_SECRETS[@]}"; do
+  if grep -qF "$secret" "$TH_WORK/deploy-upgrade.log"; then
+    fail "the upgrade deploy printed a database password (a no_log is missing)"
+  fi
+done
+pass "one deploy upgraded the host: both roles created, everything handed to $OWNER_ROLE, the app on $APP_ROLE and serving, with nothing done in the database by hand"
 
 echo "==> Deploy check passed"
