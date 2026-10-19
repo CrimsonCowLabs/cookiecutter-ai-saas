@@ -129,12 +129,175 @@
 		}
 	}
 
+	# ── Rate limits ─────────────────────────────────────────────────────────
+	# Each client address gets a budget of requests per sliding window, so one
+	# source flooding the site is slowed here, before Next, Postgres or the
+	# LLM bill notices. The directive is not stock Caddy: it is the
+	# caddy-ratelimit module, compiled into the image caddy/Dockerfile builds,
+	# and it orders itself ahead of `handle`, so it runs before everything
+	# below — scanner probes are counted too.
+	#
+	# The key is {remote_host}, the address the connection came from. That is
+	# the client's own because Caddy is on the host's network (see the top of
+	# this file); it would be a Docker gateway's, and every client would share
+	# one budget, if Caddy were ever moved behind published ports or another
+	# proxy. An IPv6 client is limited by its /64, the block one subscriber is
+	# typically handed, so cycling through addresses inside it buys nothing.
+	#
+	# Every limit is read from the environment, with the default after the
+	# colon, so it can be tuned in the deploy's environment rather than here.
+	# A request that matches several zones spends from each. A refusal is a
+	# 429 with Retry-After (the seconds until the window frees a slot), and is
+	# marked in the access log below.
+	rate_limit {
+		# General: every request but the exempt routes, the webhook and
+		# ingest below. A cold page load is one document plus a few dozen
+		# /_next/static chunks, fonts and images, and <Link> prefetches an
+		# RSC payload for every link in view; those are all counted, since
+		# they all reach Next. Repeat visits load the hashed chunks from the
+		# browser's cache (they are served immutable), so it is the first
+		# load that sets the floor. 100 per 10 s is several cold loads at
+		# once, then ten requests a second sustained — far past one person
+		# browsing, and a refused one is never locked out for more than ten
+		# seconds. Raise it if many of your users share one address (an
+		# office, a school, carrier-grade NAT).
+		#
+		# Exempt: the job-progress stream, which is one long GET per job,
+		# held by a signed-in user, that EventSource reopens by itself
+		# whenever it drops, so limiting it only breaks a page already being
+		# watched. Only the GET: nothing else on that path is a stream, so
+		# any other method there is counted like any other request. The
+		# Stripe webhook has a zone of its own, below.
+		zone general {
+			match {
+				not path /api/webhook/stripe /ingest /ingest/*
+				not {
+					method GET
+					path /api/jobs/*/progress
+				}
+			}
+			key {remote_host}
+			ipv6_prefix 64
+			events {$CADDY_RATE_LIMIT_EVENTS:100}
+			window {$CADDY_RATE_LIMIT_WINDOW:10s}
+		}
+
+		# The Stripe webhook arrives from Stripe's handful of addresses, in
+		# bursts when it retries, and a refused delivery is a billing event
+		# the app may never see, so it is kept out of the general budget.
+		# But it is anonymous until the app has checked its signature, and
+		# the caddy-errors ban jail ignores it (Stripe's retries are not
+		# hostile), so without a limit of its own one address could flood
+		# it unchecked. 300 a minute, five a second sustained, is far past
+		# the event rate of anything this template is likely to run, from
+		# any one of Stripe's addresses, and still a fraction of a flood.
+		# Not read from the environment, because the right value follows
+		# Stripe's behaviour rather than your traffic; raise it here if
+		# Stripe's dashboard ever shows deliveries refused with a 429.
+		zone stripe_webhook {
+			match {
+				path /api/webhook/stripe
+			}
+			key {remote_host}
+			ipv6_prefix 64
+			events 300
+			window 1m
+		}
+
+		# Strict: the requests that cost real money or mail somebody, which
+		# nobody legitimate sends more than a few times a minute. Each is its
+		# own zone on the same limit, so a user who just signed in still has
+		# the whole budget for submitting jobs. 10 a minute is a person
+		# retrying a typo'd address or a failed submission, with room over.
+		#
+		# Sign-in: next-auth's signIn() POSTs /api/auth/signin/<provider>.
+		# For the email provider that sends a magic link, to any address the
+		# form is given; for OAuth it starts a round trip to the provider.
+		zone sign_in {
+			match {
+				method POST
+				path /api/auth/signin/*
+			}
+			key {remote_host}
+			ipv6_prefix 64
+			events {$CADDY_STRICT_RATE_LIMIT_EVENTS:10}
+			window {$CADDY_STRICT_RATE_LIMIT_WINDOW:1m}
+		}
+
+		# The contact form, which mails the operator for every submission.
+		# The route rate-limits itself too (lib/rate-limit.ts); this stops a
+		# flood before it reaches Node, or Redis. With and without a trailing
+		# slash: next.config.ts may set skipTrailingSlashRedirect, and then
+		# /api/contact/ reaches the same route rather than a redirect.
+		zone contact {
+			match {
+				method POST
+				path /api/contact /api/contact/
+			}
+			key {remote_host}
+			ipv6_prefix 64
+			events {$CADDY_STRICT_RATE_LIMIT_EVENTS:10}
+			window {$CADDY_STRICT_RATE_LIMIT_WINDOW:1m}
+		}
+
+		# Server actions: job submission (app/actions/jobs.ts, from the
+		# dashboard) and the rest of app/actions — cancelling a job, starting
+		# a checkout, signing out. Next sends each as a POST to the page it
+		# was rendered on, and no path names an action. A Next-Action header
+		# is not enough to go by: a form posted before (or without)
+		# JavaScript arrives as a plain multipart or urlencoded POST with the
+		# action's id in the body and no header, and Next runs it all the
+		# same. So the zone is every POST outside /api and /ingest: a page
+		# never legitimately receives a POST that is not a server action,
+		# and the only route handlers outside /api are the analytics proxy's
+		# (the app's own forms post to /api/age-check and /api/unsubscribe).
+		# Add a route handler outside /api that takes POSTs, and exclude it
+		# here too.
+		zone server_actions {
+			match {
+				method POST
+				not path /api/* /ingest /ingest/*
+			}
+			key {remote_host}
+			ipv6_prefix 64
+			events {$CADDY_STRICT_RATE_LIMIT_EVENTS:10}
+			window {$CADDY_STRICT_RATE_LIMIT_WINDOW:1m}
+		}
+
+		# Ingest sits between the two. The analytics proxy is anonymous and
+		# forwards to PostHog on the operator's quota, so it is limited on
+		# its own and kept out of the general budget. But posthog-js sends a
+		# batch every few seconds while a page is in use, plus a flags call
+		# on each load — a strict limit would drop real users' events — so
+		# 120 a minute is several times that, and a fraction of a flood.
+		zone ingest {
+			match {
+				path /ingest /ingest/*
+			}
+			key {remote_host}
+			ipv6_prefix 64
+			events {$CADDY_INGEST_RATE_LIMIT_EVENTS:120}
+			window {$CADDY_INGEST_RATE_LIMIT_WINDOW:1m}
+		}
+	}
+
+	# A refused request surfaces as an error, as an oversized body does, and
+	# is marked the same way. Retry-After is already on the response; the
+	# connection is left open, since the client did nothing wrong but go too
+	# fast, and the next request on it may be inside the limit.
+	handle_errors 429 {
+		log_append blocked rate_limited
+		respond 429
+	}
+
 	# ── Access log ──────────────────────────────────────────────────────────
 	# One JSON object per request, written to /var/log/caddy inside the
 	# container, which docker-compose.prod.yml bind-mounts from logs/caddy
 	# beside the compose file so the host — and a ban jail on it — can read
-	# it. Every request Caddy refused carries a `blocked` field ("scanner" or
-	# "body_too_large"); nothing else does.
+	# it. Every request Caddy refused carries a `blocked` field ("scanner",
+	# "body_too_large" or "rate_limited"); nothing else does. A 429 is a 4xx
+	# like any other to the caddy-errors ban jail, so a client that keeps
+	# running into its limit is eventually banned outright.
 	#
 	# Bounded on disk: the file rolls at 10 MiB and at most five rolled files
 	# (gzipped) are kept, none older than 30 days. 0640 because the log holds

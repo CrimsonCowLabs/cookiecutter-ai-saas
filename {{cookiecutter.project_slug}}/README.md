@@ -327,6 +327,7 @@ arguments:
 ```bash
 ansible-playbook ... ansible/deploy.yml -e deploy_targets=app
 ansible-playbook ... ansible/deploy.yml -e deploy_targets=worker,db-writer
+ansible-playbook ... ansible/deploy.yml -e deploy_targets=caddy  # the proxy's own image
 ansible-playbook ... ansible/deploy.yml -e deploy_targets=none   # env file only
 ansible-playbook ... ansible/deploy.yml --tags preflight         # check, deploy nothing
 ```
@@ -492,6 +493,40 @@ address once you have one:
 	email you@your-real-domain.com
 }
 ```
+
+Caddy is this project's own build, not the stock image: `caddy/Dockerfile`
+compiles in the rate-limit module, which stock Caddy lacks and without which
+`Caddyfile` does not load. It is an image like the app's — `caddy` is one of
+the deploy targets, built on your machine, shipped and rolled back with the
+rest — while `Caddyfile` itself is still the shipped file, so changing a proxy
+rule needs no rebuild.
+
+#### Tuning the rate limits
+
+Caddy limits how many requests one client address may make: a generous limit
+across the whole site, a tighter one on the endpoints that cost something per
+request, one of its own for the analytics proxy, and one for the Stripe
+webhook. A request over any of them is answered `429` with `Retry-After`, and
+is a 4xx the `caddy-errors` jail below counts (except on the webhook, which
+the jail ignores). The first three are set in `ansible/group_vars/all.yml`,
+not in `Caddyfile`; empty, which is the default, means the `Caddyfile`'s own
+value. The webhook's, 300 a minute, is fixed in `Caddyfile`, since it follows
+Stripe's delivery rate rather than your traffic:
+
+| Variable | Sets | Caddy reads |
+|----------|------|-------------|
+| `caddy_rate_limit_events` | requests per window, site-wide | `CADDY_RATE_LIMIT_EVENTS` |
+| `caddy_rate_limit_window` | that window (`30s`, `1m`, `1h`) | `CADDY_RATE_LIMIT_WINDOW` |
+| `caddy_strict_rate_limit_events` | requests per window on the strict endpoints | `CADDY_STRICT_RATE_LIMIT_EVENTS` |
+| `caddy_strict_rate_limit_window` | that window | `CADDY_STRICT_RATE_LIMIT_WINDOW` |
+| `caddy_ingest_rate_limit_events` | requests per window to the analytics proxy (`/ingest`) | `CADDY_INGEST_RATE_LIMIT_EVENTS` |
+| `caddy_ingest_rate_limit_window` | that window | `CADDY_INGEST_RATE_LIMIT_WINDOW` |
+
+A deploy writes the ones you set into `.env-production`, and the compose file
+passes them through to Caddy, so `-e deploy_targets=none` is enough to change
+one. Many people can share one address behind an office or carrier NAT, so
+lower the site-wide limit only once the access log has shown you what normal
+looks like.
 
 #### Smoke-testing before DNS exists
 
@@ -815,6 +850,8 @@ ansible/
   vault.yml.example     # Every production secret, to fill in and encrypt
   templates/            # .env-production and the backup units, rendered on the host
 Caddyfile               # TLS, HTTP->HTTPS, probe blocking and body caps for {{ cookiecutter.domain_name }}
+caddy/
+  Dockerfile            # Caddy built with the rate-limit module (deploy target `caddy`)
 ```
 
 ## License

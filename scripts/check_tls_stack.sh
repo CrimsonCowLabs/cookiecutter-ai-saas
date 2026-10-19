@@ -4,7 +4,9 @@
 # Usage: scripts/check_tls_stack.sh <generated-project-dir>
 #
 # docker-compose.prod.yml runs pre-built images, so the caller must have built
-# the app image ("<slug>-app:latest") first.
+# the app image ("<slug>-app:latest") and the proxy's ("<slug>-caddy:latest",
+# from caddy/: Caddy with the rate-limit module, which the stock image lacks)
+# first.
 #
 # The site address is overridden to https://localhost. Caddy then issues from its
 # own local CA instead of asking Let's Encrypt for a certificate for a name that

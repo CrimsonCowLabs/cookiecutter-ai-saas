@@ -26,9 +26,28 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 grep -q '^[[:space:]]*reverse_proxy 127.0.0.1:3000$' "$CADDYFILE" \
   || fail "$CADDYFILE does not reverse_proxy to 127.0.0.1:3000"
 
+# Every client is rate-limited per address at the edge (issue #100), with each
+# limit read from the environment so it can be tuned without editing this file.
+for var in CADDY_RATE_LIMIT_EVENTS CADDY_RATE_LIMIT_WINDOW \
+  CADDY_STRICT_RATE_LIMIT_EVENTS CADDY_STRICT_RATE_LIMIT_WINDOW \
+  CADDY_INGEST_RATE_LIMIT_EVENTS CADDY_INGEST_RATE_LIMIT_WINDOW; do
+  grep -qF "{\$$var:" "$CADDYFILE" \
+    || fail "$CADDYFILE does not read \$$var (with a default) for its rate limits"
+done
+
 # Caddy needs the file at a path inside the container, so mount it absolute.
-ABS="$(cd "$(dirname "$CADDYFILE")" && pwd)/$(basename "$CADDYFILE")"
-RUN=(docker run --rm -v "$ABS:/etc/caddy/Caddyfile:ro" caddy:2-alpine)
+# The image is the project's own build (caddy/Dockerfile beside the
+# Caddyfile), not stock Caddy: stock Caddy has no rate_limit directive, so it
+# would reject this file — and accepting it is what production depends on.
+PROJECT_DIR="$(cd "$(dirname "$CADDYFILE")" && pwd)"
+ABS="$PROJECT_DIR/$(basename "$CADDYFILE")"
+# shellcheck source=lib/caddy_image.sh
+source "$(dirname "$0")/lib/caddy_image.sh"
+IMAGE="$(caddy_image_build "$PROJECT_DIR")" || fail "no Caddy image for $PROJECT_DIR"
+RUN=(docker run --rm -v "$ABS:/etc/caddy/Caddyfile:ro" "$IMAGE")
+
+"${RUN[@]}" caddy list-modules | grep -qx 'http.handlers.rate_limit' \
+  || fail "$IMAGE was built without the rate-limit module"
 
 # Caddy logs "input is not formatted" on every boot otherwise. The warning is
 # easy to reintroduce, because it is Jinja whitespace that decides it.
