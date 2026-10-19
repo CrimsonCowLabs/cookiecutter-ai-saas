@@ -9,6 +9,7 @@ import logging
 from bullmq import Worker
 import redis.asyncio as aioredis
 
+from job_input import InvalidJobInput, check_job_input
 from runner import run_job, JobCancelled
 from tracing import configure_tracing
 
@@ -77,6 +78,16 @@ async def process_job(job, token):
     input_data = job.data.get("input", {})
 
     logger.info("Starting job %s (type=%s, attempt %d)", job_id, job_type, job.attemptsMade + 1)
+
+    # Returns rather than raising: BullMQ would retry a job that raises, and
+    # this input will never pass.
+    try:
+        check_job_input(job_type, input_data)
+    except InvalidJobInput as e:
+        logger.warning("Job %s refused: %s", job_id, e)
+        await publish_progress(job_id, "failed", 0, "Job input was refused")
+        return
+
     failure_notified = False
 
     async def is_cancelled() -> bool:

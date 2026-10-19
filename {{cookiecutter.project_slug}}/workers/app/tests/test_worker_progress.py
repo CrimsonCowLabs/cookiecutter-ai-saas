@@ -9,7 +9,7 @@ import worker
 
 
 class FakeJob:
-    data = {"jobId": "j1", "type": "default", "userId": "u", "input": {}}
+    data = {"jobId": "j1", "type": "url-report", "userId": "u", "input": {}}
     attemptsMade = 0
 
     def __init__(self):

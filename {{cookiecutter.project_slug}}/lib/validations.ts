@@ -29,9 +29,10 @@ export const urlReportInputSchema = z.object({
 export type UrlReportInput = z.infer<typeof urlReportInputSchema>;
 
 /**
- * Input schemas enforced server-side by `submitJob`, keyed by job type. Add an
- * entry here when you add a job type — types without one are dispatched with
- * their input unvalidated.
+ * Input schemas enforced server-side by `createJob` (lib/job-submission.ts),
+ * keyed by job type. Add an entry here when you add a job type: a type
+ * without one is refused, and only input that passes its schema is queued.
+ * The worker repeats the limits as a backstop (workers/app/job_input.py).
  */
 export const jobInputSchemas = {
   "url-report": urlReportInputSchema,
