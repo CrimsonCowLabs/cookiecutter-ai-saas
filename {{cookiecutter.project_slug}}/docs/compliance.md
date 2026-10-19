@@ -73,6 +73,13 @@ It checks that:
 - no account is created without a passed age check, through any sign-in
   method the app offers, and no date of birth is kept anywhere (see
   [Children's privacy](#childrens-privacy-coppa));
+{%- if cookiecutter.auth_providers != "google_only" %}
+- a Microsoft sign-in carrying an existing user's email is refused, not
+  signed in as them, unless the ID token proves the email (Microsoft
+  verified its domain); a verified one is linked to that user, a new
+  Microsoft user still signs up through the age check, and a returning one
+  signs in (see "Signing in with Microsoft" in the README);
+{%- endif %}
 {%- if cookiecutter.include_stripe == "yes" %}
 - every subscribe and upgrade button has the plan's renewal terms beside it,
   and every Stripe Checkout the app opens repeats them and requires the
@@ -109,12 +116,12 @@ It checks that:
   no request to another server;
 - the copyright page shows every detail of the configured DMCA agent, and
   the Terms of Service link to it (see [Copyright](#copyright-dmca));
-- the home page, the sign-in page, the sign-up page in each of its states
-  (age screen, with an error, passed, turned away), the Privacy Policy and
-  Terms, every legal page, the dashboard and the account settings pass an
-  automated WCAG 2.2 AA audit in both the light and the dark theme, open
-  with a working "Skip to content" link, and show a clearly visible focus
-  outline on everything the keyboard can reach{% if cookiecutter.analytics == "posthog" %}, all with the analytics
+- the home page, the sign-in page (also with an error), the sign-up page
+  in each of its states (age screen, with an error, passed, turned away),
+  the Privacy Policy and Terms, every legal page, the dashboard and the
+  account settings pass an automated WCAG 2.2 AA audit in both the light
+  and the dark theme, open with a working "Skip to content" link, and show
+  a clearly visible focus outline on everything the keyboard can reach{% if cookiecutter.analytics == "posthog" %}, all with the analytics
   consent banner showing; and the banner can be answered with Enter or Space
   alone, and Tab moves on past it{% endif %}.
 
@@ -156,7 +163,9 @@ by Google, Microsoft or magic link alike.
   valid "passed" cookie and no "turned away" one. A magic link is refused
   before it is even sent. The adapter's `createUser` checks again and refuses
   to insert a user without a passed check. Sign-ins to existing accounts are
-  never blocked.
+  never blocked by it{% if cookiecutter.auth_providers != "google_only" %} (a Microsoft sign-in that would join one by
+  an unverified email is refused for another reason: see "Signing in with
+  Microsoft" in the README){% endif %}.
 {% if cookiecutter.include_stripe == "yes" -%}
 - **Payments don't make accounts.** The Stripe webhook fulfils a checkout
   only for an existing account, found by the app's reference id or, for a

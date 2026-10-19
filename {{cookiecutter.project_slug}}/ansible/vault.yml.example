@@ -55,7 +55,8 @@ vault_google_secret: ""
 # cc:begin microsoft
 vault_microsoft_entra_id_id: ""
 vault_microsoft_entra_id_secret: ""
-# Leave empty for the multi-tenant "common" endpoint.
+# Leave empty for the multi-tenant "common" endpoint, or set your tenant's
+# GUID (Directory (tenant) ID); see "Signing in with Microsoft" in README.md.
 vault_microsoft_entra_id_tenant_id: ""
 # cc:end microsoft
 

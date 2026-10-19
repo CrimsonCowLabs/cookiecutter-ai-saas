@@ -37,11 +37,23 @@ const oauthProviders = [
     clientSecret: process.env.MICROSOFT_ENTRA_ID_SECRET!,
     // AUTH_MICROSOFT_ENTRA_ID_ISSUER is unset in production; the compliance
     // suite sets it, as AUTH_GOOGLE_ISSUER above.
+    // MICROSOFT_ENTRA_ID_TENANT_ID blank means "common": anyone with a work,
+    // school or personal Microsoft account, from any tenant, can sign in.
     issuer:
       process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER ||
       (process.env.MICROSOFT_ENTRA_ID_TENANT_ID
         ? `https://login.microsoftonline.com/${process.env.MICROSOFT_ENTRA_ID_TENANT_ID}/v2.0`
         : "https://login.microsoftonline.com/common/v2.0"),
+    // NOTE: unlike Google's, Entra's email claim is whatever a tenant's admin
+    // typed in, and nothing verifies it. Linking on it alone would let anyone
+    // with a tenant of their own sign in as any existing user ("nOAuth"), so
+    // the signIn callback in lib/auth.ts allows it only when the ID token
+    // proves the email (lib/account-linking.ts): Microsoft verified its
+    // domain (the xms_edov optional claim, which you add to the app
+    // registration's ID token), or the sign-in is by a member (not a guest)
+    // of the one tenant MICROSOFT_ENTRA_ID_TENANT_ID names. Otherwise an existing user signs in
+    // the way they first did. Set this to false to never link Microsoft
+    // sign-ins by email at all.
     allowDangerousEmailAccountLinking: true,
   }),
   // cc:end microsoft

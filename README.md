@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **227 files** with
+Every generated project is a complete distributed system — **230 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -426,7 +426,7 @@ After generation, configure these in `.env.local`:
 | `GOOGLE_SECRET` | Same as above |
 | `MICROSOFT_ENTRA_ID_ID` | [Azure Portal](https://portal.azure.com) → App Registrations |
 | `MICROSOFT_ENTRA_ID_SECRET` | Same as above |
-| `MICROSOFT_ENTRA_ID_TENANT_ID` | Leave blank for multi-tenant, or set specific tenant |
+| `MICROSOFT_ENTRA_ID_TENANT_ID` | Blank for multi-tenant (`common`: any Microsoft account), or your tenant's GUID (Directory (tenant) ID, not a domain) for only its users. A Microsoft sign-in links to an existing account by email only if Microsoft verified the email's domain (the `xms_edov` optional claim) or it is by a member, not a guest, of this tenant; see "Signing in with Microsoft" in the generated README |
 | `RESEND_API_KEY` | [resend.com](https://resend.com) → API Keys |
 
 ### Payments (if Stripe enabled)

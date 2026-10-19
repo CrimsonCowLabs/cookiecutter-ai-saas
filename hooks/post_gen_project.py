@@ -403,12 +403,28 @@ def handle_marketing_extras():
         remove_file("components/ContactForm.tsx")
 
 
+def handle_auth_providers():
+    """Remove Microsoft's account-linking rule and its test if Microsoft
+    sign-in is not included. The call in lib/auth.ts and the age-gate test's
+    Microsoft claim go with the "microsoft" markers."""
+    if "microsoft" not in oauth_providers():
+        print("Removing Microsoft sign-in files...")
+        remove_file("lib/account-linking.ts")
+        remove_file("tests/compliance/account-linking.test.mjs")
+
+
 # Which marker names each auth_providers choice keeps.
 AUTH_PROVIDER_MARKERS = {
     "google_only": {"google"},
     "microsoft_only": {"microsoft"},
     "google_microsoft": {"google", "microsoft"},
 }
+
+
+def oauth_providers():
+    """The OAuth providers (marker names) the auth_providers answer keeps."""
+    return AUTH_PROVIDER_MARKERS.get(AUTH_PROVIDERS, {"google", "microsoft"})
+
 
 # Files that may carry cc: markers. .j2 and ansible/vault.yml.example are the
 # production env file and the secrets it is rendered from: which keys either
@@ -424,7 +440,7 @@ def marker_decisions():
     `cc:begin <name>` .. `cc:end <name>` regions. Those files skip Jinja
     rendering (see _copy_without_render), so the choice is applied here.
     """
-    oauth = AUTH_PROVIDER_MARKERS.get(AUTH_PROVIDERS, {"google", "microsoft"})
+    oauth = oauth_providers()
     google = "google" in oauth
     microsoft = "microsoft" in oauth
     extras = INCLUDE_MARKETING_EXTRAS == "yes"
@@ -527,6 +543,7 @@ def main():
     handle_magic_link()
     handle_resend()
     handle_analytics()
+    handle_auth_providers()
     apply_markers()
     make_scripts_executable()
 

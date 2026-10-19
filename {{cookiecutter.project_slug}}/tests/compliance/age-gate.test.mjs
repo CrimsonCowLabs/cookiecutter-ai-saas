@@ -6,9 +6,8 @@
 // Every sign-in method the app offers is read off its own /api/auth/providers,
 // so a provider added later is covered without editing this file. OAuth
 // sign-ins go through a fake identity provider (./fake-oidc.mjs); magic-link
-// sign-ins use a sign-in link minted straight into the database, the way
-// tests/auth/support.mjs mints session cookies — nothing here needs a real
-// Google account or a real inbox.
+// sign-ins use a sign-in link minted straight into the database (see
+// ./sign-in.mjs) — nothing here needs a real Google account or a real inbox.
 //
 // The minimum age is read out of config.ts, so the boundary tests below follow
 // it: CI also runs this file with the age raised (see
@@ -24,179 +23,42 @@ import fs from "node:fs";
 import { config, connectDb, insertTestUser, deleteTestUser } from "../auth/support.mjs";
 import { startFakeOidc } from "./fake-oidc.mjs";
 import { minimumAge } from "./support.mjs";
+import {
+  visitor,
+  location,
+  hasSession,
+  bornAgo,
+  ageScreen,
+  answerAgeScreen,
+  passedVisitor,
+  signingIn,
+} from "./sign-in.mjs";
 
 const MINIMUM_AGE = minimumAge();
 
 let idp;
 let db;
 let providers;
-// Every email a test signs in with, so after() can delete whatever it created.
-const emails = new Set();
+// emails: every address a test signs in with, so after() can delete whatever
+// it created.
+let emails, signInThrough, requestMagicLink;
 
 before(async () => {
   idp = await startFakeOidc();
   db = await connectDb();
+  ({ emails, signInThrough, requestMagicLink } = signingIn({ idp, db }));
   providers = Object.values(await (await fetch(new URL("/api/auth/providers", config.baseUrl))).json());
   assert.ok(providers.length > 0, "the app should offer at least one way to sign in");
 });
 
 after(async () => {
-  if (db && emails.size) await db.query(`delete from users where email = any($1)`, [[...emails]]);
+  if (db && emails?.size) await db.query(`delete from users where email = any($1)`, [[...emails]]);
   await db?.end();
   await idp?.close();
 });
 
-// ─── A browser, minus the browser ────────────────────────────────────────
-
-/** A cookie jar and fetch() that sends and keeps cookies the way a browser does. */
-function visitor() {
-  const jar = new Map();
-  const absorb = (res) => {
-    for (const line of res.headers.getSetCookie()) {
-      const [pair, ...attrs] = line.split(";");
-      const name = pair.slice(0, pair.indexOf("=")).trim();
-      const value = pair.slice(pair.indexOf("=") + 1).trim();
-      const expired =
-        value === "" ||
-        attrs.some((a) => /^\s*max-age=(0|-)/i.test(a)) ||
-        attrs.some((a) => /^\s*expires=/i.test(a) && new Date(a.split("=")[1]) < new Date());
-      if (expired) jar.delete(name);
-      else jar.set(name, value);
-    }
-  };
-  return {
-    jar,
-    setCookies: [],
-    async fetch(path, init = {}) {
-      const res = await fetch(new URL(path, config.baseUrl), {
-        redirect: "manual",
-        ...init,
-        headers: { ...init.headers, cookie: [...jar].map(([k, v]) => `${k}=${v}`).join("; ") },
-      });
-      this.setCookies.push(...res.headers.getSetCookie());
-      absorb(res);
-      return res;
-    },
-  };
-}
-
-const location = (res) => {
-  assert.ok(res.status >= 300 && res.status < 400, `expected a redirect, got ${res.status} for ${res.url}`);
-  return new URL(res.headers.get("location"), config.baseUrl);
-};
-
-const hasSession = (v) => [...v.jar.keys()].some((k) => k.endsWith("authjs.session-token"));
-
-// ─── The age screen ──────────────────────────────────────────────────────
-
-/**
- * The date `years` years and `days` days before today (UTC), as YYYY-MM-DD.
- * On 29 February, a year with no 29th gives the 28th (that birthday has
- * passed), not 1 March.
- */
-function bornAgo(years, days = 0) {
-  const now = new Date();
-  const year = now.getUTCFullYear() - years;
-  const lastDay = new Date(Date.UTC(year, now.getUTCMonth() + 1, 0)).getUTCDate();
-  const d = new Date(Date.UTC(year, now.getUTCMonth(), Math.min(now.getUTCDate(), lastDay) - days));
-  return d.toISOString().slice(0, 10);
-}
-
-/** The age screen's form on `html`: where it posts, its hidden fields, and its date input. */
-function ageScreen(html) {
-  const form = html.match(/<form\b[^>]*>[\s\S]*?<\/form>/g)?.find((f) => /type="date"/.test(f));
-  if (!form) return null;
-  const attr = (tag, name) => tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1];
-  const inputs = form.match(/<input\b[^>]*>/g) ?? [];
-  const dateInput = inputs.find((i) => attr(i, "type") === "date");
-  return {
-    form,
-    method: attr(form.match(/<form\b[^>]*>/)[0], "method"),
-    action: attr(form.match(/<form\b[^>]*>/)[0], "action"),
-    hidden: Object.fromEntries(
-      inputs.filter((i) => attr(i, "type") === "hidden").map((i) => [attr(i, "name"), attr(i, "value") ?? ""])
-    ),
-    dateInput,
-    dateName: attr(dateInput, "name"),
-    dateId: attr(dateInput, "id"),
-  };
-}
-
-/** Load the sign-up page as `v` and answer its age screen with `dateOfBirth`. */
-async function answerAgeScreen(v, dateOfBirth) {
-  const page = await v.fetch("/sign-up");
-  assert.equal(page.status, 200);
-  const screen = ageScreen(await page.text());
-  assert.ok(screen, "/sign-up should show the age screen");
-  return v.fetch(screen.action, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ ...screen.hidden, [screen.dateName]: dateOfBirth }),
-  });
-}
-
-/** A visitor who has passed the age screen. */
-async function passedVisitor() {
-  const v = visitor();
-  location(await answerAgeScreen(v, bornAgo(MINIMUM_AGE + 20)));
-  return v;
-}
-
 const signUpPage = async (v) => (await v.fetch("/sign-up")).text();
 const offersSignUp = (html) => /Send magic link|Continue with (Google|Microsoft)/.test(html);
-
-// ─── Signing in, per provider ────────────────────────────────────────────
-
-/**
- * Sign in as `email` through `provider`, the way a browser would from the
- * sign-in page: OAuth via the fake identity provider, magic link via a link
- * minted into verification_tokens and then opened. Returns where the app's
- * callback sent the visitor.
- */
-async function signInThrough(v, provider, email) {
-  emails.add(email);
-  if (provider.type === "email") {
-    const token = crypto.randomBytes(32).toString("hex");
-    await db.query(
-      `insert into verification_tokens (identifier, token, expires) values ($1, $2, now() + interval '1 hour')`,
-      [email, crypto.createHash("sha256").update(`${token}${config.nextAuthSecret}`).digest("hex")]
-    );
-    return location(
-      await v.fetch(
-        `/api/auth/callback/${provider.id}?${new URLSearchParams({
-          callbackUrl: new URL("/dashboard", config.baseUrl).href,
-          token,
-          email,
-        })}`
-      )
-    );
-  }
-
-  const { csrfToken } = await (await v.fetch("/api/auth/csrf")).json();
-  const start = await v.fetch(`/api/auth/signin/${provider.id}`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ csrfToken, callbackUrl: new URL("/dashboard", config.baseUrl).href }),
-  });
-  const authorize = location(start);
-  assert.notEqual(authorize.host, new URL(config.baseUrl).host, `${provider.id} should hand off to its identity provider`);
-  const callback = new URL(authorize.searchParams.get("redirect_uri"));
-  callback.search = idp.issue(authorize, { sub: `sub-${crypto.randomUUID()}`, email }).toString();
-  return location(await v.fetch(callback.pathname + callback.search));
-}
-
-/** Ask for a magic link as `email`. Returns where the app sent the visitor. */
-async function requestMagicLink(v, provider, email) {
-  emails.add(email);
-  const { csrfToken } = await (await v.fetch("/api/auth/csrf")).json();
-  return location(
-    await v.fetch(`/api/auth/signin/${provider.id}`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ csrfToken, email, callbackUrl: new URL("/dashboard", config.baseUrl).href }),
-    })
-  );
-}
 
 const newEmail = () => `age-gate-test-${crypto.randomUUID()}@example.invalid`;
 // age_check_passed_at is a timestamp without a time zone holding UTC (like
@@ -343,7 +205,15 @@ test("an existing user signs in through every method without seeing the age scre
     const user = await insertTestUser(db);
     try {
       const v = visitor();
-      const where = await signInThrough(v, provider, user.email);
+      const where = await signInThrough(v, provider, user.email, {
+        // cc:begin microsoft
+        // Microsoft vouching for the email (xms_edov), without which a
+        // Microsoft sign-in is never linked to an existing account by its
+        // email (see lib/account-linking.ts and ./account-linking.test.mjs).
+        // Other providers ignore it.
+        claims: { xms_edov: true },
+        // cc:end microsoft
+      });
       assert.equal(where.pathname, "/dashboard", `${provider.id}: an existing user should go straight to the dashboard`);
       assert.ok(hasSession(v), `${provider.id}: and be signed in`);
       assert.equal(
