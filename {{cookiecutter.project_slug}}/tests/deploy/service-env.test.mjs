@@ -27,7 +27,7 @@
 // DYNAMIC_READS says how to resolve it — which is what keeps a new dynamic
 // read from making the check silently blind to it.
 //
-// No server, no database, no build: `npm run test:service-env`. It reads the
+// No server, no database, no build: `npm run test:deploy`. It reads the
 // generated tree as it is, so it holds whichever flags it was generated with.
 import { test } from "node:test";
 import assert from "node:assert/strict";

@@ -1,0 +1,29 @@
+# What `docker build` never sends from workers/ — the build context of the
+# Python worker's image (workers/Dockerfile.worker), which copies app/ whole.
+# The worker runs model tool calls on user-supplied URLs, so a secret left in
+# its image is the one most worth keeping out. Its settings arrive as the
+# container's environment at run time; nothing here is read at build time.
+# scripts/check_image_contents.sh in the template repository plants each of
+# these and fails if any reaches an image.
+
+# Secrets. Every env file at any depth, .env.example included.
+**/.env*
+**/.vault-pass
+**/*.pem
+**/*.key
+
+# Dependencies and environments. Poetry installs the worker's from
+# poetry.lock; db-writer, also under here, has its own image and context.
+**/node_modules
+**/.venv
+**/venv
+
+# Python and test artefacts.
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/coverage
+**/.coverage
+**/*.log

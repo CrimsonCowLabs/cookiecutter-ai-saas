@@ -262,6 +262,21 @@ byte-identical images under a new name — which is what lets a re-run transfer
 nothing and report no changes at all. `-e deploy_release=v1.4.0` names one
 yourself.
 
+The images the host is missing cross the wire as one gzipped `docker save`
+tarball — the whole release, every image's code and whatever a build step left
+in a layer. It is written only inside a directory `ansible.builtin.tempfile`
+makes for it, `0700` and unguessably named, under the control machine's temp
+directory (`$TMPDIR`, else `/tmp`), copied into another such directory on the
+host, and loaded from there; the playbook refuses to go on unless both really
+are `0700`. Both directories are removed in the block's `always:`, so a save,
+copy or load that fails still leaves no copy of the release behind on either
+machine — and the deploy still stops there, with nothing switched. A deploy
+whose images are all on the host already makes neither directory.
+`tests/deploy/image-tarball.test.mjs` (`npm run test:deploy`) holds the
+playbook to this shape, and `scripts/check_deploy.sh` checks that nothing is
+left on either machine after a deploy that shipped images and after one whose
+`docker load` failed.
+
 Two things this does not claim. The switch is `docker compose up -d`, which
 stops a container before starting its replacement, so a release that cannot
 start costs the seconds between the recreate and the rollback — the guarantee
@@ -347,7 +362,7 @@ By vault secret:
 
 A variable added to the code goes into the template of the service that reads
 it, and nowhere else. `tests/deploy/service-env.test.mjs` in the generated
-project (`npm run test:service-env`, run by CI for every flag combination)
+project (`npm run test:deploy`, run by CI for every flag combination)
 fails when a service's file sets a name its code does not read — the worker's
 code is `workers/app`, db-writer's `workers/db-writer`, ops's `lib/db`, the
 migrator's `drizzle.config.ts` and the app's everything Next.js builds — when a

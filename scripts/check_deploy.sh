@@ -20,6 +20,12 @@
 #                                  environment has no Stripe, NextAuth, OAuth or
 #                                  database secret in it, and no app container
 #                                  has the superuser's or the owner's password
+#   * the image tarball is      — the images cross in a 0700 directory on
+#     private and cleaned up       each machine (the playbook's own check of
+#                                  that ran), and no tarball or directory is
+#                                  left on the control machine or the host
+#                                  after a deploy that shipped images, nor
+#                                  after one whose `docker load` failed
 #   * the DNS pre-flight aborts  — against a name resolving elsewhere, and
 #                                  proceeds against one resolving here
 #   * migrations run             — asserted against the database afterwards
@@ -179,6 +185,35 @@ deploy() {
     -e "deploy_platform=$PLATFORM" "$@"
 }
 
+# What one task reported, read out of a deploy's output: ok, changed, skipping
+# or fatal, from the first result line under its TASK header. Read up to the
+# next header rather than a fixed few lines, because a failure is printed with
+# an [ERROR] summary and an excerpt of the playbook before its `fatal:` line.
+task_result() {
+  awk -v header="TASK [$2]" '
+    index($0, header) == 1 { inside = 1; next }
+    inside && /^(TASK|PLAY|RUNNING HANDLER) \[/ { exit }
+    inside && match($0, /^(ok|changed|skipping|fatal):/) { print substr($0, 1, RLENGTH - 1); exit }
+  ' "$1"
+}
+
+# The image tarball, and the private directory deploy.yml makes for it, must be
+# gone from both machines once a deploy is over. Both directories are named
+# <slug>-images.*; on the control machine they are under Python's temp
+# directory, which is $TMPDIR when that is set. Only entries made after this
+# check started count there, so a tarball some earlier run of an older playbook
+# left in /tmp is not blamed on this one. The host is new, so anything at all
+# counts on it — /var/tmp included, so moving the tarball there is caught too.
+TARBALL_MARK="$TH_WORK/tarball-mark"
+touch "$TARBALL_MARK"
+assert_no_tarball_left() {
+  local local_left host_left
+  local_left="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "$SLUG-images*" -newer "$TARBALL_MARK" 2>/dev/null || true)"
+  [[ -z $local_left ]] || fail "after $1 the control machine still has the image tarball's $local_left"
+  host_left="$(th_exec "find /tmp /var/tmp -maxdepth 1 -name '$SLUG-images*'" | tr -d '\r')"
+  [[ -z $host_left ]] || fail "after $1 the host still has the image tarball's $host_left"
+}
+
 # ── Criterion: the vault has to be encrypted ─────────────────────────────────
 # Filled in from the example the template ships, so that the example being
 # wrong is a failure here rather than a surprise for whoever copies it.
@@ -335,6 +370,22 @@ for secret in "${DB_SECRETS[@]}" "$AUTH_SECRET"; do
     fail "the deploy printed a secret (a no_log is missing)"
   fi
 done
+
+# ── Criterion: the image tarball is private, and cleaned up ──────────────────
+# The first deploy ships every image, so the transfer block ran: its private
+# directories were made, the playbook's own check that both are 0700 passed —
+# it fails the deploy otherwise, so its having run is the assertion — and the
+# always: removed them. A block that never ran would make the leftover check
+# below true of nothing, so that it ran is asserted first.
+for task in "Make a private directory for the tarball on the control machine" \
+            "Make a private directory for the tarball on the host"; do
+  [[ "$(task_result "$TH_WORK/deploy1.log" "$task")" == changed ]] \
+    || fail "the first deploy shipped images without running '$task'"
+done
+[[ "$(task_result "$TH_WORK/deploy1.log" "Refuse to write the release anywhere another account can read it")" == ok ]] \
+  || fail "the first deploy never checked that the tarball's directories are 0700"
+assert_no_tarball_left "a deploy that shipped every image"
+pass "the images crossed in a 0700 directory on each machine, and neither directory nor the tarball is left on either"
 
 # ── Criterion: the env files, on the host and nowhere else ───────────────────
 # One for compose to interpolate, one per service, and the migrator's. Every one
@@ -734,6 +785,54 @@ if ! grep -qE 'changed=0 +unreachable=0 +failed=0' <<<"$recap"; then
   fail "re-deploying unchanged code changed something: $recap"
 fi
 pass "re-deploying unchanged code transfers nothing and changes nothing ($recap)"
+
+# ── Criterion: a failed transfer leaves no tarball behind either ─────────────
+# The case the cleanup exists for: the tarball has been saved and copied, and
+# then `docker load` fails. The host is made to lack one image — ops, which
+# nothing keeps running — so the deploy has something to ship, and `docker`
+# on the host is shadowed, for the deploy account's PATH, by a wrapper that
+# refuses `load` and passes everything else through. The deploy has to fail at
+# the load, before anything is switched, and still leave nothing behind.
+echo "==> A deploy whose docker load fails must still clean up"
+REAL_DOCKER="$(th_exec 'command -v docker' | tr -d '\r')"
+[[ $REAL_DOCKER == /usr/bin/docker ]] \
+  || fail "docker on the host is $REAL_DOCKER; the wrapper below shadows it from /usr/local/bin and needs it elsewhere"
+th_exec "docker images --no-trunc -q $SLUG-ops | sort -u | xargs -r docker image rm -f" >/dev/null
+[[ -z "$(th_exec "docker images -q $SLUG-ops" | tr -d '\r')" ]] || fail "could not take the ops image off the host"
+th_exec 'cat > /usr/local/bin/docker && chmod 755 /usr/local/bin/docker' <<'SH'
+#!/bin/sh
+if [ "$1" = load ]; then
+  echo "docker load refused by check_deploy.sh" >&2
+  exit 1
+fi
+exec /usr/bin/docker "$@"
+SH
+if deploy -e site_address=https://localhost > "$TH_WORK/deploy-loadfail.log" 2>&1; then
+  th_exec 'rm -f /usr/local/bin/docker'
+  fail "a deploy whose docker load was refused succeeded"
+fi
+th_exec 'rm -f /usr/local/bin/docker'
+[[ "$(task_result "$TH_WORK/deploy-loadfail.log" "Load the images on the host")" == fatal ]] \
+  || fail "the deploy did not fail at the load, so this checks nothing: $(tail -20 "$TH_WORK/deploy-loadfail.log")"
+grep -qF "docker load refused by check_deploy.sh" "$TH_WORK/deploy-loadfail.log" \
+  || fail "the load failed, but not because of the wrapper: $(tail -20 "$TH_WORK/deploy-loadfail.log")"
+for task in "Remove the tarball's directory from the host" \
+            "Remove the tarball's directory from the control machine"; do
+  [[ "$(task_result "$TH_WORK/deploy-loadfail.log" "$task")" == changed ]] \
+    || fail "after the failed load, '$task' did not run"
+done
+assert_no_tarball_left "a deploy whose docker load failed"
+serving || fail "the deploy that failed at the load stopped the stack serving"
+pass "a deploy whose load failed stopped before switching anything and left no tarball on either machine"
+
+# Put ops back: the same release, so the host keeps recording it, with ops
+# the one image shipped.
+deploy -e site_address=https://localhost > "$TH_WORK/deploy-reload.log" 2>&1 \
+  || fail "re-shipping the ops image failed: $(tail -30 "$TH_WORK/deploy-reload.log")"
+[[ -n "$(th_exec "docker images -q $SLUG-ops:$GOOD_RELEASE" | tr -d '\r')" ]] \
+  || fail "the deploy after the failed load did not put $SLUG-ops:$GOOD_RELEASE back"
+assert_no_tarball_left "re-shipping the ops image"
+pass "the next deploy shipped the missing image and left no tarball behind either"
 
 # ── Criterion: clients that keep probing are banned at the firewall ──────────
 # provision.yml installs two fail2ban jails reading Caddy's access log on the

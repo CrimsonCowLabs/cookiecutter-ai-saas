@@ -1,0 +1,8 @@
+# What `docker build` never sends from caddy/ — the build context of the
+# proxy's image. caddy/Dockerfile copies nothing from its context (Caddy is
+# compiled from source by xcaddy, and the Caddyfile is mounted at run time), so
+# the context is only ever the Dockerfile. This keeps it that way: anything
+# dropped in here later, a secret or a key included, is never sent to the
+# Docker daemon, let alone into a layer.
+*
+!Dockerfile
