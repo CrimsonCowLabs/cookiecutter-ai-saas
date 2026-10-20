@@ -11,8 +11,8 @@
 # drift apart.
 deploy_user: __DEPLOY_USER__
 
-# Where the stack lives on the host: the compose file, the Caddyfile and
-# .env-production, written by deploy.yml.
+# Where the stack lives on the host: the compose file, the Caddyfile and the
+# env files (.env-production and one per service), written by deploy.yml.
 app_dir: /app/__PROJECT_SLUG__
 
 # Public keys to authorize for the deploy user. Left empty, the keys root is
@@ -110,7 +110,8 @@ postgres_db: "{{ project_slug | replace('-', '_') }}"
 #     the stack connects as it any more.
 #   * postgres_owner_user owns the schema. The migrations run as it, so every
 #     table they create belongs to it, and it is not a superuser either.
-#   * postgres_app_user is what app, worker and db-writer connect as: it reads
+#   * postgres_app_user is what app, db-writer and ops connect as (the worker
+#     never connects to the database, and is not given its URL): it reads
 #     and writes rows and can do nothing else — no DDL, no roles, no COPY to or
 #     from a program or a file.
 #
@@ -172,7 +173,7 @@ nextauth_url: "https://__DOMAIN_NAME__"
 #
 # migrator joins the set whenever anything ships, because the migrator image on
 # the host is otherwise the previous release's and would apply the previous
-# release's migrations. `-e deploy_targets=none` re-renders .env-production and
+# release's migrations. `-e deploy_targets=none` re-renders the env files and
 # restarts, shipping no image at all.
 #
 # A subset ships only what it names and leaves every other image on the host as

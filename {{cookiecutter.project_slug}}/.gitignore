@@ -16,6 +16,11 @@ dist/
 .env.local
 .env.docker.local
 .env-production
+.env-app
+.env-worker
+.env-db-writer
+.env-ops
+.env-migrations
 .env*.local
 
 # Debug

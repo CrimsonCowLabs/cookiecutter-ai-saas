@@ -660,7 +660,7 @@
 
     # ── Where deploys land ───────────────────────────────────────────────────
     - name: Create the application directory
-      # deploy.yml writes the compose file, the Caddyfile and .env-production
+      # deploy.yml writes the compose file, the Caddyfile and the env files
       # into this path as the deploy user, so it has to exist and be writable
       # before the first deploy rather than after it fails.
       ansible.builtin.file:

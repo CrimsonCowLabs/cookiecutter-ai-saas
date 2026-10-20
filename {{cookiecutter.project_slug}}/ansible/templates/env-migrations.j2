@@ -1,15 +1,17 @@
 # .env-migrations for __PROJECT_NAME__, rendered on the host by
 # ansible/deploy.yml. Edits here are overwritten by the next deploy.
 #
-# The schema owner's connection, and nothing else. deploy.yml hands this file to
-# the migrator's `docker run` after .env-production, so this DATABASE_URL wins
-# over the app role's there, and the migrations create every table as the
-# owner. It is a file of its own rather than a line in .env-production because
-# compose gives that file, whole, to app, worker and db-writer: the owner's
-# password in it would be in their environment too, and the point of the app
-# role is that what they hold cannot alter the schema.
+# The schema owner's connection, and nothing else: it is the migrator's whole
+# environment. deploy.yml hands this file, and only this file, to the
+# migrator's `docker run`, and drizzle.config.ts reads nothing but
+# DATABASE_URL, so the migrations create every table as the owner. It is a file
+# of its own rather than a line in any service's file because the point of the
+# app role is that what app, worker, db-writer and ops hold cannot alter the
+# schema: the owner's password in their environment would undo that.
+# tests/deploy/service-env.test.mjs holds this file to drizzle.config.ts like
+# the services' files to their code.
 #
-# The password is url-encoded the same way, and for the same reason, as
-# DATABASE_URL's in env-production.j2: Jinja's urlencode leaves `/` alone, and
-# a slash in the userinfo silently truncates the host.
+# The password is url-encoded the same way, and for the same reason, as the app
+# role's (app_database_url in deploy.yml): Jinja's urlencode leaves `/` alone,
+# and a slash in the userinfo silently truncates the host.
 DATABASE_URL=postgresql://{{ postgres_owner_user }}:{{ vault_postgres_owner_password | urlencode | replace('/', '%2F') }}@postgres:5432/{{ postgres_db }}

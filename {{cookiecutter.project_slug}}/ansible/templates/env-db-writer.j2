@@ -1,0 +1,11 @@
+# .env-db-writer for __PROJECT_NAME__, rendered on the host by
+# ansible/deploy.yml and handed to db-writer alone (docker-compose.prod.yml's
+# env_file). Edits here are overwritten by the next deploy.
+#
+# db-writer takes the worker's results off the queue and writes them to
+# Postgres, so it holds the two connections it reads
+# (workers/db-writer/worker.mjs) and nothing else. DATABASE_URL is the app
+# role's: rows, and no DDL, roles or COPY TO PROGRAM.
+# tests/deploy/service-env.test.mjs holds this file to that code.
+DATABASE_URL={{ app_database_url }}
+REDIS_URL={{ redis_url }}
