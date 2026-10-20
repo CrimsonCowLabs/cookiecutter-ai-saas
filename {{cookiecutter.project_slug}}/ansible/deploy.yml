@@ -19,9 +19,11 @@
 #      .env-production, then load the new images under their release tag. None
 #      of this touches what is serving: the running containers hold their own
 #      images and their own copy of the env file.
-#   4. Start Postgres and Redis if they are not already up, and run the
-#      migrations from this release's migrator image. A failure here stops the
-#      play with the previous release still serving.
+#   4. Start Postgres and Redis if they are not already up, bring the database
+#      roles up to date (the schema owner and the app's least-privilege role),
+#      and run the migrations from this release's migrator image, as the
+#      owner. A failure here stops the play with the previous release still
+#      serving.
 #   5. Switch: move each :latest tag to this release and bring the stack up.
 #      If the switched-over stack does not answer, put the previous release's
 #      images back, restart on them, and fail loudly.
@@ -37,10 +39,11 @@
 # Three things this deliberately does not claim:
 #
 #   * ansible-vault decrypts on the *control machine*, in memory, and the
-#     rendered .env-production lands on the host. So nothing is at rest in
-#     plaintext anywhere except that one file, mode 0600, owned by the deploy
-#     user. The control machine still sees the secrets while it runs; it has to,
-#     because it is the thing holding the password.
+#     rendered .env-production lands on the host — beside .env-migrations,
+#     which holds the schema owner's connection and nothing else. So nothing is
+#     at rest in plaintext anywhere except those two files, mode 0600, owned by
+#     the deploy user. The control machine still sees the secrets while it
+#     runs; it has to, because it is the thing holding the password.
 #   * The switch is `docker compose up -d`, which stops a container before it
 #     starts its replacement. A release that cannot start therefore costs the
 #     seconds between the recreate and the rollback, not zero. What is
@@ -295,6 +298,11 @@
     compose_project: "{{ project_slug }}"
     compose_file: docker-compose.prod.yml
     env_file: "{{ app_dir }}/.env-production"
+    # The schema owner's DATABASE_URL, for the migrator alone. A file of its own
+    # because compose hands .env-production, whole, to every service: the
+    # owner's password in there would be in the app's environment too, which is
+    # exactly what the app role exists to keep it out of.
+    migrations_env_file: "{{ app_dir }}/.env-migrations"
 
     # How each image is built. This mirrors the Dockerfiles rather than being a
     # decision anybody tunes per host, which is why it is here and not in
@@ -359,15 +367,41 @@
       # Names only, never values: this message is printed on failure. An empty
       # NEXTAUTH_SECRET makes every session cookie forgeable and an empty
       # database password is refused by Postgres, and both fail far from here.
+      #
+      # The owner's and the app role's passwords arrived after hosts were
+      # already deployed, so the vault of an existing project will not have
+      # them. That is the case the message is written for: it names exactly
+      # which ones are missing, and says that adding them and deploying is the
+      # whole upgrade.
       ansible.builtin.assert:
-        that:
-          - vault_nextauth_secret | default('') | length > 0
-          - vault_postgres_password | default('') | length > 0
+        that: missing_secrets | length == 0
         fail_msg: >-
-          vault_nextauth_secret and vault_postgres_password must both be set in
-          ansible/vault.yml (`ansible-vault edit ansible/vault.yml`). See
+          {{ missing_secrets | join(', ') }}
+          {{ 'is' if missing_secrets | length == 1 else 'are' }} not set in
+          ansible/vault.yml. Add {{ 'it' if missing_secrets | length == 1 else 'them' }}
+          with `ansible-vault edit ansible/vault.yml`; see
           ansible/vault.yml.example for what each one is.
+          {{ 'If this host was deployed before the app had a database role of
+          its own, those two passwords are all the upgrade needs: set each to a
+          new random value (openssl rand -hex 32) and deploy again. The deploy
+          creates both roles, hands the existing tables to the owner and
+          switches the app over; nothing has to be done inside the database.'
+          if missing_secrets | intersect(['vault_postgres_owner_password',
+                                         'vault_postgres_app_password']) | length > 0
+          else '' }}
         quiet: true
+      vars:
+        required_secrets:
+          - vault_nextauth_secret
+          - vault_postgres_password
+          - vault_postgres_owner_password
+          - vault_postgres_app_password
+        # Each name paired with its value, and only the names of the empty ones
+        # kept — so no value outlives this expression.
+        missing_secrets: >-
+          {{ required_secrets
+             | zip(query('ansible.builtin.vars', *required_secrets, default=''))
+             | rejectattr('1') | map(attribute='0') | list }}
 
     - name: Look for the directory deploys land in
       ansible.builtin.stat:
@@ -525,6 +559,23 @@
       ansible.builtin.template:
         src: env-production.j2
         dest: "{{ env_file }}"
+        owner: "{{ deploy_user }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Render .env-migrations on the host
+      # The schema owner's DATABASE_URL, which the migrator reads after
+      # .env-production and nothing else reads at all. Same mode, owner and
+      # no_log as the file above, for the same reasons.
+      #
+      # Rendered on every deploy, migrations or not, rather than created for the
+      # migrator and removed after it: a file that came and went would make an
+      # unchanged deploy report a change every time. The owner's password is
+      # no worse kept here than the superuser's is in .env-production (compose
+      # starts Postgres with it): same host, same mode, same one account.
+      ansible.builtin.template:
+        src: env-migrations.j2
+        dest: "{{ migrations_env_file }}"
         owner: "{{ deploy_user }}"
         mode: "0600"
       no_log: true
@@ -693,10 +744,95 @@
         wait: true
         wait_timeout: 180
 
+    - name: Create and update the database roles
+      # The schema owner and the app's least-privilege role, created if they are
+      # missing and brought up to date if they are not: their passwords set to
+      # the vault's, the database and everything in it owned by the owner, the
+      # app role granted what it needs and nothing else — default privileges
+      # included, so a table a later migration creates is usable without
+      # another grant. ansible/files/db-roles.sql is the script; it says what it
+      # does and why each step is there.
+      #
+      # It runs as the superuser, inside the database container, over the
+      # container's own socket. The script goes in on stdin and the four values
+      # it needs go in as environment variables, which `exec -e NAME` (a name
+      # with no value) copies from this task's environment into psql's — so no
+      # password is on any command line, here or in the container, where `ps`
+      # would show it. psql reads them with \getenv.
+      #
+      # Every deploy runs it, not only one that ships images, and before the
+      # migrations. Three cases need exactly that:
+      #
+      #   * A host deployed before these roles existed. Its tables belong to the
+      #     superuser, which the migrations no longer connect as; this hands them
+      #     to the owner first, so the very next migration can alter them. That
+      #     is the whole upgrade, and it happens on whatever deploy comes next —
+      #     `-e deploy_targets=none` included.
+      #   * `deploy_targets=none`, which re-renders .env-production and restarts:
+      #     the DATABASE_URL it renders names the app role, so the role has to
+      #     exist, with the vault's password, before anything restarts on it.
+      #   * A password changed in the vault. The roles take the new one here, and
+      #     the containers recreated below come up with it in their env file.
+      #
+      # It is safe to run every time because it is idempotent: it creates only
+      # what is missing, and re-granting, re-setting a password or re-assigning
+      # an owner to the role that already has it changes nothing. What it
+      # revokes it re-grants in the same transaction, so the app role's net
+      # privileges never shrink beneath the running release — it can run while
+      # the previous release is still serving.
+      #
+      # changed_when: false because psql cannot say whether a statement changed
+      # anything, and a deploy that reported a change every time would make "did
+      # anything change?" useless; failing still fails the task, and the deploy
+      # stops before anything is switched. no_log because a failing task's
+      # result echoes its environment and its stdin.
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -p
+          - "{{ compose_project }}"
+          - -f
+          - "{{ compose_file }}"
+          - --env-file
+          - "{{ env_file }}"
+          - exec
+          - -T
+          - -e
+          - DB_OWNER_ROLE
+          - -e
+          - DB_OWNER_PASSWORD
+          - -e
+          - DB_APP_ROLE
+          - -e
+          - DB_APP_PASSWORD
+          - postgres
+          - sh
+          - -c
+          # The superuser and the database from the container's own
+          # environment, which compose set from the same values: no second copy
+          # of either to drift.
+          - 'exec psql -v ON_ERROR_STOP=1 -X --username "${POSTGRES_USER:-postgres}" --dbname "$POSTGRES_DB" -f -'
+        chdir: "{{ app_dir }}"
+        stdin: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/db-roles.sql') }}"
+      environment:
+        DB_OWNER_ROLE: "{{ postgres_owner_user }}"
+        DB_OWNER_PASSWORD: "{{ vault_postgres_owner_password }}"
+        DB_APP_ROLE: "{{ postgres_app_user }}"
+        DB_APP_PASSWORD: "{{ vault_postgres_app_password }}"
+      changed_when: false
+      no_log: true
+
     - name: Run the database migrations
       # This release's migrator image, so the migrations are the ones this
       # release's code expects. It runs before the switch, so a migration that
       # fails stops the play with the previous release still serving.
+      #
+      # As the schema owner: .env-migrations comes after .env-production, and
+      # of two --env-file values for one name the later wins, so DATABASE_URL is
+      # the owner's while everything else is the app's own configuration. What
+      # the migrations create is the owner's, and the app role reaches it
+      # through the default privileges the role bootstrap above set up.
       #
       # changed_when: false because the thing that changes is the schema, and
       # drizzle records what it applied; re-running against a schema that is
@@ -715,6 +851,8 @@
           - --rm
           - --env-file
           - "{{ env_file }}"
+          - --env-file
+          - "{{ migrations_env_file }}"
           - --network
           - "{{ compose_project }}_default"
           - "{{ project_slug }}-migrator:{{ deploy_release }}"
@@ -844,11 +982,14 @@
           # Only files this deploy actually replaced have a backup, so a deploy
           # that changed neither restores neither.
           #
-          # .env-production is deliberately not in this list. It is rendered
-          # from the vault and group_vars — the operator's current values, not
-          # this release's content — so a value they deliberately changed is
-          # theirs to keep, and restoring it would only be undone by the next
-          # deploy. What rolls back here is release content.
+          # .env-production and .env-migrations are deliberately not in this
+          # list. They are rendered from the vault and group_vars — the
+          # operator's current values, not this release's content — so a value
+          # they deliberately changed is theirs to keep, and restoring it would
+          # only be undone by the next deploy. The database roles they name were
+          # brought up to date before the switch, so the previous release comes
+          # back up connecting as the app role with the vault's password, like
+          # the one that failed. What rolls back here is release content.
           ansible.builtin.copy:
             src: "{{ item.backup_file }}"
             dest: "{{ item.dest }}"

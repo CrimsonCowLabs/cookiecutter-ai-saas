@@ -30,19 +30,37 @@
 # never silently shadow one.
 
 # ─── Required ──────────────────────────────────────────────────────────────
-# deploy.yml refuses to run while either of these is empty: the first leaves
-# every session cookie forgeable, and the second is the database's password.
+# deploy.yml refuses to run while any of these is empty: the first leaves
+# every session cookie forgeable, and the other three are the database's
+# passwords, one per role (see the roles in group_vars/all.yml).
 
 # openssl rand -hex 32
 vault_nextauth_secret: ""
 
-# The password for the `postgres` role inside the stack. It is also what
-# DATABASE_URL is built from, so it is set in one place only.
+# The password for the `postgres` superuser inside the stack. Nothing in the
+# running app connects with it: it is what deploy.yml's role bootstrap and the
+# nightly backup use, from inside the database container.
 #
 # Set it before the first deploy. Postgres takes this password when it
 # initialises its data directory and ignores it afterwards, so changing it
 # later needs an ALTER ROLE inside the running database as well.
 vault_postgres_password: ""
+
+# The schema owner's password. The migrations connect with it, and nothing
+# else does: it is rendered into .env-migrations on the host, which only the
+# migrator reads, and never into .env-production, so the app's containers
+# cannot see it.
+#
+# openssl rand -hex 32. Unlike the superuser's, this one can be changed at any
+# time: every deploy sets the role's password to whatever the vault says.
+vault_postgres_owner_password: ""
+
+# The app role's password: what app, worker and db-writer connect with, and
+# what DATABASE_URL in .env-production is built from. Changeable at any time,
+# the same way as the owner's.
+#
+# openssl rand -hex 32
+vault_postgres_app_password: ""
 
 # ─── OAuth ─────────────────────────────────────────────────────────────────
 # From the provider's console, for the production callback URL

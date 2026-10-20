@@ -97,7 +97,31 @@ project_slug: __PROJECT_SLUG__
 # dashes into underscores to name it, so this follows the same rule rather than
 # repeating the answer.
 postgres_db: "{{ project_slug | replace('-', '_') }}"
+
+# Three roles, because "the database's password" used to be the superuser's and
+# a superuser can do far more than the app ever needs: `COPY ... TO PROGRAM`
+# runs a shell command in the database container, and it can create roles and
+# read any database on the server. A SQL injection inherits whatever the
+# connection can do, so the connection the app holds is now the least that
+# serves it.
+#
+#   * postgres_user is the superuser. It initialises the data directory, runs
+#     deploy.yml's role bootstrap, and is what the backups dump as. Nothing in
+#     the stack connects as it any more.
+#   * postgres_owner_user owns the schema. The migrations run as it, so every
+#     table they create belongs to it, and it is not a superuser either.
+#   * postgres_app_user is what app, worker and db-writer connect as: it reads
+#     and writes rows and can do nothing else — no DDL, no roles, no COPY to or
+#     from a program or a file.
+#
+# Their passwords are vault_postgres_password, vault_postgres_owner_password
+# and vault_postgres_app_password. deploy.yml creates the two new roles, and
+# keeps their passwords in step with the vault, on every deploy (see
+# ansible/files/db-roles.sql). Renaming one after a deploy leaves the old role
+# behind, owning what it owned — choose them before the first one.
 postgres_user: postgres
+postgres_owner_user: "{{ postgres_db }}_owner"
+postgres_app_user: "{{ postgres_db }}_app"
 
 # The name the certificate is for and the DNS precheck resolves. It is the
 # domain answered at generation time, which the Caddyfile also carries.

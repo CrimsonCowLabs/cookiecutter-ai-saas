@@ -235,6 +235,8 @@ cat > ansible/vault.yml <<VAULTFILE
 ---
 vault_nextauth_secret: "cli-check-nextauth-sentinel"
 vault_postgres_password: "cli-check-postgres-sentinel"
+vault_postgres_owner_password: "cli-check-postgres-owner-sentinel"
+vault_postgres_app_password: "cli-check-postgres-app-sentinel"
 vault_backup_remote:
   type: s3
   provider: Other

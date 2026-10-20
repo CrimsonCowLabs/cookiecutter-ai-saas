@@ -771,6 +771,45 @@ jobs:
       - name: Job submission holds to the plan's limits
         run: scripts/check_jobs.sh .generated-jobs/jobs-app
 
+  # Acceptance criteria for issue #103 (the app connects as a least-privilege
+  # role), at the database: ansible/files/db-roles.sql makes a schema owner
+  # that migrations run as and an app role that is not a superuser, cannot
+  # COPY to or from programs or files, cannot CREATE ROLE, and can still read
+  # and write every table — including ones a later migration adds, through
+  # default privileges. Run on a database whose objects postgres owns (a host
+  # deployed before #103: everything is handed over, twice, with a password
+  # change) and on an empty one. scripts/check_db_roles.sh runs only the
+  # production Postgres image, so the matrix is over that image: pgvector's
+  # puts extension objects in public that must be left alone. That deploy
+  # wires these roles into the stack is the deploy job's to check.
+  db-roles:
+    name: "The app's database role is least-privilege, on new and upgraded databases (database_extensions=${{ matrix.database_extensions }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        database_extensions: [none, pgvector]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install cookiecutter
+
+      # Matches "node_version" in cookiecutter.json.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate project
+        run: |
+          cookiecutter . --no-input -o .generated-db-roles project_name="Roles App" \
+            database_extensions=${{ matrix.database_extensions }}
+
+      - name: The app's database role is least-privilege
+        run: scripts/check_db_roles.sh .generated-db-roles/roles-app
+
   # Acceptance criteria for the provisioning playbook: a fresh host reaches a
   # ready state from one command, SSH is key-only with no root login, the
   # firewall exposes only what is needed, unattended upgrades and log rotation
@@ -856,12 +895,13 @@ jobs:
   # host, with a real Postgres and a real proxy; this job adds what is true of
   # the generated files before anything runs. It is the longest job here — it
   # builds all six images (the proxy's own Caddy among them), ships ~600MB of
-  # them over SSH, and deploys three times (good, unchanged, deliberately
-  # broken).
+  # them over SSH, and deploys several times: good, unchanged, deliberately
+  # broken, after a restore from backup, and onto the same host put back the
+  # way a pre-#103 deploy left it, to prove the upgrade to the database roles.
   deploy:
     name: A deploy ships, migrates and can fail safely
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       # As in the provisioning job: this Python is the control machine's, and
