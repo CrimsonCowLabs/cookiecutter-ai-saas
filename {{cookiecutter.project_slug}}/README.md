@@ -382,7 +382,12 @@ serving: everything that can fail happens before anything changes what serves.
    one per service, each holding only what that service reads (see
    [Which secret goes where](#which-secret-goes-where)), mode `0600`, owned by
    `__DEPLOY_USER__` — and the new images, tagged with the release rather than only `:latest`. None of this
-   touches the running containers.
+   touches the running containers. The images the host lacks travel as one
+   `docker save` tarball, written only inside a fresh `0700` directory on your
+   machine and another on the server, and both directories are removed when
+   the transfer ends — after a failed save, copy or load as well as a
+   successful one — so no copy of the release is left readable by anyone else
+   on either machine.
 4. **Migrate**, using this release's migrator image, with Postgres up and the
    app not yet switched. First the database roles are created or brought up to
    date (see [The database roles](#the-database-roles)); then the migrations
@@ -445,7 +450,7 @@ db-writer over the queue.
 | `.env-production` | `ansible/templates/env-production.j2` | no container: it is compose's `--env-file`, interpolated into the compose file | `POSTGRES_USER`, `POSTGRES_PASSWORD` (the superuser's, for `postgres`), and `SITE_ADDRESS` and whichever `CADDY_*_RATE_LIMIT_*` are set (for `caddy`) |
 
 A setting you add to the code goes into the template of the service that reads
-it, and nowhere else. `npm run test:service-env`
+it, and nowhere else. `npm run test:deploy`
 (`tests/deploy/service-env.test.mjs`) fails when a service's file sets a name
 its code does not read, when a service reads a name the deploy renders only
 for another, or when a compose service is handed any file but its own. A

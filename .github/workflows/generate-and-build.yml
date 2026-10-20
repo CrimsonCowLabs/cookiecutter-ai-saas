@@ -404,10 +404,12 @@ jobs:
       # more — the worker in particular no Stripe, NextAuth, OAuth or database
       # secret — and every compose service is handed its own. Per combination,
       # because which names each file and each service's code carry is what
-      # the cc: markers decide. Static: no server, no build.
+      # the cc: markers decide. Static: no server, no build. test:deploy runs
+      # every tests/deploy/ test, so it also holds the image tarball (#105) to
+      # private 0700 directories that an always: removes.
       - name: Each service is handed only the settings its code reads
         working-directory: .generated/matrix-app
-        run: npm run test:service-env
+        run: npm run test:deploy
 
       # The "stripe" npm dependency ships regardless of include_stripe (see
       # hooks/post_gen_project.py::handle_stripe — package.json isn't in the
@@ -544,6 +546,34 @@ jobs:
 
       - name: Serve HTTPS from the stack
         run: scripts/check_tls_stack.sh .generated-tls/tls-app
+
+  # Acceptance criteria for issue #105: with .env, .env.production, the vault
+  # password and a decrypted vault present in the project, no built image
+  # contains any of them, under their own names or another (Next's standalone
+  # output copies .env files into the runner image), and each image's
+  # node_modules is the one `npm ci` installed, not the host's. Every image
+  # deploy.yml ships is built the way it builds them, so this also shows they
+  # all still build with the .dockerignore files in place. See
+  # scripts/check_image_contents.sh for what is planted and how each image's
+  # filesystem is read.
+  image-contents:
+    name: Local secrets and node_modules never enter a built image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # PyYAML comes with cookiecutter; the check reads deploy.yml's image map
+      # with it.
+      - run: python -m pip install cookiecutter
+
+      - name: Generate project
+        run: cookiecutter . --no-input -o .generated-images project_name="Image App"
+
+      - name: No image holds a planted secret or host package
+        run: scripts/check_image_contents.sh .generated-images/image-app
 
   # Acceptance criteria for issue #23 (auth integration tests): an
   # unauthenticated request to a dashboard route redirects to sign-in, public

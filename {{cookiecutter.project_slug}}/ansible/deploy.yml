@@ -17,8 +17,10 @@
 #   2. Build the images locally and name the release after them.
 #   3. Ship the compose file, the Caddyfile and freshly rendered env files —
 #      one per service, each holding only what that service reads — then load
-#      the new images under their release tag. None of this touches what is
-#      serving: the running containers hold their own images and the
+#      the new images under their release tag. The images travel as one
+#      tarball that only ever sits in a 0700 directory, on each machine, which
+#      is removed when the transfer ends, failed or not. None of this touches
+#      what is serving: the running containers hold their own images and the
 #      environment they were started with.
 #   4. Start Postgres and Redis if they are not already up, bring the database
 #      roles up to date (the schema owner and the app's least-privilege role),
@@ -377,8 +379,6 @@
       {{ (deploy_requested + (['migrator'] if deploy_requested | length > 0 else []))
          | unique | sort }}
 
-    deploy_tarball: "/tmp/{{ project_slug }}-images.tar.gz"
-
   tasks:
     - name: Refuse an unknown deploy target
       ansible.builtin.assert:
@@ -666,60 +666,124 @@
              | map(attribute='item') | list }}
       when: deploy_shipped | length > 0
 
-    - name: Save the images the host does not have
+    - name: Ship the images the host does not have
       # One tarball for all of them, so layers shared between images cross
-      # once. gzip -1 because the control machine's CPU, not the link, is what
-      # this waits on.
+      # once. It is the whole release — every image's code, and whatever a
+      # build step left in a layer — so it is written only inside a directory
+      # nobody else can read, on the control machine and again on the host,
+      # and both directories go when this block ends however it ends.
       #
-      # The command is one line on purpose. A folded YAML scalar keeps the
-      # newlines of any line indented further than its first — so writing the
-      # image list across several lines puts a newline before the `|`, and the
-      # shell then runs `docker save` with nothing to pipe into, streaming a
-      # couple of gigabytes into Ansible's output buffer instead of a file.
-      # The list is built in `vars` below, where newlines inside a Jinja
-      # expression are harmless.
-      ansible.builtin.shell:
-        cmd: "set -o pipefail && docker save {{ images }} | gzip -1 > {{ deploy_tarball | quote }}"
-        # pipefail, so a `docker save` that dies does not leave a truncated
-        # tarball behind gzip's clean exit — and bash, because /bin/sh on
-        # Debian is dash, which has no pipefail and fails on the `set` itself.
-        executable: /bin/bash
+      # It used to be a fixed name under /tmp on both machines, written with
+      # the umask's permissions (world-readable on a typical system) and
+      # removed by the last two tasks here — so a save, copy or load that
+      # failed left a readable copy of the release behind on each side.
+      #
+      # ansible.builtin.tempfile is mkdtemp: a name nobody can predict, made
+      # 0700 by the account that will write into it, under the machine's own
+      # temp directory ($TMPDIR on the control machine). The `always:` removes
+      # both directories, tarball and all, after a failure as well as after a
+      # success; it does not rescue, so a failure still stops the play here,
+      # before anything has been switched.
+      #
+      # Each host gets a directory of its own on the control machine, rather
+      # than one shared by every host in the play: what is missing is worked
+      # out per host, so two hosts can need different tarballs, and with
+      # forks they are saved at the same time — which a single fixed path made
+      # them race for.
+      #
+      # Only when an image is missing, like everything in it: making and
+      # removing a directory is a change, and an unchanged deploy has to
+      # report none.
+      when: deploy_missing | default([]) | length > 0
       vars:
-        images: >-
-          {{ deploy_missing | map('regex_replace', '^', project_slug ~ '-')
-                            | map('regex_replace', '$', ':' ~ deploy_release)
-                            | join(' ') }}
-      delegate_to: localhost
-      changed_when: true
-      when: deploy_missing | default([]) | length > 0
+        local_tarball: "{{ deploy_local_tmp.path }}/images.tar.gz"
+        host_tarball: "{{ deploy_host_tmp.path }}/images.tar.gz"
+      block:
+        - name: Make a private directory for the tarball on the control machine
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: "{{ project_slug }}-images."
+          delegate_to: localhost
+          register: deploy_local_tmp
 
-    - name: Copy the tarball to the host
-      ansible.builtin.copy:
-        src: "{{ deploy_tarball }}"
-        dest: "{{ deploy_tarball }}"
-        mode: "0600"
-      when: deploy_missing | default([]) | length > 0
+        - name: Make a private directory for the tarball on the host
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: "{{ project_slug }}-images."
+          register: deploy_host_tmp
 
-    - name: Load the images on the host
-      ansible.builtin.shell:
-        cmd: "set -o pipefail && gunzip -c {{ deploy_tarball | quote }} | docker load"
-        # See the save task: /bin/sh on the host is dash, which has no pipefail.
-        executable: /bin/bash
-      changed_when: true
-      when: deploy_missing | default([]) | length > 0
+        - name: Refuse to write the release anywhere another account can read it
+          # mkdtemp makes the directory 0700 whatever the umask, and tempfile
+          # reports the mode it ended up with. Checked rather than assumed,
+          # because the cost of being wrong is a copy of every image readable
+          # by every account on the machine.
+          ansible.builtin.assert:
+            that:
+              - deploy_local_tmp.mode == '0700'
+              - deploy_host_tmp.mode == '0700'
+            fail_msg: >-
+              The directories the image tarball goes in are
+              {{ deploy_local_tmp.mode }} on the control machine and
+              {{ deploy_host_tmp.mode }} on the host; both have to be 0700.
+              Nothing has been shipped.
+            quiet: true
 
-    - name: Remove the tarball from the host
-      ansible.builtin.file:
-        path: "{{ deploy_tarball }}"
-        state: absent
-      when: deploy_missing | default([]) | length > 0
+        - name: Save the images the host does not have
+          # gzip -1 because the control machine's CPU, not the link, is what
+          # this waits on.
+          #
+          # The command is one line on purpose. A folded YAML scalar keeps the
+          # newlines of any line indented further than its first — so writing
+          # the image list across several lines puts a newline before the `|`,
+          # and the shell then runs `docker save` with nothing to pipe into,
+          # streaming a couple of gigabytes into Ansible's output buffer
+          # instead of a file. The list is built in `vars` below, where
+          # newlines inside a Jinja expression are harmless.
+          ansible.builtin.shell:
+            cmd: "set -o pipefail && docker save {{ images }} | gzip -1 > {{ local_tarball | quote }}"
+            # pipefail, so a `docker save` that dies does not leave a truncated
+            # tarball behind gzip's clean exit — and bash, because /bin/sh on
+            # Debian is dash, which has no pipefail and fails on the `set`
+            # itself.
+            executable: /bin/bash
+          vars:
+            images: >-
+              {{ deploy_missing | map('regex_replace', '^', project_slug ~ '-')
+                                | map('regex_replace', '$', ':' ~ deploy_release)
+                                | join(' ') }}
+          delegate_to: localhost
+          changed_when: true
 
-    - name: Remove the tarball from the control machine
-      ansible.builtin.file:
-        path: "{{ deploy_tarball }}"
-        state: absent
-      delegate_to: localhost
-      when: deploy_missing | default([]) | length > 0
+        - name: Copy the tarball to the host
+          ansible.builtin.copy:
+            src: "{{ local_tarball }}"
+            dest: "{{ host_tarball }}"
+            mode: "0600"
+
+        - name: Load the images on the host
+          ansible.builtin.shell:
+            cmd: "set -o pipefail && gunzip -c {{ host_tarball | quote }} | docker load"
+            # See the save task: /bin/sh on the host is dash, which has no
+            # pipefail.
+            executable: /bin/bash
+          changed_when: true
+
+      always:
+        # Each guarded on its directory having been made at all: if the
+        # tempfile task is what failed, it registered no path, and removing
+        # an undefined one would fail again and bury the first error.
+        - name: Remove the tarball's directory from the host
+          ansible.builtin.file:
+            path: "{{ deploy_host_tmp.path }}"
+            state: absent
+          when: deploy_host_tmp.path is defined
+
+        - name: Remove the tarball's directory from the control machine
+          ansible.builtin.file:
+            path: "{{ deploy_local_tmp.path }}"
+            state: absent
+          delegate_to: localhost
+          when: deploy_local_tmp.path is defined
 
     - name: Give this release's name to images the host already had
       ansible.builtin.command:

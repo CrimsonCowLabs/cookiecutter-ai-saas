@@ -1,0 +1,61 @@
+# What `docker build` never sends from this directory — the build context of
+# the app, migrator and ops images (Dockerfile) and of db-writer's
+# (workers/db-writer/Dockerfile.writer).
+#
+# The Dockerfile's builder stage runs `COPY . .`, so without this file
+# everything here is in that stage, and `next build` reads .env and
+# .env.production from it, which Next's standalone output then copies into the
+# runner image that ships. This is the machine that deploys, so it is also where
+# the deploy's rendered env files, the vault password and any vault somebody
+# decrypted sit. The image needs none of them: its settings arrive as the
+# container's environment at run time. scripts/check_image_contents.sh in the
+# template repository plants each of these and fails if any reaches an image.
+#
+# Nothing the build needs is here: the Dockerfile copies package.json,
+# package-lock.json, tsconfig.json, drizzle.config.ts, lib/, scripts/ and
+# workers/db-writer/, and `next build` reads app/, components/, content/,
+# lib/, public/, types/ and the config files at the root.
+
+# Secrets. Every env file at any depth — the operator's own (.env,
+# .env.local, .env.production), the ones a deploy renders (.env-production,
+# .env-app and the rest), and .env.example, which nothing in a build reads.
+**/.env*
+**/.vault-pass
+**/*.pem
+**/*.key
+# The Ansible tree holds the vault, encrypted or not, and the vault password's
+# usual home. No image uses any of it.
+ansible/
+
+# Dependencies. Each image installs its own with a frozen `npm ci`; the host's
+# would land on top of that install and the image would run whatever this
+# machine happened to have.
+**/node_modules
+
+# Local build output. The builder stage runs `next build` itself, and a stale
+# .next or incremental-build record from here would only confuse it.
+.next/
+out/
+build/
+dist/
+cli/dist/
+**/*.tsbuildinfo
+
+# Test, coverage and Python artefacts.
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.venv
+
+# Everything else that is only ever local: history, image exports a deploy
+# saved, Caddy's access log bind-mounted out of the production stack, and
+# package-manager debug logs.
+.git/
+**/*.tar.gz
+logs/
+**/*.log
