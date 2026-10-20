@@ -40,7 +40,8 @@ services:
       # something per request — sign-in, the contact form, server actions
       # (job submission among them); the INGEST pair for the analytics proxy.
       # deploy.yml sets them from the caddy_*rate_limit_* values in
-      # ansible/group_vars/all.yml, through .env-production.
+      # ansible/group_vars/all.yml, through .env-production — the file compose
+      # interpolates this one from, which no container is handed.
       - CADDY_RATE_LIMIT_EVENTS
       - CADDY_RATE_LIMIT_WINDOW
       - CADDY_STRICT_RATE_LIMIT_EVENTS
@@ -77,7 +78,14 @@ services:
     # into the container as well would need it readable by the container's own
     # uid, and ansible/deploy.yml writes it 0600 to the deploy account. Nothing
     # in the app reads a file — every setting is read from the environment.
-    env_file: .env-production
+    #
+    # Each service has a file of its own (ansible/templates/env-<service>.j2),
+    # holding what that service's code reads and nothing else, rather than all
+    # of them sharing one: a container holds whatever its env file says, and a
+    # compromise of one service should hand over that service's secrets, not
+    # the account's. tests/deploy/service-env.test.mjs holds each file to its
+    # service's code, and every service here to a file of its own.
+    env_file: .env-app
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,10 +95,13 @@ services:
 
   worker:
     image: {{ cookiecutter.project_slug }}-worker:latest
-    env_file: .env-production
+    # The queue, the model provider and tracing, and nothing else: no Stripe
+    # key, no session secret, no OAuth secret and no DATABASE_URL. The worker
+    # runs a model's tool calls against URLs users supply, which makes it the
+    # container most likely to run something it should not, so it holds the
+    # least worth taking. Its results go back over the queue to db-writer.
+    env_file: .env-worker
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -99,7 +110,8 @@ services:
 
   db-writer:
     image: {{ cookiecutter.project_slug }}-db-writer:latest
-    env_file: .env-production
+    # DATABASE_URL (the app role's) and REDIS_URL: all it reads.
+    env_file: .env-db-writer
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,7 +121,7 @@ services:
 
   ops:
     image: {{ cookiecutter.project_slug }}-ops:latest
-    env_file: .env-production
+    env_file: .env-ops
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,10 +130,13 @@ services:
     # it. `restart: unless-stopped` is what deploy.yml's health gate reads as
     # "meant to stay up", so this must not have it.
     #
-    # It reads .env-production like the app, so it connects as the app role:
-    # it can read and write rows, and cannot change the schema. Schema changes
-    # are migrations, and migrations run through deploy.yml (`opsctl migrate`),
-    # which alone connects as the schema owner.
+    # Its env file holds the app role's DATABASE_URL and nothing else, so it
+    # connects as the app role: it can read and write rows, and cannot change
+    # the schema. Schema changes are migrations, and migrations run through
+    # deploy.yml (`opsctl migrate`), whose migrator alone connects as the
+    # schema owner. A one-off command that needs one of the app's keys as
+    # well is given it with `-e` for that run, rather than ops holding them
+    # all the time.
     restart: "no"
     # And a profile, so `up` leaves it alone entirely. Without one, every `up`
     # starts a container that immediately exits — which makes a deploy of

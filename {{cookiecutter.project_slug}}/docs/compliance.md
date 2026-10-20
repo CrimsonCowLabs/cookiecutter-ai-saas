@@ -642,7 +642,7 @@ October 2026.
 3. For an EU project, set `POSTHOG_HOST=https://eu.i.posthog.com` and
    `POSTHOG_ASSETS_HOST=https://eu-assets.i.posthog.com` (`posthog_host`
    and `posthog_assets_host` in `ansible/group_vars/all.yml`, which
-   `env-production.j2` reads). The defaults are the US cloud's.
+   `env-app.j2` reads). The defaults are the US cloud's.
 4. In the PostHog project's settings, turn on "Discard client IP data",
    and set the data retention to what `legal.analyticsRetention` in
    `config.ts` says.

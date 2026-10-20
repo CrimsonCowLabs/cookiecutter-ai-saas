@@ -349,6 +349,11 @@ th_exec "cat > $APP_DIR/.env-production" <<ENV
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 ENV
+# The compose file hands each of app, worker, db-writer and ops an env file of
+# its own, and compose refuses to load it while any of them is missing — even
+# to start nothing but the database. Empty ones do, since none of those
+# services is started here.
+th_exec "cd $APP_DIR && touch .env-app .env-worker .env-db-writer .env-ops"
 th_exec "cd $APP_DIR && docker compose -p $SLUG -f docker-compose.prod.yml --env-file .env-production up -d --wait postgres redis" \
   > "$TH_WORK/stack.log" 2>&1 \
   || { tail -20 "$TH_WORK/stack.log" >&2; fail "could not bring up postgres/redis on the host"; }

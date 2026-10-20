@@ -177,8 +177,8 @@ git add ansible/vault.yml                    # committed, encrypted
 ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-vault-pass
 ```
 
-There is no address to fill in and no `.env-production` to copy: the address is
-in the inventory and the env file is rendered on the host from the vault. Both
+There is no address to fill in and no env file to copy: the address is
+in the inventory and the env files are rendered on the host from the vault. Both
 of those were how the shell script this replaces leaked secrets into shell
 history.
 
@@ -274,7 +274,8 @@ a first deploy, which is what the DNS pre-flight protects instead.
 |---------|----------------|
 | Secrets | `ansible/vault.yml`, encrypted; `ansible/vault.yml.example` documents every name |
 | Non-secret settings | `ansible/group_vars/all.yml` |
-| The production env file | `ansible/templates/env-production.j2`, rendered to `/app/<slug>/.env-production` on the host, `0600` |
+| What compose interpolates | `ansible/templates/env-production.j2`, rendered to `/app/<slug>/.env-production` on the host, `0600`: the postgres superuser and Caddy's settings, handed to no container |
+| Each service's environment | `ansible/templates/env-<service>.j2` for `app`, `worker`, `db-writer` and `ops`, rendered to `/app/<slug>/.env-<service>`, `0600`, each the `env_file` of that service alone (see [Which secret goes where](#which-secret-goes-where)) |
 | The migrations' connection | `ansible/templates/env-migrations.j2`, rendered to `/app/<slug>/.env-migrations` on the host, `0600`, read by the migrator alone |
 | The database roles | `ansible/files/db-roles.sql`, run on every deploy; their names in `ansible/group_vars/all.yml` |
 | What is deployed | `/app/<slug>/RELEASE` on the host |
@@ -299,15 +300,66 @@ not a successful deploy and a plaintext secret in a commit.
 
 Be clear about what this buys, because it is not "the secrets never leave the
 vault": `ansible-vault` decrypts on the **control machine**, in memory, and the
-rendered `.env-production` and `.env-migrations` land on the host at mode
-`0600` owned by the deploy account. Nothing is at rest in plaintext anywhere else — not in the repository,
+rendered env files (`.env-production`, one `.env-<service>` per service, and
+`.env-migrations`) land on the host at mode `0600` owned by the deploy account. Nothing is at rest in plaintext anywhere else — not in the repository,
 not in a shell history, not in a file on your laptop. The machine running the
 deploy still holds the password and sees the values while it runs; it has to.
 
 Non-secret settings — the domain, the origin NextAuth builds callbacks from,
-feature flags — are in `ansible/group_vars/all.yml` and in
-`ansible/templates/env-production.j2`, in the clear, where they can be read in
-a diff.
+feature flags — are in `ansible/group_vars/all.yml` and in the env templates
+under `ansible/templates/`, in the clear, where they can be read in a diff.
+
+### Which secret goes where
+
+Each container is handed only what its own code reads, so that a compromise of
+one service gives away that service's secrets rather than the account's. The
+one that matters most is the worker: it runs a model's tool calls against URLs
+users supply, which makes it the container most likely to end up running
+something it should not. It holds no Stripe key, no `NEXTAUTH_SECRET` (which
+would forge anybody's session), no OAuth secret and no database password — it
+never connects to Postgres at all, and hands its results to db-writer over the
+queue.
+
+| File on the host | Template | Handed to | What is in it |
+|------------------|----------|-----------|---------------|
+| `.env-app` | `env-app.j2` | `app` | `NEXTAUTH_URL`, `NEXTAUTH_SECRET`; `GOOGLE_ID`, `GOOGLE_SECRET` and `MICROSOFT_ENTRA_ID_ID`, `_SECRET`, `_TENANT_ID` for the providers the project has; `DATABASE_URL` (the app role's), `REDIS_URL`; `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` with billing; `RESEND_API_KEY` when the project sends email; `POSTHOG_KEY`, `POSTHOG_HOST`, `POSTHOG_ASSETS_HOST` with analytics; `FEATURE_EMAIL_NOTIFICATIONS` |
+| `.env-worker` | `env-worker.j2` | `worker` | `REDIS_URL`; `LLM_PROVIDER` and the answered provider's key (and, for Ollama and OpenRouter, its model and base URL); `RESEARCH_MAX_TOOL_CALLS`; `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_ENDPOINT`, `LANGSMITH_PROJECT` |
+| `.env-db-writer` | `env-db-writer.j2` | `db-writer` | `DATABASE_URL` (the app role's), `REDIS_URL` |
+| `.env-ops` | `env-ops.j2` | `docker compose run ops` | `DATABASE_URL` (the app role's) |
+| `.env-migrations` | `env-migrations.j2` | the migrator's `docker run`, and nothing else | `DATABASE_URL` (the schema owner's) |
+| `.env-production` | `env-production.j2` | no container: compose's `--env-file`, interpolated into the compose file | `POSTGRES_USER`, `POSTGRES_PASSWORD` (the superuser's, for the postgres service); `SITE_ADDRESS` and the `CADDY_*_RATE_LIMIT_*` settings that are set, passed through to `caddy` |
+
+By vault secret:
+
+| Vault variable | Reaches |
+|----------------|---------|
+| `vault_nextauth_secret` | app |
+| `vault_google_*`, `vault_microsoft_entra_id_*` | app |
+| `vault_stripe_secret_key`, `vault_stripe_webhook_secret` | app |
+| `vault_resend_api_key` | app |
+| `vault_posthog_key` | app |
+| `vault_<provider>_api_key` | worker |
+| `vault_langsmith_api_key` | worker |
+| `vault_postgres_app_password` | app, db-writer, ops (inside `DATABASE_URL`) |
+| `vault_postgres_owner_password` | the migrator |
+| `vault_postgres_password` | postgres, through compose's interpolation |
+| `vault_backup_*` | the backup units `ansible/backup.yml` installs; no container |
+
+A variable added to the code goes into the template of the service that reads
+it, and nowhere else. `tests/deploy/service-env.test.mjs` in the generated
+project (`npm run test:service-env`, run by CI for every flag combination)
+fails when a service's file sets a name its code does not read — the worker's
+code is `workers/app`, db-writer's `workers/db-writer`, ops's `lib/db`, the
+migrator's `drizzle.config.ts` and the app's everything Next.js builds — when a
+service reads a name the deploy renders for some other service but not for it,
+when a compose service is handed any file but its own, and when
+`.env-production` holds anything the compose file does not interpolate.
+`scripts/check_deploy.sh` checks the same thing on a deployed host, from the
+running containers' environments.
+
+A one-off `docker compose run ops ...` that needs one of the app's keys is
+given it for that run with `-e NAME=...`, rather than ops holding them all the
+time.
 
 ## Database roles
 
@@ -322,7 +374,7 @@ roles:
 |------|------|--------------------|----------------|
 | Superuser | `postgres` | the role bootstrap, the nightly backup, a restore — all from inside the database container | anything |
 | Schema owner | `<db>_owner` | the migrator, and nothing else | owns the database and everything in it, so migrations can create and alter tables. Not a superuser, cannot create roles or databases |
-| App role | `<db>_app` | app, worker, db-writer, and `docker compose run ops` | select, insert, update and delete rows in `public`, and use its sequences. No DDL, no roles, no databases, no `COPY` to or from programs or files, nothing in drizzle's migrations journal, no other database on the server |
+| App role | `<db>_app` | app, db-writer, and `docker compose run ops` (the worker does not connect to the database) | select, insert, update and delete rows in `public`, and use its sequences. No DDL, no roles, no databases, no `COPY` to or from programs or files, nothing in drizzle's migrations journal, no other database on the server |
 
 `<db>` is the database name, the slug with dashes turned into underscores. The
 names are `postgres_owner_user` and `postgres_app_user` in
@@ -331,12 +383,11 @@ renamed role leaves the old one behind.
 
 Each has its own password in the vault: `vault_postgres_password`,
 `vault_postgres_owner_password` and `vault_postgres_app_password`. The deploy
-refuses to run while any of them is empty. `DATABASE_URL` in `.env-production`
-is the app role's. The owner's is in `.env-migrations`, a second file on the
-host that only the migrator's `docker run` reads, after `.env-production` so
-that its `DATABASE_URL` wins. It is kept out of `.env-production` because
-compose gives that file whole to every service, and the owner's password there
-would be in the app's environment.
+refuses to run while any of them is empty. `DATABASE_URL` in `.env-app`,
+`.env-db-writer` and `.env-ops` is the app role's. The owner's is in
+`.env-migrations`, which is the migrator's whole environment and nobody else's:
+the owner's password in a service's file would be in that service's
+environment.
 
 Every deploy runs `ansible/files/db-roles.sql` as the superuser before the
 migrations. It runs whatever is being shipped, `-e deploy_targets=none`
@@ -359,11 +410,11 @@ vector`. pgvector is not a trusted extension, so only a superuser can create
 it, and migrations no longer run as one. A migration of your own that enables
 it should say `IF NOT EXISTS`, and then finds it already there.
 
-`POSTGRES_USER` and `POSTGRES_PASSWORD` are still in `.env-production`,
-because compose reads the postgres service's settings from that file. Nothing
-in the stack connects with them, but they are in the app containers'
-environment. A SQL injection cannot read them, since it only reaches what the
-app role can. Code execution inside the app container can.
+`POSTGRES_USER` and `POSTGRES_PASSWORD` are in `.env-production`, because
+compose interpolates the postgres service's settings from that file. No
+container but Postgres's own is handed them: `.env-production` is the
+`--env-file` compose reads, not any service's `env_file`. Nothing in the stack
+connects with them.
 
 Local development (`docker-compose.yml`, `.env.example`) still connects as the
 `postgres` superuser. Its database is on your machine and holds nothing worth
@@ -409,8 +460,9 @@ hand.
 
 Bringing the stack up still means what it did before: `docker-compose.prod.yml`
 has no build context, so `ansible/deploy.yml` builds the images and ships them,
-and `.env-production` has to exist next to the compose file or compose aborts —
-which is why the playbook renders it there. Nothing about the proxy changes that.
+and `.env-production` and each service's `.env-<service>` have to exist next to
+the compose file or compose aborts — which is why the playbook renders them
+there. Nothing about the proxy changes that.
 
 Two prerequisites for the certificate, and neither is optional:
 
@@ -419,7 +471,9 @@ Two prerequisites for the certificate, and neither is optional:
   ports 80 and 443 reach the host. Caddy retries with a backoff, so fixing
   DNS afterwards recovers without intervention — but Let's Encrypt rate-limits
   failures, so the record is cheaper to get in first.
-- **Set `NEXTAUTH_URL=https://<your domain>` in `.env-production`**, and register
+- **Set `nextauth_url` to `https://<your domain>` in `ansible/group_vars/all.yml`**
+  (it becomes `NEXTAUTH_URL` in `.env-app`; the default is already the
+  `domain_name` you answered), and register
   that origin's OAuth callback URLs with your providers. Caddy sets
   `X-Forwarded-Proto`, which is what lets NextAuth (`trustHost: true`) build
   `https://` callbacks — but the configured origin still has to match.

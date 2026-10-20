@@ -1,59 +1,40 @@
 # .env-production for __PROJECT_NAME__, rendered on the host by
 # ansible/deploy.yml. Edits here are overwritten by the next deploy.
 #
+# The compose file's own variables, and nothing any container is handed. Every
+# `docker compose` command on the host passes this file as --env-file, and
+# compose reads it to fill in docker-compose.prod.yml: the postgres service's
+# superuser, and the caddy service's pass-through settings. It is no service's
+# env_file. Each of app, worker, db-writer and ops has a file of its own beside
+# this one (.env-app, .env-worker, ...; see env-app.j2 and its siblings),
+# holding only what that service's code reads, so that a compromised worker —
+# the container that runs a model's tool calls against URLs users supply —
+# does not hold the Stripe key, the session secret or the database password
+# along with it. tests/deploy/service-env.test.mjs holds every one of those
+# files, and this one, to that.
+#
 # Secrets come from ansible/vault.yml (encrypted in the repository); the rest
 # come from ansible/group_vars/all.yml or from the defaults written into this
 # template at generation time. A value that differs between hosts belongs in
 # group_vars; a value that must not be readable belongs in the vault. Nothing
 # belongs here.
 
-# ─── Auth ──────────────────────────────────────────────────────────────
-NEXTAUTH_URL={{ nextauth_url }}
-NEXTAUTH_SECRET={{ vault_nextauth_secret }}
-HOSTNAME=0.0.0.0
-# cc:begin google
-GOOGLE_ID={{ vault_google_id | default('') }}
-GOOGLE_SECRET={{ vault_google_secret | default('') }}
-# cc:end google
-# cc:begin microsoft
-MICROSOFT_ENTRA_ID_ID={{ vault_microsoft_entra_id_id | default('') }}
-MICROSOFT_ENTRA_ID_SECRET={{ vault_microsoft_entra_id_secret | default('') }}
-MICROSOFT_ENTRA_ID_TENANT_ID={{ vault_microsoft_entra_id_tenant_id | default('') }}
-# cc:end microsoft
-
 # ─── Database ─────────────────────────────────────────
-# postgres:5432 is the compose service, not a published port: only the stack's
-# own network reaches it.
-#
-# The password is url-encoded, because a generated one may contain characters a
-# URL would otherwise read as structure. The `replace` is not belt and braces:
-# Jinja's urlencode keeps `/` unescaped, which is fine in a path and fatal in
-# the userinfo — a password with a slash in it silently truncates the host, and
-# what you get is a connection failure a long way from here.
-#
-# DATABASE_URL is the app role's, not the superuser's: app, worker and
-# db-writer read and write rows and nothing else, so a SQL injection cannot
-# reach a shell through COPY ... TO PROGRAM or create a role. The migrations
-# connect as the schema owner instead, through .env-migrations, which deploy.yml
-# passes to the migrator alone (see ansible/templates/env-migrations.j2).
-#
-# POSTGRES_USER and POSTGRES_PASSWORD are the superuser's, and are here because
-# docker compose interpolates them into the postgres service from this file.
-# Nothing in the stack connects with them.
+# The superuser's, interpolated into the postgres service, which initialises
+# its data directory with them. Nothing in the stack connects with them: the
+# containers that use the database have the app role's DATABASE_URL in their
+# own files, and the migrator has the schema owner's in .env-migrations. Since
+# no container is handed this file, the superuser's password is now in no
+# environment but Postgres's own.
 POSTGRES_USER={{ postgres_user }}
 POSTGRES_PASSWORD={{ vault_postgres_password }}
-DATABASE_URL=postgresql://{{ postgres_app_user }}:{{ vault_postgres_app_password | urlencode | replace('/', '%2F') }}@postgres:5432/{{ postgres_db }}
-
-# ─── Redis (BullMQ) ──────────────────────────────────
-REDIS_URL=redis://redis:6379
 {#
   Caddy's settings, read by the compose file's pass-through of each name into
-  the caddy service (and harmless in the app's environment, which never reads
-  them). Each is written only when group_vars sets it, because a line here
-  with an empty value would still be set, and Caddy's {$NAME:default} falls
-  back to its default only for a name that is unset. Compared with equalto
-  rather than measured with length, because a limit set as a bare number in
-  group_vars arrives as an int, which has none.
+  the caddy service. Each is written only when group_vars sets it, because a
+  line here with an empty value would still be set, and Caddy's
+  {$NAME:default} falls back to its default only for a name that is unset.
+  Compared with equalto rather than measured with length, because a limit set
+  as a bare number in group_vars arrives as an int, which has none.
 #}
 {% set proxy_env = [
      ('SITE_ADDRESS', site_address | default('')),
@@ -74,67 +55,3 @@ REDIS_URL=redis://redis:6379
 {{ name }}={{ value }}
 {% endfor %}
 {% endif %}
-# cc:begin stripe
-
-# ─── Stripe ───────────────────────────────────────────
-STRIPE_PUBLIC_KEY={{ vault_stripe_public_key | default('') }}
-STRIPE_SECRET_KEY={{ vault_stripe_secret_key | default('') }}
-STRIPE_WEBHOOK_SECRET={{ vault_stripe_webhook_secret | default('') }}
-# cc:end stripe
-# cc:begin resend
-
-# ─── Resend (Email: magic link sign-in, contact form, subscription acknowledgment) ─
-RESEND_API_KEY={{ vault_resend_api_key | default('') }}
-# cc:end resend
-# cc:begin analytics
-
-# ─── Analytics (PostHog, only with the visitor's consent) ─
-# Empty key = no consent banner and no analytics. For an EU project, set
-# posthog_host and posthog_assets_host (with -e or in group_vars/all.yml) to
-# https://eu.i.posthog.com and https://eu-assets.i.posthog.com.
-POSTHOG_KEY={{ vault_posthog_key | default('') }}
-POSTHOG_HOST={{ posthog_host | default('https://us.i.posthog.com') }}
-POSTHOG_ASSETS_HOST={{ posthog_assets_host | default('https://us-assets.i.posthog.com') }}
-# cc:end analytics
-
-# ─── LLM Provider ──────────────────────────────────
-# Only the provider answered at generation time is rendered here, matching the
-# vault, which carries only that provider's key. The model names and base URLs
-# are not secrets and not per-host, which is why they are written here rather
-# than in group_vars.
-LLM_PROVIDER=__LLM_PROVIDER__
-# cc:begin llm-ollama
-
-OLLAMA_BASE_URL=http://localhost:11434/v1
-OLLAMA_MODEL=llama3.2
-OLLAMA_API_KEY={{ vault_ollama_api_key | default('') }}
-# cc:end llm-ollama
-# cc:begin llm-openai
-
-OPENAI_API_KEY={{ vault_openai_api_key | default('') }}
-# cc:end llm-openai
-# cc:begin llm-anthropic
-
-ANTHROPIC_API_KEY={{ vault_anthropic_api_key | default('') }}
-# cc:end llm-anthropic
-# cc:begin llm-openrouter
-
-OPENROUTER_API_KEY={{ vault_openrouter_api_key | default('') }}
-OPENROUTER_MODEL=openai/gpt-4o-mini
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-# cc:end llm-openrouter
-
-# ─── AI step agent ────────────────────────────────────
-RESEARCH_MAX_TOOL_CALLS=8
-
-# ─── Tracing (LangSmith, optional) ───────────────────
-# Turning this on sends your users' prompts and the model's completions to the
-# collector below. An empty key keeps it off whatever this says.
-LANGSMITH_TRACING=false
-LANGSMITH_API_KEY={{ vault_langsmith_api_key | default('') }}
-LANGSMITH_ENDPOINT=
-LANGSMITH_PROJECT=__PROJECT_SLUG__
-
-# ─── Feature Flags ───────────────────────────────────
-FEATURE_SCHEDULED_TASKS=false
-FEATURE_EMAIL_NOTIFICATIONS=false

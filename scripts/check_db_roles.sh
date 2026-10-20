@@ -5,7 +5,7 @@
 #
 #   * the schema owner — migrations run as it, it owns the database and every
 #     object in public and drizzle, and it is not a superuser either;
-#   * the app role     — app, worker and db-writer connect as it; it can read
+#   * the app role     — app, db-writer and ops connect as it; it can read
 #     and write every table, including ones a later migration adds (default
 #     privileges), and nothing else: not a superuser, no CREATE ROLE, no
 #     COPY to or from programs or files, no DDL, nothing in drizzle, no way

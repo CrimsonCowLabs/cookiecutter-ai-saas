@@ -249,7 +249,7 @@ jobs:
           # the tree that skips Jinja rendering.
           grep -q '^deploy_user: yourname$' "$G/ansible/group_vars/all.yml"
           grep -q '^domain_name: myapp.example.com$' "$G/ansible/group_vars/all.yml"
-          grep -q "^LLM_PROVIDER=${{ matrix.llm_provider }}$" "$G/ansible/templates/env-production.j2"
+          grep -q "^LLM_PROVIDER=${{ matrix.llm_provider }}$" "$G/ansible/templates/env-worker.j2"
           test -f "$G/ansible/deploy.yml" && test -f "$G/ansible/vault.yml.example"
           if grep -rnE '__[A-Z_]+__' "$G/ansible"; then
             echo "An unreplaced __PLACEHOLDER__ survived in the Ansible tree" >&2
@@ -263,11 +263,12 @@ jobs:
           # in another is the drift this asserts against. Checked for every
           # provider rather than just the one that regressed: it is the same
           # promise four times. Only vault.yml.example keys its lines as
-          # vault_<provider>_api_key; .env.example and env-production.j2 both
-          # start the line with the uppercase PROVIDER_API_KEY — the vault
-          # variable in env-production.j2 only appears mid-line, inside the
-          # Jinja default() expression on the RHS.
-          for f in .env.example ansible/vault.yml.example ansible/templates/env-production.j2; do
+          # vault_<provider>_api_key; .env.example and env-worker.j2 (the
+          # worker's env file: nothing else calls a model) both start the line
+          # with the uppercase PROVIDER_API_KEY — the vault variable in
+          # env-worker.j2 only appears mid-line, inside the Jinja default()
+          # expression on the RHS.
+          for f in .env.example ansible/vault.yml.example ansible/templates/env-worker.j2; do
             case "$f" in
               ansible/vault.yml.example) p='vault_'; ;;
               *) p=''; ;;
@@ -397,6 +398,16 @@ jobs:
       - name: Lint
         working-directory: .generated/matrix-app
         run: npm run lint
+
+      # Issue #104. Each production container's env file (ansible/templates/
+      # env-<service>.j2) holds what that service's code reads and nothing
+      # more — the worker in particular no Stripe, NextAuth, OAuth or database
+      # secret — and every compose service is handed its own. Per combination,
+      # because which names each file and each service's code carry is what
+      # the cc: markers decide. Static: no server, no build.
+      - name: Each service is handed only the settings its code reads
+        working-directory: .generated/matrix-app
+        run: npm run test:service-env
 
       # The "stripe" npm dependency ships regardless of include_stripe (see
       # hooks/post_gen_project.py::handle_stripe — package.json isn't in the

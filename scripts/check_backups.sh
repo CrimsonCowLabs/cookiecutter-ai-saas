@@ -269,6 +269,11 @@ th_exec "cat > $APP_DIR/.env-production" <<ENV
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 ENV
+# The compose file hands each of app, worker, db-writer and ops an env file of
+# its own, and compose refuses to load it while any of them is missing — even
+# to start nothing but the database. Empty ones do, since none of those
+# services is started here.
+th_exec "cd $APP_DIR && touch .env-app .env-worker .env-db-writer .env-ops"
 # Run from $APP_DIR with an explicit -p, exactly as deploy.yml does, so the
 # containers carry the Compose project label backup_compose_project names. Left
 # implicit, Compose would name the project after the directory, and this check

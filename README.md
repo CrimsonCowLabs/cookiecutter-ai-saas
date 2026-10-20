@@ -317,7 +317,7 @@ None of it is legal advice, and the pages and guide say so.
 │   ├── inventory.ini              # The host both playbooks act on
 │   ├── group_vars/all.yml         # Deploy account, open ports, log caps, deploy settings
 │   ├── vault.yml.example          # Every production secret, to fill in and encrypt
-│   ├── templates/env-production.j2 # Rendered to .env-production on the host
+│   ├── templates/env-*.j2         # One env file per service, rendered on the host
 │   └── requirements.yml           # Collections, for bare ansible-core
 └── content/blog/                  # Sample blog posts (JSON)
 ```
@@ -436,8 +436,7 @@ After generation, configure these in `.env.local`:
 
 | Variable | Source |
 |----------|--------|
-| `STRIPE_PUBLIC_KEY` | [Stripe Dashboard](https://dashboard.stripe.com/apikeys) |
-| `STRIPE_SECRET_KEY` | Same as above |
+| `STRIPE_SECRET_KEY` | [Stripe Dashboard](https://dashboard.stripe.com/apikeys) |
 | `STRIPE_WEBHOOK_SECRET` | Stripe Dashboard → Webhooks → Signing secret, of an endpoint at `/api/webhook/stripe` sending `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`, `charge.refunded`, `charge.dispute.created` and `charge.dispute.closed` |
 
 ### LLM Provider
@@ -555,9 +554,13 @@ Same services with:
   [deployment guide](docs/deployment.md))
 - Only Caddy on the host's ports: the app, database and Redis are reachable
   only from inside the stack
-- `.env-production` read by compose and injected as environment variables —
-  the file itself is never mounted into a container, because it is `0600` and
-  owned by the deploy account (see the [deployment guide](docs/deployment.md))
+- One env file per service (`.env-app`, `.env-worker`, `.env-db-writer`,
+  `.env-ops`), each holding only what that service's code reads — the worker,
+  which runs model tool calls on user-supplied URLs, gets no Stripe, NextAuth,
+  OAuth or database secret — read by compose and injected as environment
+  variables. No file is mounted into a container, because each is `0600` and
+  owned by the deploy account (see
+  [which secret goes where](docs/deployment.md#which-secret-goes-where))
 
 ---
 
@@ -606,6 +609,8 @@ Taking and restoring database backups, and operating a deployed instance with
 
 CI generates, typechecks, lints and builds eight named flag combinations (the `flag-matrix` job in `.github/workflows/generate-and-build.yml`). `python scripts/check_ci_matrix.py` fails if any value of any choice in `cookiecutter.json` is missing from the matrix, so a new choice value needs a matrix entry.
 
+Each combination also runs the generated project's `npm run test:service-env`, which fails if a production container's env file (`ansible/templates/env-<service>.j2`) sets a variable that service's code does not read, or misses one it reads that the deploy renders for another service — so the worker, which runs model tool calls on user-supplied URLs, never holds the Stripe, NextAuth, OAuth or database secrets.
+
 `python scripts/check_ci_negations.py` fails if a workflow step has a bare negated command (`! cmd`) before its last line: Actions runs steps with `bash -e`, which ignores a failing negated command, so write `if cmd; then echo "..." >&2; exit 1; fi` instead.
 
 Seven further jobs cover the parts no flag varies — serving, provisioning, the database roles, deploying, backing up and operating:
@@ -616,7 +621,7 @@ Seven further jobs cover the parts no flag varies — serving, provisioning, the
 | `tls-stack` | Bringing up `docker-compose.prod.yml`, with the app and the project's own Caddy image built, serves the app over HTTPS with a certificate that verifies, redirects HTTP to it, runs the proxy on the host's network, and publishes nothing but the app's port on loopback. Runs `scripts/check_tls_stack.sh` |
 | `provisioning` | The playbook lints clean, then takes a throwaway host from stock image to ready state and leaves it that way: root refused over SSH, the deploy user logging in with a key, only the expected ports open — a container's published port included, since Docker writes no iptables rules of its own — while containers still reach each other by name and the internet over HTTPS, the web server's ban jails watching Caddy's access log at the configured thresholds and dropping only the web ports, the ignore list in effect for every jail, upgrades and rotation active, a second run that changes nothing, and a host whose Docker used to manage iptables closed up the same way. Runs `scripts/check_provisioning.sh` |
 | `db-roles` | Once per `database_extensions` value (`none`, `pgvector`), against that variant's own Postgres image: `ansible/files/db-roles.sql`, run as `deploy.yml` runs it, gives a database that `postgres` owns, as on a host deployed before the roles existed, to the schema owner, and builds a fresh database with the owner from the start. The app role reads and writes every table, including one a later migration adds, and is refused superuser, `CREATE ROLE`, `COPY` to or from programs and files, DDL, drizzle's journal and other databases. A second run with new passwords replaces the old ones, and migrations as the owner still work. Runs `scripts/check_db_roles.sh` |
-| `deploy` | The deploy playbook lints clean, the template ships a vault example and no vault, and every name in that example is prefixed `vault_`. Then a throwaway host is deployed to for real: secrets reaching it only as `0600` files rendered from the encrypted vault and printed nowhere, even under `--diff`; the DNS pre-flight aborting when the served name resolves somewhere other than the target; migrations applied as the schema owner before the new containers serve; app, worker and db-writer connecting as a role that is no superuser and is refused `COPY ... TO PROGRAM`, `CREATE ROLE` and DDL, yet can use every table, including one created after the deploy; a backup restored as the docs say leaving ownership and grants intact; a host put back the way deploys left it before those roles existed refused with its old vault, then upgraded by one deploy; the proxy logging each client's own address and passing it to the app in `X-Forwarded-For`, while the app's port answers on loopback only; the running proxy being the release's own Caddy build, with the rate-limit module, on the `Caddyfile`'s default limits until `caddy_*rate_limit_*` set in group_vars reach it and turn a burst from one client into 429s with `Retry-After`; provisioning's Caddy ban jails leaving browsing, sign-in, checkout, bad OAuth callbacks and badly signed Stripe webhooks alone, then banning a client that requests scanner paths — its 80 and 443 dropped while SSH still answers it — until the ban expires; a deliberately broken release leaving the previous one still answering — and a second run that changes nothing. Runs `scripts/check_deploy.sh` |
+| `deploy` | The deploy playbook lints clean, the template ships a vault example and no vault, and every name in that example is prefixed `vault_`. Then a throwaway host is deployed to for real: secrets reaching it only as `0600` files rendered from the encrypted vault and printed nowhere, even under `--diff`; the DNS pre-flight aborting when the served name resolves somewhere other than the target; migrations applied as the schema owner before the new containers serve; each running container's environment holding only its own settings, the worker's no Stripe, NextAuth, OAuth or database secret; app and db-writer connecting as a role that is no superuser and is refused `COPY ... TO PROGRAM`, `CREATE ROLE` and DDL, yet can use every table, including one created after the deploy; a backup restored as the docs say leaving ownership and grants intact; a host put back the way deploys left it before those roles existed refused with its old vault, then upgraded by one deploy; the proxy logging each client's own address and passing it to the app in `X-Forwarded-For`, while the app's port answers on loopback only; the running proxy being the release's own Caddy build, with the rate-limit module, on the `Caddyfile`'s default limits until `caddy_*rate_limit_*` set in group_vars reach it and turn a burst from one client into 429s with `Retry-After`; provisioning's Caddy ban jails leaving browsing, sign-in, checkout, bad OAuth callbacks and badly signed Stripe webhooks alone, then banning a client that requests scanner paths — its 80 and 443 dropped while SSH still answers it — until the ban expires; a deliberately broken release leaving the previous one still answering — and a second run that changes nothing. Runs `scripts/check_deploy.sh` |
 | `backups` | The backup playbook lints clean, refuses an unencrypted vault and a retention policy of zero, then installs itself on a provisioned throwaway host and is held to every criterion as behaviour: a dump taken from a live Postgres that still contains its rows, that same dump byte-for-byte at a separate destination, the timer firing on its own, pruning that deletes the oldest and never the newest, a broken destination surfacing as an alert delivered off the host while deleting nothing — and a second run that changes nothing. Runs `scripts/check_backups.sh` |
 | `cli` | `opsctl`'s own TypeScript type-checks and lints clean, its unit tests pass, and it installs from an npm `bin` entry (`npm link`) under a name that does not depend on `project_slug`. Then, against a throwaway host: `config` reports the placeholder host and missing vault before either exists; `provision` really runs `ansible/provision.yml` (and a second run changes nothing); `deploy` and `migrate` are refused by the real playbook's own checks (no vault, then an unknown target, then a nonsense platform that proves `migrate` builds only the migrator image); `preflight` fails on an unreachable host — the one thing `deploy.yml --tags preflight` cannot check itself — then passes once the host is reachable; `secrets edit` round-trips a change through a real `ansible-vault edit`; `backup` takes a real dump that reaches a stand-in destination; `status` and `logs` reflect a real Postgres and Redis, authenticating through nothing but a temporary block in the runner's own `~/.ssh/config`; `shell` opens a real interactive `exec` session, allocated a pty the way a terminal would; and `restore` explains itself rather than looking unknown. Runs `scripts/check_cli.sh` |
 

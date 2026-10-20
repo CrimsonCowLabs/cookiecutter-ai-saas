@@ -14,12 +14,18 @@
 #   * one command deploys        — the run below is the whole procedure
 #   * secrets encrypted at rest  — an unencrypted vault is refused; the
 #                                  password never appears in the working tree;
-#                                  .env-production exists only on the host, 0600
+#                                  the env files exist only on the host, 0600
+#   * each container holds only  — app, worker, db-writer and ops each have an
+#     its own secrets              env file of their own; the running worker's
+#                                  environment has no Stripe, NextAuth, OAuth or
+#                                  database secret in it, and no app container
+#                                  has the superuser's or the owner's password
 #   * the DNS pre-flight aborts  — against a name resolving elsewhere, and
 #                                  proceeds against one resolving here
 #   * migrations run             — asserted against the database afterwards
-#   * the app is not a superuser — app, worker and db-writer connect as the app
-#                                  role, which is no superuser and is refused
+#   * the app is not a superuser — app and db-writer connect as the app role
+#                                  (the worker does not connect at all), which
+#                                  is no superuser and is refused
 #                                  COPY TO PROGRAM, COPY to a file, CREATE ROLE,
 #                                  CREATE DATABASE and DDL, yet can use every
 #                                  table, one created after the deploy included;
@@ -330,33 +336,112 @@ for secret in "${DB_SECRETS[@]}" "$AUTH_SECRET"; do
   fi
 done
 
-# ── Criterion: the env file, on the host and nowhere else ────────────────────
-env_stat="$(th_ssh "$DEPLOY_USER" "stat -c '%U %a' $APP_DIR/.env-production")"
-[[ "$env_stat" == "$DEPLOY_USER 600" ]] \
-  || fail ".env-production is '$env_stat', expected '$DEPLOY_USER 600'"
-env_body="$(th_ssh "$DEPLOY_USER" "cat $APP_DIR/.env-production")"
-grep -qxF "NEXTAUTH_SECRET=$AUTH_SECRET" <<<"$env_body" \
-  || fail "the vault's NEXTAUTH_SECRET did not reach .env-production"
-grep -qxF "POSTGRES_PASSWORD=$PG_PASSWORD" <<<"$env_body" \
+# ── Criterion: the env files, on the host and nowhere else ───────────────────
+# One for compose to interpolate, one per service, and the migrator's. Every one
+# 0600 and the deploy account's: they are where the vault's values are at rest.
+ENV_FILES=(.env-production .env-app .env-worker .env-db-writer .env-ops .env-migrations)
+for file in "${ENV_FILES[@]}"; do
+  env_stat="$(th_ssh "$DEPLOY_USER" "stat -c '%U %a' $APP_DIR/$file")"
+  [[ "$env_stat" == "$DEPLOY_USER 600" ]] \
+    || fail "$file is '$env_stat', expected '$DEPLOY_USER 600'"
+done
+env_body() { th_ssh "$DEPLOY_USER" "cat $APP_DIR/$1"; }
+APP_DB_URL="postgresql://$APP_ROLE:$APP_PASSWORD_ENCODED@postgres:5432/$DB_NAME"
+
+# The compose file's own variables: the superuser, for the postgres service, and
+# nothing a container is handed.
+prod_body="$(env_body .env-production)"
+grep -qxF "POSTGRES_PASSWORD=$PG_PASSWORD" <<<"$prod_body" \
   || fail "the vault's POSTGRES_PASSWORD did not reach .env-production"
-grep -qxF "DATABASE_URL=postgresql://$APP_ROLE:$APP_PASSWORD_ENCODED@postgres:5432/$DB_NAME" <<<"$env_body" \
-  || fail "DATABASE_URL is not the app role's, built from the vault's app password, url-encoded: $(grep '^DATABASE_URL' <<<"$env_body" | sed 's/:[^:@]*@/:REDACTED@/')"
-# The owner's password is the one thing that must not be in here: compose hands
-# this file to every service, so anything in it is in the app's environment.
-if grep -qF -e "$OWNER_PASSWORD" -e "$OWNER_PASSWORD_ENCODED" <<<"$env_body"; then
-  fail "the schema owner's password is in .env-production, where the app can read it"
+if grep -E '^(DATABASE_URL|NEXTAUTH_[A-Z_]*|STRIPE_[A-Z_]*|REDIS_URL)=' <<<"$prod_body"; then
+  fail ".env-production carries a service's settings; it should hold only what compose interpolates"
 fi
-pass ".env-production is on the host, 0600, owned by $DEPLOY_USER, rendered from the vault, with the app role's DATABASE_URL and not the owner's password"
+
+app_body="$(env_body .env-app)"
+grep -qxF "NEXTAUTH_SECRET=$AUTH_SECRET" <<<"$app_body" \
+  || fail "the vault's NEXTAUTH_SECRET did not reach .env-app"
+for file in .env-app .env-db-writer .env-ops; do
+  body="$(env_body "$file")"
+  grep -qxF "DATABASE_URL=$APP_DB_URL" <<<"$body" \
+    || fail "DATABASE_URL in $file is not the app role's, built from the vault's app password, url-encoded: $(grep '^DATABASE_URL' <<<"$body" | sed 's/:[^:@]*@/:REDACTED@/')"
+done
+
+# The worker's file: the queue, the model and tracing. None of the account's
+# keys, and no database connection at all.
+worker_body="$(env_body .env-worker)"
+grep -qxF "REDIS_URL=redis://redis:6379" <<<"$worker_body" \
+  || fail ".env-worker has no REDIS_URL, so the worker cannot reach its queue"
+if grep -E '^(STRIPE_|NEXTAUTH_|AUTH_|GOOGLE_|MICROSOFT_ENTRA_ID_|RESEND_|POSTGRES_|DATABASE_URL=)' <<<"$worker_body" | sed 's/=.*/=REDACTED/'; then
+  fail ".env-worker carries the secrets above, which the worker never reads"
+fi
+
+# The owner's password must be in none of these: anything in a service's file
+# is in that service's environment, and .env-production is passed to every
+# compose command.
+for file in .env-production .env-app .env-worker .env-db-writer .env-ops; do
+  if env_body "$file" | grep -qF -e "$OWNER_PASSWORD" -e "$OWNER_PASSWORD_ENCODED"; then
+    fail "the schema owner's password is in $file"
+  fi
+done
+pass "the env files are on the host, 0600, owned by $DEPLOY_USER, rendered from the vault: the app role's DATABASE_URL for app, db-writer and ops, none for the worker, the owner's password in none of them"
 
 # The owner's connection lives in a file of its own, for the migrator alone.
-mig_stat="$(th_ssh "$DEPLOY_USER" "stat -c '%U %a' $APP_DIR/.env-migrations")"
-[[ "$mig_stat" == "$DEPLOY_USER 600" ]] \
-  || fail ".env-migrations is '$mig_stat', expected '$DEPLOY_USER 600'"
-mig_body="$(th_ssh "$DEPLOY_USER" "cat $APP_DIR/.env-migrations")"
+mig_body="$(env_body .env-migrations)"
 OWNER_URL="postgresql://$OWNER_ROLE:$OWNER_PASSWORD_ENCODED@postgres:5432/$DB_NAME"
 [[ "$(grep -v -e '^#' -e '^$' <<<"$mig_body")" == "DATABASE_URL=$OWNER_URL" ]] \
   || fail ".env-migrations should hold the owner's DATABASE_URL and nothing else; it has: $(grep -v '^#' <<<"$mig_body" | sed 's/:[^:@]*@/:REDACTED@/')"
 pass ".env-migrations is on the host, 0600, owned by $DEPLOY_USER, holding the owner's DATABASE_URL and nothing else"
+
+# ── Criterion: each container holds only its own secrets ─────────────────────
+# What the files say is only half of it; the other half is what compose
+# actually handed each running container, read back from Docker. The worker is
+# the one that matters most — it runs a model's tool calls against URLs users
+# supply — and its environment must have none of the account's secrets in it,
+# by name or by value: not the session secret, not the Stripe webhook secret,
+# and no database password at all.
+#
+# The environment is read into a variable and refused when empty, before
+# anything is looked for in it: an inspect that failed prints nothing, and
+# nothing has no secret in it either.
+container_env() {
+  th_exec "docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' ${SLUG}-$1-1" | tr -d '\r'
+}
+worker_env="$(container_env worker)" || fail "could not read the running worker's environment"
+[[ -n $worker_env ]] || fail "the running worker's environment came back empty"
+grep -q '^REDIS_URL=' <<<"$worker_env" || fail "the running worker has no REDIS_URL"
+grep -q '^LLM_PROVIDER=' <<<"$worker_env" || fail "the running worker has no LLM_PROVIDER"
+if grep -E '^(STRIPE_|NEXTAUTH_|AUTH_|GOOGLE_|MICROSOFT_ENTRA_ID_|RESEND_|POSTGRES_|DATABASE_URL=)' <<<"$worker_env" | sed 's/=.*/=REDACTED/'; then
+  fail "the running worker's environment has the variables above, which it never reads"
+fi
+for secret in "$AUTH_SECRET" "$WEBHOOK_SECRET" "${DB_SECRETS[@]}"; do
+  if grep -qF "$secret" <<<"$worker_env"; then
+    fail "a secret the worker never reads is in its running environment"
+  fi
+done
+# db-writer reads two connections, and the app's keys are not among them.
+writer_env="$(container_env db-writer)" || fail "could not read the running db-writer's environment"
+[[ -n $writer_env ]] || fail "the running db-writer's environment came back empty"
+for secret in "$AUTH_SECRET" "$WEBHOOK_SECRET" "$PG_PASSWORD" "$OWNER_PASSWORD"; do
+  if grep -qF "$secret" <<<"$writer_env"; then
+    fail "a secret db-writer never reads is in its running environment"
+  fi
+done
+# And the superuser's and owner's passwords are in no container but Postgres's.
+for service in app worker db-writer caddy; do
+  env_now="$(container_env "$service")" || fail "could not read the running $service's environment"
+  [[ -n $env_now ]] || fail "the running $service's environment came back empty"
+  if grep -qF -e "$PG_PASSWORD" -e "$PG_PASSWORD_ENCODED" -e "$OWNER_PASSWORD" -e "$OWNER_PASSWORD_ENCODED" <<<"$env_now"; then
+    fail "the superuser's or the schema owner's password is in the running $service's environment"
+  fi
+done
+# ops is not running, so what it would be handed is read from compose itself,
+# resolved exactly as `docker compose run ops` would be.
+ops_env="$(th_ssh "$DEPLOY_USER" "cd $APP_DIR && docker compose -p $SLUG -f docker-compose.prod.yml --env-file .env-production --profile tools config --format json ops" \
+  | python3 -c 'import json, sys; print("\n".join(sorted((json.load(sys.stdin)["services"]["ops"].get("environment") or {}).keys())))')" \
+  || fail "could not resolve the ops service's environment"
+[[ "$ops_env" == "DATABASE_URL" ]] \
+  || fail "ops would be handed $(tr '\n' ' ' <<<"$ops_env"), expected DATABASE_URL alone"
+pass "each container holds only its own settings: the worker no Stripe, NextAuth, OAuth or database secret, db-writer none of the app's keys, ops the app role's DATABASE_URL alone, and no container but Postgres the superuser's or the owner's password"
 
 # The playbook writes no plaintext secret back into the working tree.
 for secret in "${DB_SECRETS[@]}"; do
@@ -375,10 +460,10 @@ pass "deploying left no plaintext secret in the project"
 # without --diff nothing is printed either way and the check would be vacuous.
 #
 # The same run exercises the other half of what the old shell script's `env`
-# mode did: deploy_targets=none re-renders .env-production and restarts,
+# mode did: deploy_targets=none re-renders the env files and restarts,
 # shipping no image at all.
-echo "==> Re-rendering the env file on its own, asking for the diff"
-th_ssh "$DEPLOY_USER" "rm -f $APP_DIR/.env-production $APP_DIR/.env-migrations"
+echo "==> Re-rendering the env files on their own, asking for the diff"
+th_ssh "$DEPLOY_USER" "cd $APP_DIR && rm -f ${ENV_FILES[*]}"
 deploy -e deploy_targets=none -e site_address=https://localhost --diff \
   > "$TH_WORK/deploy-env.log" 2>&1 \
   || fail "the env-only deploy failed: $(tail -20 "$TH_WORK/deploy-env.log")"
@@ -386,17 +471,19 @@ grep -q 'Render .env-production on the host' "$TH_WORK/deploy-env.log" \
   || fail "the env-only deploy did not render the env file at all"
 grep -q 'Render .env-migrations on the host' "$TH_WORK/deploy-env.log" \
   || fail "the env-only deploy did not render the migrations env file at all"
-for secret in "${DB_SECRETS[@]}" "$AUTH_SECRET"; do
+grep -q "Render each service's env file on the host" "$TH_WORK/deploy-env.log" \
+  || fail "the env-only deploy did not render the services' env files at all"
+for secret in "${DB_SECRETS[@]}" "$AUTH_SECRET" "$WEBHOOK_SECRET"; do
   if grep -qF "$secret" "$TH_WORK/deploy-env.log"; then
-    fail "the deploy printed a secret from .env-production (a no_log is missing)"
+    fail "the deploy printed a secret from an env file (a no_log is missing)"
   fi
 done
-for file in .env-production .env-migrations; do
+for file in "${ENV_FILES[@]}"; do
   env_stat="$(th_ssh "$DEPLOY_USER" "stat -c '%U %a' $APP_DIR/$file")"
   [[ "$env_stat" == "$DEPLOY_USER 600" ]] \
     || fail "the re-rendered $file is '$env_stat', expected '$DEPLOY_USER 600'"
 done
-pass "an env-only deploy re-renders the file, ships no image, and prints no secret even under --diff"
+pass "an env-only deploy re-renders the files, ships no image, and prints no secret even under --diff"
 
 # ── Criterion: migrations ran, against a real database ───────────────────────
 # `|| true` so that a query which fails — because the table the migrations
@@ -450,9 +537,12 @@ refused() {
 assert_roles() {
   local when="$1" service url user flags out
 
-  # app, worker and db-writer each run on the app role's URL, read from the
-  # running container rather than the file it came from.
-  for service in app worker db-writer; do
+  # app and db-writer each run on the app role's URL, read from the running
+  # container rather than the file it came from. The worker has none: it
+  # never connects to the database.
+  [[ -z "$(container_db_url worker)" ]] \
+    || fail "$when: the running worker container has a DATABASE_URL, which it never reads"
+  for service in app db-writer; do
     url="$(container_db_url "$service")"
     [[ -n $url ]] || fail "$when: the running $service container has no DATABASE_URL"
     user="$(url_user "$url")"
@@ -503,7 +593,7 @@ assert_roles() {
 }
 
 assert_roles "after the first deploy"
-pass "app, worker and db-writer connect as $APP_ROLE, which is no superuser and is refused COPY TO PROGRAM, COPY to a file, CREATE ROLE, CREATE DATABASE and CREATE TABLE, yet can read and write every table; the migrations ran as $OWNER_ROLE, which owns every table"
+pass "app and db-writer connect as $APP_ROLE (the worker not at all), which is no superuser and is refused COPY TO PROGRAM, COPY to a file, CREATE ROLE, CREATE DATABASE and CREATE TABLE, yet can read and write every table; the migrations ran as $OWNER_ROLE, which owns every table"
 
 # Default privileges, which is what makes "usable by the app role" true of a
 # table no deploy has granted anything on: one the owner creates now, as a
@@ -1005,17 +1095,20 @@ th_exec "rm -f $DUMP"
 
 # ── Criterion: a host deployed before the roles existed upgrades cleanly ─────
 # Last, because it takes the database apart. The host is put back the way every
-# deploy left it before the app had a role of its own: the app, worker and
-# db-writer on the superuser's DATABASE_URL, no .env-migrations, the database
+# deploy left it before the app had a role of its own: the app and db-writer
+# on the superuser's DATABASE_URL, no .env-migrations, the database
 # and every table in it owned by postgres, and neither role there. Serving, as
 # such a host was. Then the operator's whole upgrade, as docs/deployment.md
 # gives it: a deploy with the old vault is refused, naming the two passwords to
 # add; with them added it deploys, and nothing is done in the database by hand.
 echo "==> Putting the host back the way deploys left it before the roles existed"
-th_exec "sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:$PG_PASSWORD_ENCODED@postgres:5432/$DB_NAME|' $APP_DIR/.env-production
-  rm -f $APP_DIR/.env-migrations" \
-  || fail "could not put the superuser's DATABASE_URL back in .env-production"
-compose_on_host "up -d app worker db-writer" > "$TH_WORK/downgrade.log" 2>&1 \
+# Such a host had one .env-production for every service; the services' own
+# files, with the superuser's URL in each that carries one, stand in for it,
+# since what is being upgraded is the database, not the file layout.
+th_exec "cd $APP_DIR && sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:$PG_PASSWORD_ENCODED@postgres:5432/$DB_NAME|' .env-app .env-db-writer .env-ops
+  rm -f .env-migrations" \
+  || fail "could not put the superuser's DATABASE_URL back in the services' env files"
+compose_on_host "up -d app db-writer" > "$TH_WORK/downgrade.log" 2>&1 \
   || fail "could not restart the stack on the superuser's DATABASE_URL: $(tail -20 "$TH_WORK/downgrade.log")"
 # REASSIGN OWNED moves the database, the schemas and every table and sequence
 # back to the superuser; DROP OWNED then takes away every grant and default

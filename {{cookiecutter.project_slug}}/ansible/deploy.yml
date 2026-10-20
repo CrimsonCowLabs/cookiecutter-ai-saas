@@ -15,10 +15,11 @@
 #      is encrypted, and the name the certificate will be for resolves to the
 #      host being deployed to.
 #   2. Build the images locally and name the release after them.
-#   3. Ship the compose file, the Caddyfile and a freshly rendered
-#      .env-production, then load the new images under their release tag. None
-#      of this touches what is serving: the running containers hold their own
-#      images and their own copy of the env file.
+#   3. Ship the compose file, the Caddyfile and freshly rendered env files —
+#      one per service, each holding only what that service reads — then load
+#      the new images under their release tag. None of this touches what is
+#      serving: the running containers hold their own images and the
+#      environment they were started with.
 #   4. Start Postgres and Redis if they are not already up, bring the database
 #      roles up to date (the schema owner and the app's least-privilege role),
 #      and run the migrations from this release's migrator image, as the
@@ -33,17 +34,19 @@
 #     -e deploy_targets=app                 # just the app image
 #     -e deploy_targets=worker,db-writer    # two of them
 #     -e deploy_targets=caddy               # the proxy's own image
-#     -e deploy_targets=none                # re-render .env-production and restart
+#     -e deploy_targets=none                # re-render the env files and restart
 #     --tags preflight                      # check the vault and DNS, deploy nothing
 #
 # Three things this deliberately does not claim:
 #
 #   * ansible-vault decrypts on the *control machine*, in memory, and the
-#     rendered .env-production lands on the host — beside .env-migrations,
-#     which holds the schema owner's connection and nothing else. So nothing is
-#     at rest in plaintext anywhere except those two files, mode 0600, owned by
-#     the deploy user. The control machine still sees the secrets while it
-#     runs; it has to, because it is the thing holding the password.
+#     rendered env files land on the host: .env-production (what compose
+#     interpolates), one .env-<service> per service holding what that service
+#     reads, and .env-migrations, which holds the schema owner's connection and
+#     nothing else. So nothing is at rest in plaintext anywhere except those
+#     files, mode 0600, owned by the deploy user. The control machine still
+#     sees the secrets while it runs; it has to, because it is the thing
+#     holding the password.
 #   * The switch is `docker compose up -d`, which stops a container before it
 #     starts its replacement. A release that cannot start therefore costs the
 #     seconds between the recreate and the rollback, not zero. What is
@@ -297,12 +300,36 @@
     # derived from whatever directory compose was invoked in.
     compose_project: "{{ project_slug }}"
     compose_file: docker-compose.prod.yml
+    # The compose file's own variables (the postgres superuser, Caddy's
+    # settings), passed as --env-file to every `docker compose` command here.
+    # No container is handed it: see ansible/templates/env-production.j2.
     env_file: "{{ app_dir }}/.env-production"
-    # The schema owner's DATABASE_URL, for the migrator alone. A file of its own
-    # because compose hands .env-production, whole, to every service: the
-    # owner's password in there would be in the app's environment too, which is
-    # exactly what the app role exists to keep it out of.
+    # The schema owner's DATABASE_URL, for the migrator alone, and the whole of
+    # its environment. The owner's password in any service's file would be in
+    # that service's environment, which is exactly what the app role exists to
+    # keep it out of.
     migrations_env_file: "{{ app_dir }}/.env-migrations"
+    # The services that are each handed an env file of their own:
+    # ansible/templates/env-<service>.j2, rendered to .env-<service> beside the
+    # compose file, which names it as that service's env_file. One file per
+    # service, rather than one file for all of them, because a container holds
+    # whatever its env file says whether its code reads it or not, and the
+    # worker — which runs a model's tool calls against URLs users supply — has
+    # no use for the Stripe key, the session secret or the database password.
+    # tests/deploy/service-env.test.mjs holds this list to the compose file,
+    # and each template to the code that runs in its container.
+    service_env_files: [app, worker, db-writer, ops]
+    # Values more than one of those files carries, written once. The app
+    # role's connection: postgres:5432 is the compose service, not a published
+    # port, so only the stack's own network reaches it. The password is
+    # url-encoded, because a generated one may contain characters a URL would
+    # otherwise read as structure. The `replace` is not belt and braces:
+    # Jinja's urlencode keeps `/` unescaped, which is fine in a path and fatal
+    # in the userinfo — a password with a slash in it silently truncates the
+    # host, and what you get is a connection failure a long way from here.
+    app_database_url: >-
+      postgresql://{{ postgres_app_user }}:{{ vault_postgres_app_password | urlencode | replace('/', '%2F') }}@postgres:5432/{{ postgres_db }}
+    redis_url: redis://redis:6379
 
     # How each image is built. This mirrors the Dockerfiles rather than being a
     # decision anybody tunes per host, which is why it is here and not in
@@ -337,7 +364,7 @@
         context: caddy
 
     # What the operator asked to ship. `none` and an empty value both mean "no
-    # images", which is how .env-production is re-rendered on its own.
+    # images", which is how the env files are re-rendered on their own.
     deploy_requested: >-
       {{ deploy_targets | split(',') | map('trim') | difference(['', 'none']) | sort }}
 
@@ -547,15 +574,20 @@
     - name: Render .env-production on the host
       # The secrets are decrypted on the control machine and written straight
       # to their destination: 0600, owned by the account compose runs as. This
-      # file is the one place any of them exists in plaintext.
+      # file and the ones below are the one place any of them exists in
+      # plaintext.
       #
-      # no_log because a template task reports its diff, and the diff of this
-      # file is every secret in the project.
+      # This one is what compose interpolates into the compose file — the
+      # postgres superuser and Caddy's settings — and no container's env_file.
+      #
+      # no_log because a template task reports its diff, and the diff of these
+      # files is every secret in the project.
       #
       # Writing it before the switch is safe: `template` replaces the file by
       # renaming a new one over it, so the containers currently running keep
-      # the copy they already read. They see this one when they are recreated,
-      # which happens below, after the migrations have passed.
+      # the environment they were started with. They see the new values when
+      # they are recreated, which happens below, after the migrations have
+      # passed.
       ansible.builtin.template:
         src: env-production.j2
         dest: "{{ env_file }}"
@@ -563,10 +595,24 @@
         mode: "0600"
       no_log: true
 
+    - name: Render each service's env file on the host
+      # .env-app, .env-worker, .env-db-writer and .env-ops, each holding what
+      # that service's code reads and nothing more (see service_env_files
+      # above). Same mode, owner and no_log as the file above, for the same
+      # reasons: no_log on a loop also keeps each item's result, and so its
+      # diff, out of the output.
+      ansible.builtin.template:
+        src: "env-{{ item }}.j2"
+        dest: "{{ app_dir }}/.env-{{ item }}"
+        owner: "{{ deploy_user }}"
+        mode: "0600"
+      loop: "{{ service_env_files }}"
+      no_log: true
+
     - name: Render .env-migrations on the host
-      # The schema owner's DATABASE_URL, which the migrator reads after
-      # .env-production and nothing else reads at all. Same mode, owner and
-      # no_log as the file above, for the same reasons.
+      # The schema owner's DATABASE_URL, which the migrator reads and nothing
+      # else reads at all. Same mode, owner and no_log as the files above, for
+      # the same reasons.
       #
       # Rendered on every deploy, migrations or not, rather than created for the
       # migrator and removed after it: a file that came and went would make an
@@ -768,8 +814,8 @@
       #     to the owner first, so the very next migration can alter them. That
       #     is the whole upgrade, and it happens on whatever deploy comes next —
       #     `-e deploy_targets=none` included.
-      #   * `deploy_targets=none`, which re-renders .env-production and restarts:
-      #     the DATABASE_URL it renders names the app role, so the role has to
+      #   * `deploy_targets=none`, which re-renders the env files and restarts:
+      #     the DATABASE_URL they render names the app role, so the role has to
       #     exist, with the vault's password, before anything restarts on it.
       #   * A password changed in the vault. The roles take the new one here, and
       #     the containers recreated below come up with it in their env file.
@@ -828,11 +874,12 @@
       # release's code expects. It runs before the switch, so a migration that
       # fails stops the play with the previous release still serving.
       #
-      # As the schema owner: .env-migrations comes after .env-production, and
-      # of two --env-file values for one name the later wins, so DATABASE_URL is
-      # the owner's while everything else is the app's own configuration. What
-      # the migrations create is the owner's, and the app role reaches it
-      # through the default privileges the role bootstrap above set up.
+      # As the schema owner: .env-migrations is the migrator's whole
+      # environment, and its DATABASE_URL is the owner's. drizzle.config.ts
+      # reads nothing else, so nothing else is handed over — not the app's
+      # keys, and not the superuser's password in .env-production. What the
+      # migrations create is the owner's, and the app role reaches it through
+      # the default privileges the role bootstrap above set up.
       #
       # changed_when: false because the thing that changes is the schema, and
       # drizzle records what it applied; re-running against a schema that is
@@ -849,8 +896,6 @@
           - docker
           - run
           - --rm
-          - --env-file
-          - "{{ env_file }}"
           - --env-file
           - "{{ migrations_env_file }}"
           - --network
@@ -982,14 +1027,23 @@
           # Only files this deploy actually replaced have a backup, so a deploy
           # that changed neither restores neither.
           #
-          # .env-production and .env-migrations are deliberately not in this
-          # list. They are rendered from the vault and group_vars — the
-          # operator's current values, not this release's content — so a value
-          # they deliberately changed is theirs to keep, and restoring it would
-          # only be undone by the next deploy. The database roles they name were
+          # The env files (.env-production, each service's, .env-migrations)
+          # are deliberately not in this list. They are rendered from the vault
+          # and group_vars — the operator's current values, not this release's
+          # content — so a value they deliberately changed is theirs to keep,
+          # and restoring it would only be undone by the next deploy. The database roles they name were
           # brought up to date before the switch, so the previous release comes
           # back up connecting as the app role with the vault's password, like
           # the one that failed. What rolls back here is release content.
+          #
+          # One exception follows from that: a previous release whose compose
+          # file still handed .env-production to every service — from before
+          # each service had a file of its own — comes back on a
+          # .env-production that now holds only the compose file's own
+          # variables, so its app has no secret, no database and no queue to
+          # start with. Only the first deploy after that change can roll back
+          # onto such a release; if that one fails, fix forward rather than
+          # relying on the rollback.
           ansible.builtin.copy:
             src: "{{ item.backup_file }}"
             dest: "{{ item.dest }}"
@@ -1069,6 +1123,6 @@
           - "Deployed release {{ deploy_release | default('(no image shipped)') }}
              to {{ deploy_target_host }}."
           - "{{ deploy_shipped | join(', ') if deploy_shipped | length > 0
-                else 'No image shipped; .env-production was re-rendered and the stack restarted.' }}"
+                else 'No image shipped; the env files were re-rendered and the stack restarted.' }}"
           - "Serving https://{{ deploy_site_name }} — the certificate is Caddy's
              to obtain, and its first attempt happens as it starts."

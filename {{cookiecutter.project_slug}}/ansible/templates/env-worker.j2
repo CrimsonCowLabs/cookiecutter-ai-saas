@@ -1,0 +1,55 @@
+# .env-worker for __PROJECT_NAME__, rendered on the host by ansible/deploy.yml
+# and handed to the Python worker alone (docker-compose.prod.yml's env_file).
+# Edits here are overwritten by the next deploy.
+#
+# The worker is the container most exposed to its input: it runs a model's tool
+# calls against URLs users supply, so a prompt injection or a bug in a fetcher
+# runs with whatever is in this environment. What is here is what it reads
+# (workers/app/settings.py and worker.py) and nothing else: the queue, the
+# model provider and its key, and tracing. No Stripe key, no NEXTAUTH_SECRET
+# (which would forge anybody's session), no OAuth client secret, and no
+# DATABASE_URL — the worker never connects to Postgres; it hands its results
+# back over the queue, and db-writer writes them.
+# tests/deploy/service-env.test.mjs fails if any of those, or anything else the
+# worker's code does not read, turns up here.
+
+# ─── Queue ────────────────────────────────────────────
+REDIS_URL={{ redis_url }}
+
+# ─── LLM Provider ──────────────────────────────────
+# Only the provider answered at generation time is rendered here, matching the
+# vault, which carries only that provider's key. The model names and base URLs
+# are not secrets and not per-host, which is why they are written here rather
+# than in group_vars.
+LLM_PROVIDER=__LLM_PROVIDER__
+# cc:begin llm-ollama
+
+OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_MODEL=llama3.2
+OLLAMA_API_KEY={{ vault_ollama_api_key | default('') }}
+# cc:end llm-ollama
+# cc:begin llm-openai
+
+OPENAI_API_KEY={{ vault_openai_api_key | default('') }}
+# cc:end llm-openai
+# cc:begin llm-anthropic
+
+ANTHROPIC_API_KEY={{ vault_anthropic_api_key | default('') }}
+# cc:end llm-anthropic
+# cc:begin llm-openrouter
+
+OPENROUTER_API_KEY={{ vault_openrouter_api_key | default('') }}
+OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+# cc:end llm-openrouter
+
+# ─── AI step agent ────────────────────────────────────
+RESEARCH_MAX_TOOL_CALLS=8
+
+# ─── Tracing (LangSmith, optional) ───────────────────
+# Turning this on sends your users' prompts and the model's completions to the
+# collector below. An empty key keeps it off whatever this says.
+LANGSMITH_TRACING=false
+LANGSMITH_API_KEY={{ vault_langsmith_api_key | default('') }}
+LANGSMITH_ENDPOINT=
+LANGSMITH_PROJECT=__PROJECT_SLUG__

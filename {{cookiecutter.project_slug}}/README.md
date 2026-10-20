@@ -329,8 +329,8 @@ That is the whole thing: it builds the images locally, ships them, runs the
 migrations and switches the stack over. The host comes from
 `ansible/inventory.ini` — the same one provisioning uses — so there is no
 address to fill in anywhere, and the production secrets come from
-`ansible/vault.yml`, which is committed encrypted, so there is no
-`.env-production` to copy by hand.
+`ansible/vault.yml`, which is committed encrypted, so there is no env file to
+copy by hand.
 
 Before the first deploy, set the secrets up once:
 
@@ -378,9 +378,10 @@ serving: everything that can fail happens before anything changes what serves.
 2. **Build**, on your machine, not the server — the server never needs the
    source, and a small VPS running the database should not also run
    `next build`.
-3. **Ship** the compose file, the `Caddyfile`, a freshly rendered
-   `.env-production` (mode `0600`, owned by `__DEPLOY_USER__`) and the new
-   images, tagged with the release rather than only `:latest`. None of this
+3. **Ship** the compose file, the `Caddyfile`, freshly rendered env files —
+   one per service, each holding only what that service reads (see
+   [Which secret goes where](#which-secret-goes-where)), mode `0600`, owned by
+   `__DEPLOY_USER__` — and the new images, tagged with the release rather than only `:latest`. None of this
    touches the running containers.
 4. **Migrate**, using this release's migrator image, with Postgres up and the
    app not yet switched. First the database roles are created or brought up to
@@ -399,9 +400,10 @@ on the host records which release is serving.
 Four honest limits:
 
 - **`ansible-vault` decrypts on *your* machine**, and the rendered env files
-  land on the host. So nothing is at rest in plaintext anywhere except those two
-  `0600` files (`.env-production`, and `.env-migrations` for the migrator) — but
-  the machine running the deploy does see the values.
+  land on the host. So nothing is at rest in plaintext anywhere except those
+  `0600` files (`.env-production`, one `.env-<service>` per service, and
+  `.env-migrations` for the migrator) — but the machine running the deploy
+  does see the values.
 - **The switch is `docker compose up -d`**, which stops a container before
   starting its replacement. A broken release costs the seconds until the
   rollback, not zero.
@@ -410,9 +412,45 @@ Four honest limits:
   `ansible-playbook` between the tag move and the health check leaves the new
   release serving and nothing rolled back. Re-running the previous release's
   deploy is the way back from that.
-- **`.env-production` does not roll back.** It is rendered from the vault and
+- **The env files do not roll back.** They are rendered from the vault and
   `group_vars` — your current values, not the release's content — so a value you
   changed deliberately stays changed. Only release content rolls back.
+
+### Which secret goes where
+
+Each container is handed only what its own code reads, from an env file of its
+own, so that a compromise of one service gives away that service's secrets
+rather than the account's. The worker matters most: it runs a model's tool
+calls against URLs users supply, so it holds no Stripe key, no
+`NEXTAUTH_SECRET` (which would forge anybody's session), no OAuth secret and no
+database password — it never connects to Postgres, and hands its results to
+db-writer over the queue.
+
+| File on the host | Template | Handed to | What is in it |
+|------------------|----------|-----------|---------------|
+| `.env-app` | `ansible/templates/env-app.j2` | `app` | `NEXTAUTH_URL`, `NEXTAUTH_SECRET`
+{%- if cookiecutter.auth_providers != "microsoft_only" %}, `GOOGLE_ID`, `GOOGLE_SECRET`{% endif %}
+{%- if cookiecutter.auth_providers != "google_only" %}, `MICROSOFT_ENTRA_ID_ID`, `MICROSOFT_ENTRA_ID_SECRET`, `MICROSOFT_ENTRA_ID_TENANT_ID`{% endif %}, `DATABASE_URL` (the app role's), `REDIS_URL`
+{%- if cookiecutter.include_stripe == "yes" %}, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`{% endif %}
+{%- if cookiecutter.include_stripe == "yes" or cookiecutter.include_marketing_extras == "yes" or cookiecutter.include_magic_link == "yes" %}, `RESEND_API_KEY`{% endif %}
+{%- if cookiecutter.analytics == "posthog" %}, `POSTHOG_KEY`, `POSTHOG_HOST`, `POSTHOG_ASSETS_HOST`{% endif %}, `FEATURE_EMAIL_NOTIFICATIONS` |
+| `.env-worker` | `ansible/templates/env-worker.j2` | `worker` | `REDIS_URL`, `LLM_PROVIDER`
+{%- if cookiecutter.llm_provider == "ollama" %}, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY`
+{%- elif cookiecutter.llm_provider == "openai" %}, `OPENAI_API_KEY`
+{%- elif cookiecutter.llm_provider == "anthropic" %}, `ANTHROPIC_API_KEY`
+{%- elif cookiecutter.llm_provider == "openrouter" %}, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_BASE_URL`{% endif %}, `RESEARCH_MAX_TOOL_CALLS`, `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_ENDPOINT`, `LANGSMITH_PROJECT` |
+| `.env-db-writer` | `ansible/templates/env-db-writer.j2` | `db-writer` | `DATABASE_URL` (the app role's), `REDIS_URL` |
+| `.env-ops` | `ansible/templates/env-ops.j2` | `docker compose run ops` | `DATABASE_URL` (the app role's) |
+| `.env-migrations` | `ansible/templates/env-migrations.j2` | the migrator, and nothing else | `DATABASE_URL` (the schema owner's) |
+| `.env-production` | `ansible/templates/env-production.j2` | no container: it is compose's `--env-file`, interpolated into the compose file | `POSTGRES_USER`, `POSTGRES_PASSWORD` (the superuser's, for `postgres`), and `SITE_ADDRESS` and whichever `CADDY_*_RATE_LIMIT_*` are set (for `caddy`) |
+
+A setting you add to the code goes into the template of the service that reads
+it, and nowhere else. `npm run test:service-env`
+(`tests/deploy/service-env.test.mjs`) fails when a service's file sets a name
+its code does not read, when a service reads a name the deploy renders only
+for another, or when a compose service is handed any file but its own. A
+one-off `docker compose run ops ...` that needs one of the app's keys is given
+it for that run with `-e NAME=...`.
 
 ### The database roles
 
@@ -428,8 +466,8 @@ inherits whatever its connection can do. So there are three roles:
   owner. The migrations run as it, through `.env-migrations`, a second env file
   that only the migrator reads. It owns the database and every table.
 - **`{{ cookiecutter.project_slug | replace('-', '_') }}_app`**, which app,
-  worker, db-writer and `docker compose run ops` connect as, through
-  `DATABASE_URL` in `.env-production`. It reads and writes rows and does
+  db-writer and `docker compose run ops` connect as, through `DATABASE_URL` in
+  their own env files (the worker never connects to the database). It reads and writes rows and does
   nothing else: no DDL, no roles, no `COPY` to or from programs or files.
 
 Each has a password in the vault: `vault_postgres_password`,
@@ -526,8 +564,9 @@ alone.
 
 Bringing the stack up is `ansible/deploy.yml`: `docker-compose.prod.yml` has no
 build context, so the images have to be built and shipped, and `.env-production`
-has to exist next to the compose file or compose aborts — which is why the
-playbook renders it there rather than expecting you to copy one.
+and each service's `.env-<service>` have to exist next to the compose file or
+compose aborts — which is why the playbook renders them there rather than
+expecting you to copy them.
 
 **Point `{{ cookiecutter.domain_name }}`'s A/AAAA record at the host before the
 first deploy.** Issuance is a challenge against that name, so it fails until DNS
@@ -535,8 +574,9 @@ resolves and ports 80 and 443 reach the container. Caddy retries with a backoff,
 so fixing DNS later recovers on its own — but Let's Encrypt rate-limits
 failures, so the record is cheaper to get right first.
 
-Set `NEXTAUTH_URL=https://{{ cookiecutter.domain_name }}` in `.env-production`,
-and register that origin's `/api/auth/callback/...` URLs with your OAuth
+Keep `nextauth_url` in `ansible/group_vars/all.yml` at
+`https://{{ cookiecutter.domain_name }}` (it becomes `NEXTAUTH_URL` in
+`.env-app`), and register that origin's `/api/auth/callback/...` URLs with your OAuth
 providers.
 
 Certificates and the ACME account key live in the `caddydata` volume. Keep it
@@ -587,8 +627,9 @@ Stripe's delivery rate rather than your traffic:
 | `caddy_ingest_rate_limit_events` | requests per window to the analytics proxy (`/ingest`) | `CADDY_INGEST_RATE_LIMIT_EVENTS` |
 | `caddy_ingest_rate_limit_window` | that window | `CADDY_INGEST_RATE_LIMIT_WINDOW` |
 
-A deploy writes the ones you set into `.env-production`, and the compose file
-passes them through to Caddy, so `-e deploy_targets=none` is enough to change
+A deploy writes the ones you set into `.env-production` (the file compose
+interpolates, which no container is handed), and the compose file passes them
+through to Caddy, so `-e deploy_targets=none` is enough to change
 one. Many people can share one address behind an office or carrier NAT, so
 lower the site-wide limit only once the access log has shown you what normal
 looks like.
@@ -923,7 +964,7 @@ ansible/
   inventory.ini         # The host all three playbooks act on
   group_vars/all.yml    # Deploy account, ports, log caps, deploy and backup settings
   vault.yml.example     # Every production secret, to fill in and encrypt
-  templates/            # .env-production and the backup units, rendered on the host
+  templates/            # The env files (one per service) and the backup units, rendered on the host
 Caddyfile               # TLS, HTTP->HTTPS, probe blocking and body caps for {{ cookiecutter.domain_name }}
 caddy/
   Dockerfile            # Caddy built with the rate-limit module (deploy target `caddy`)

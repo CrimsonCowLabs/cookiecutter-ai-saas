@@ -1,0 +1,12 @@
+# .env-ops for __PROJECT_NAME__, rendered on the host by ansible/deploy.yml and
+# handed to `docker compose run ops ...` alone (docker-compose.prod.yml's
+# env_file). Edits here are overwritten by the next deploy.
+#
+# The ops image is for ad hoc work against the database — a drizzle-kit
+# command, a script importing lib/db — as the app role, which is the
+# connection lib/db reads and the only thing here. It is not for migrations:
+# those run in the migrator, as the schema owner, from .env-migrations. And it
+# is not handed the app's keys just because its image carries lib/: a one-off
+# command that needs one can be given it with `-e` for that run.
+# tests/deploy/service-env.test.mjs holds this file to lib/db.
+DATABASE_URL={{ app_database_url }}

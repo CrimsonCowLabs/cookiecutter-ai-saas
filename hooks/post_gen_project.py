@@ -74,7 +74,7 @@ REPLACEMENTS = {
     "__AUTHOR_EMAIL__": AUTHOR_EMAIL,
     # The Linux account provision.yml creates and deploy.yml logs in as.
     "__DEPLOY_USER__": DEPLOY_USER,
-    # The model provider .env-production is rendered with. The Ansible tree
+    # The model provider .env-worker is rendered with. The Ansible tree
     # skips Jinja rendering, so the answer has to arrive as a placeholder.
     "__LLM_PROVIDER__": LLM_PROVIDER,
 }

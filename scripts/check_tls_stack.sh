@@ -14,8 +14,9 @@
 # all exercised against a certificate this script can verify. Only the issuer
 # differs from a real deployment; the ACME path itself is not covered here.
 #
-# This rewrites .env-production and tears down volumes, so it refuses to run
-# against a tree that already has one — point it at a freshly generated project.
+# This writes .env-production and each service's env file and tears down
+# volumes, so it refuses to run against a tree that already has any of them —
+# point it at a freshly generated project.
 set -euo pipefail
 
 PROJECT_DIR="${1:?usage: check_tls_stack.sh <generated-project-dir>}"
@@ -25,6 +26,10 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok: $*"; }
 
 ENV_FILE=.env-production
+# The compose file hands each of these services a file of its own, and compose
+# will not load the file while any is missing — even for a service it is not
+# starting.
+SERVICE_ENV_FILES=(.env-app .env-worker .env-db-writer .env-ops)
 ROOT_CA="$(mktemp)"
 # --env-file is needed by every subcommand, not just `up`: the compose file
 # interpolates POSTGRES_PASSWORD, and a bare `ps` would warn that it is unset.
@@ -37,9 +42,11 @@ SERVICES=(caddy app postgres redis)
 # An `x && fail` one-liner would be wrong here: under `set -e` an AND-list whose
 # left side fails takes the whole script down, so a *missing* env file would
 # abort the check.
-if [[ -e "$ENV_FILE" ]]; then
-  fail "$PWD/$ENV_FILE exists; this check would overwrite it. Run it against a freshly generated project."
-fi
+for f in "$ENV_FILE" "${SERVICE_ENV_FILES[@]}"; do
+  if [[ -e "$f" ]]; then
+    fail "$PWD/$f exists; this check would overwrite it. Run it against a freshly generated project."
+  fi
+done
 
 # The database name is the project slug with dashes replaced. Read it out of the
 # compose file rather than re-deriving it from the directory name, which is only
@@ -50,22 +57,27 @@ DB_NAME="$(sed -n 's/^ *POSTGRES_DB: *//p' docker-compose.prod.yml | head -1)"
 cleanup() {
   echo "==> Tearing down"
   "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -f "$ROOT_CA" "$ENV_FILE"
+  rm -f "$ROOT_CA" "$ENV_FILE" "${SERVICE_ENV_FILES[@]}"
 }
 
-# The stack reads .env-production and mounts it into the app. Only what the app
-# needs in order to boot is set; none of it is a real credential.
+# As a deploy lays them out: .env-production is what compose interpolates
+# (Postgres's superuser; SITE_ADDRESS comes from the shell below, which compose
+# prefers), and .env-app is the app's own environment. Only what the app needs
+# in order to boot is set; none of it is a real credential. The worker,
+# db-writer and ops are not on the TLS path, so their files are empty.
 cat > "$ENV_FILE" <<ENV
-NEXTAUTH_URL=https://localhost
-NEXTAUTH_SECRET=0000000000000000000000000000000000000000000000000000000000000000
-HOSTNAME=0.0.0.0
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
+ENV
+cat > .env-app <<ENV
+NEXTAUTH_URL=https://localhost
+NEXTAUTH_SECRET=0000000000000000000000000000000000000000000000000000000000000000
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/${DB_NAME}
 REDIS_URL=redis://redis:6379
 ENV
+touch .env-worker .env-db-writer .env-ops
 
-# Only now that the env file exists can any compose command — including the
+# Only now that the env files exist can any compose command — including the
 # teardown — run.
 trap cleanup EXIT
 
