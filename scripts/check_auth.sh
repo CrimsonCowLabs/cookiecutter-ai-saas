@@ -2,7 +2,9 @@
 # Prove the access rules in middleware.ts and the admin page actually hold,
 # against a really running instance of a generated project — not mocks, and
 # not the route handlers imported in-process. See tests/auth/auth.test.mjs
-# for what is asserted and why.
+# for what is asserted and why. With magic link included, the same run also
+# proves sign-in emails are rate-limited (issue #106), against this redis:
+# see tests/auth/magic-link-limit.test.mjs.
 #
 # Usage: scripts/check_auth.sh <generated-project-dir>
 #
@@ -39,6 +41,6 @@ running_app_start postgres redis
 
 running_app_test "the auth integration tests" \
   env BASE_URL="$BASE_URL" NEXTAUTH_SECRET="$NEXTAUTH_SECRET" DATABASE_URL="$DATABASE_URL" \
-  npm run test:auth
+  REDIS_URL="$REDIS_URL" npm run test:auth
 
 echo "==> Auth check passed"

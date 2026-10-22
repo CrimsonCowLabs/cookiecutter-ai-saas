@@ -18,6 +18,7 @@ import {
 import { authConfig } from "./auth.config";
 // cc:begin magic-link
 import { emailProvider } from "./auth.config";
+import { limitSignInLinks } from "@/lib/magic-link-limit";
 // cc:end magic-link
 
 const adapter = DrizzleAdapter(db, {
@@ -88,8 +89,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     ...authConfig.providers,
     // cc:begin magic-link
-    // Email provider (requires adapter, only works in Node.js runtime)
-    emailProvider,
+    // Email provider (requires adapter, only works in Node.js runtime), its
+    // sign-in emails rate-limited per address and per client.
+    limitSignInLinks(emailProvider),
     // cc:end magic-link
   ],
   adapter: {

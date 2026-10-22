@@ -384,11 +384,14 @@ def handle_analytics():
 
 
 def handle_magic_link():
-    """Remove the email sign-in page and form if magic link is not included."""
+    """Remove the email sign-in page and form, and the limit on sign-in
+    emails with its test, if magic link is not included."""
     if INCLUDE_MAGIC_LINK == "no":
         print("Removing magic link files...")
         remove_directory("app/(main)/(auth)/magic-link")
         remove_file("components/auth/magic-link-form.tsx")
+        remove_file("lib/magic-link-limit.ts")
+        remove_file("tests/auth/magic-link-limit.test.mjs")
 
 
 def handle_marketing_extras():

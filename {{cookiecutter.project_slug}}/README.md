@@ -560,7 +560,8 @@ redirects HTTP to HTTPS.
 
 Caddy runs on the host's network, binding 80 and 443 itself, so it sees each
 client's real address and passes it to the app in `X-Forwarded-For` — which is
-what the contact form's per-IP rate limit counts by. Behind a published port it
+what the contact form's per-IP rate limit counts by.{% if cookiecutter.include_magic_link == "yes" %} So does
+the limit on magic-link sign-in emails (`lib/magic-link-limit.ts`).{% endif %} Behind a published port it
 would see one Docker gateway address for everybody. The app publishes port 3000
 on `127.0.0.1` only, for Caddy; PostgreSQL and Redis publish nothing. The price
 is isolation: on the host's network Caddy can reach every container's address,
