@@ -1,5 +1,5 @@
-// Shared helpers for tests/auth/auth.test.mjs — kept separate so the test
-// file itself reads as a list of access rules, not plumbing.
+// Shared helpers for tests/auth/*.test.mjs — kept separate so the test
+// file reads as a list of rules, not plumbing.
 //
 // Zero new dependencies: "pg" is already a runtime dependency (see
 // package.json), and @auth/core is not listed there at all, but it is pulled
@@ -26,11 +26,13 @@ const DEFAULT_NEXTAUTH_SECRET =
   "0000000000000000000000000000000000000000000000000000000000000000";
 const DEFAULT_DATABASE_URL =
   "postgresql://postgres:postgres@localhost:5432/postgres";
+const DEFAULT_REDIS_URL = "redis://localhost:6379";
 
 export const config = {
   baseUrl: process.env.BASE_URL || DEFAULT_BASE_URL,
   nextAuthSecret: process.env.NEXTAUTH_SECRET || DEFAULT_NEXTAUTH_SECRET,
   databaseUrl: process.env.DATABASE_URL || DEFAULT_DATABASE_URL,
+  redisUrl: process.env.REDIS_URL || DEFAULT_REDIS_URL,
 };
 
 /** A connected pg client. Caller is responsible for `.end()`ing it. */

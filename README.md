@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **245 files** with
+Every generated project is a complete distributed system — **248 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -201,7 +201,7 @@ None of it is legal advice, and the pages and guide say so.
 | `include_stripe` | yes | yes, no | Stripe billing integration |
 | `include_marketing_extras` | yes | yes, no | Static JSON blog and contact form (with its API route) |
 | `auth_providers` | google_microsoft | google_microsoft, google_only, microsoft_only | OAuth providers |
-| `include_magic_link` | yes | yes, no | Email magic-link sign-in via Resend, independent of the OAuth choice. `no` drops its form, `/magic-link` page and provider; `RESEND_API_KEY` stays only if the contact form or Stripe is kept |
+| `include_magic_link` | yes | yes, no | Email magic-link sign-in via Resend, independent of the OAuth choice. `no` drops its form, `/magic-link` page, provider and the rate limit on its sign-in emails; `RESEND_API_KEY` stays only if the contact form or Stripe is kept |
 | `llm_provider` | ollama | ollama, openai, anthropic, openrouter | AI model provider. Sets `LLM_PROVIDER` and ships only that provider's credentials, in `.env.example`, the vault example and the env file a deploy renders. The worker's `settings.py` reads all four with defaults, so switching later means adding that provider's variables back, not changing code |
 | `analytics` | none | none, posthog | Consent-gated product analytics. `posthog` adds a consent banner, a "Privacy choices" footer link, a first-party `/ingest` proxy and the `posthog-js` dependency, all idle until `POSTHOG_KEY` is set at runtime and a visitor accepts. `none` ships no analytics dependency, banner or provider code |
 | `python_version` | 3.14 | any version | Python for worker Dockerfile. `poetry.lock` is resolved for 3.14; any other value drops it and you must run `poetry lock` in `workers/app` once |
@@ -260,6 +260,7 @@ None of it is legal advice, and the pages and guide say so.
 │   ├── checkout.ts                # One Stripe customer, one live subscription per user
 │   ├── job-submission.ts          # Admits a job only within the user's plan limits
 │   ├── rate-limit.ts              # Redis sliding-window limiter
+│   ├── magic-link-limit.ts        # Caps sign-in emails per address and per client
 │   ├── audit.ts                   # Silent audit logging
 │   ├── feature-flags.ts           # ENV-backed toggles
 │   ├── validations.ts             # Zod schemas
@@ -307,6 +308,7 @@ None of it is legal advice, and the pages and guide say so.
 │   └── lib/running_app.sh         # Boots the app for it (and the template's auth/billing/job checks)
 ├── tests/compliance/              # What check_compliance.sh asserts, in a headless Chrome
 ├── tests/jobs/                    # Job submission holds to the plan's limits (real Postgres)
+├── tests/rate-limit/              # A client's rate-limit bucket: its address, or its IPv6 /64
 ├── docs/compliance.md             # Operator guide to the legal risks the app handles
 ├── cli/
 │   ├── src/                       # opsctl — status, logs, shell, over your own SSH
@@ -610,6 +612,8 @@ Taking and restoring database backups, and operating a deployed instance with
 CI generates, typechecks, lints and builds eight named flag combinations (the `flag-matrix` job in `.github/workflows/generate-and-build.yml`). `python scripts/check_ci_matrix.py` fails if any value of any choice in `cookiecutter.json` is missing from the matrix, so a new choice value needs a matrix entry.
 
 Each combination also runs the generated project's `npm run test:deploy`, which fails if a production container's env file (`ansible/templates/env-<service>.j2`) sets a variable that service's code does not read, or misses one it reads that the deploy renders for another service — so the worker, which runs model tool calls on user-supplied URLs, never holds the Stripe, NextAuth, OAuth or database secrets. It also fails if `ansible/deploy.yml` writes the image tarball it ships anywhere but a private `0700` directory on each machine, removed in an `always:` so a failed transfer cleans up too.
+
+Each combination also runs `npm run test:rate-limit`, which fails if `clientKey()` in `lib/rate-limit.ts`, the bucket every per-client rate limit in the app counts a request in, stops counting an IPv6 client by its /64 as Caddy's limits do, or counts an IPv4-mapped address (`::ffff:1.2.3.4`) as anything but the IPv4 address it carries.
 
 `python scripts/check_ci_negations.py` fails if a workflow step has a bare negated command (`! cmd`) before its last line: Actions runs steps with `bash -e`, which ignores a failing negated command, so write `if cmd; then echo "..." >&2; exit 1; fi` instead.
 

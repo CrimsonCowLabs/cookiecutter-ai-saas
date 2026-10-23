@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit, clientKey } from "@/lib/rate-limit";
 import config from "@/config";
 import { db } from "@/lib/db";
 import { contactSubmissions } from "@/lib/db/schema";
 import { contactSchema } from "@/lib/validations";
 
 export async function POST(req: NextRequest) {
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown";
-  const limited = await checkRateLimit(`contact:${ip}`, 5, 60 * 10);
+  const limited = await checkRateLimit(`contact:${clientKey(req.headers)}`, 5, 60 * 10);
   if (limited) return limited;
 
   if (!process.env.RESEND_API_KEY) {

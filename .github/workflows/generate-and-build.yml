@@ -331,6 +331,13 @@ jobs:
           # RESEND_API_KEY stays when the contact form or Stripe still sends email.
           if [ "${{ matrix.include_magic_link }}" = no ]; then
             test ! -e "$G/app/(main)/(auth)/magic-link" && test ! -e "$G/components/auth/magic-link-form.tsx"
+            # Issue #106: the limit on sign-in emails, and its test, go with it.
+            test ! -e "$G/lib/magic-link-limit.ts"
+            test ! -e "$G/tests/auth/magic-link-limit.test.mjs"
+            if grep -rnE 'magic-link-limit|limitSignInLinks|sign-in-link' "$G/lib" "$G/app" "$G/tests" "$G/scripts" "$G/package.json"; then
+              echo "The magic-link rate limit survived include_magic_link=no" >&2
+              exit 1
+            fi
             if grep -rnE 'MagicLink|/magic-link|providers/resend' "$G/lib" "$G/app" "$G/components" "$G/middleware.ts"; then
               echo "Magic-link UI, route or provider survived include_magic_link=no" >&2
               exit 1
@@ -344,6 +351,9 @@ jobs:
             fi
           else
             test -e "$G/components/auth/magic-link-form.tsx"
+            test -e "$G/lib/magic-link-limit.ts"
+            test -e "$G/tests/auth/magic-link-limit.test.mjs"
+            grep -q 'limitSignInLinks(emailProvider)' "$G/lib/auth.ts"
           fi
           # Issue #101: Microsoft's account-linking rule ships with Microsoft
           # sign-in, gating the signIn callback, and leaves no trace without it.
@@ -410,6 +420,15 @@ jobs:
       - name: Each service is handed only the settings its code reads
         working-directory: .generated/matrix-app
         run: npm run test:deploy
+
+      # Issue #106. Every per-client rate limit (the contact form's, and the
+      # sign-in email limit's with magic link included) counts a client by
+      # lib/rate-limit.ts's clientKey(): an IPv6 client by its /64, as Caddy's
+      # own limits do. That file ships in every combination, so its test runs
+      # in each. Static: no server, no Redis.
+      - name: A client's rate-limit bucket is its address, or its IPv6 /64
+        working-directory: .generated/matrix-app
+        run: npm run test:rate-limit
 
       # The "stripe" npm dependency ships regardless of include_stripe (see
       # hooks/post_gen_project.py::handle_stripe — package.json isn't in the
@@ -590,6 +609,10 @@ jobs:
   # server is required: this is exactly the class of bug (middleware.ts
   # matching "/" by prefix instead of exactly) that a type checker cannot
   # catch, because the buggy middleware still compiles.
+  #
+  # Issue #106 adds tests/auth/magic-link-limit.test.mjs, which the same run
+  # picks up with magic link included (the default): sign-in emails are
+  # rate-limited per address and per client, counted in that redis.
   auth-integration:
     name: The access rules hold against a running app
     runs-on: ubuntu-latest
