@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { EmailConfig } from "next-auth/providers/email";
-import { rateLimit } from "@/lib/rate-limit";
+import { clientKey, rateLimit } from "@/lib/rate-limit";
 
 /**
  * How many sign-in emails may go out in each window.
@@ -10,7 +10,8 @@ import { rateLimit } from "@/lib/rate-limit";
  *   that to one inbox in 15 minutes is somebody else's script, not the owner.
  * - perIp: 15. Wider than one person's needs, so an office or household
  *   behind one address can sign in several people, but a script mailing many
- *   addresses from one client stops after 15. (Caddy's strict limit on
+ *   addresses from one client stops after 15. An IPv6 client counts by its
+ *   /64 (see clientKey in lib/rate-limit.ts). (Caddy's strict limit on
  *   /api/auth/signin/* bounds bursts per minute; this bounds the quarter
  *   hour.)
  *
@@ -27,12 +28,12 @@ export const signInLinkLimits = {
 
 type SendVerificationRequest = EmailConfig["sendVerificationRequest"];
 
-/** Whether a sign-in link to `email`, asked for from `ip`, may be sent. */
-async function maySend(email: string, ip: string): Promise<boolean> {
+/** Whether a sign-in link to `email`, asked for by `client`, may be sent. */
+async function maySend(email: string, client: string): Promise<boolean> {
   const { perAddress, perIp, windowSec } = signInLinkLimits;
   // The client first: once it is over its limit, its requests stop counting
   // against the addresses it names.
-  if (!(await rateLimit(`sign-in-link:ip:${ip}`, perIp, windowSec)).success) return false;
+  if (!(await rateLimit(`sign-in-link:ip:${client}`, perIp, windowSec)).success) return false;
   // Hashed, so Redis holds no address in the clear.
   const address = crypto
     .createHash("sha256")
@@ -54,9 +55,7 @@ async function maySend(email: string, ip: string): Promise<boolean> {
 export function limitSignInLinks(provider: EmailConfig): EmailConfig {
   const send = provider.options?.sendVerificationRequest ?? provider.sendVerificationRequest;
   const limited: SendVerificationRequest = async (params) => {
-    // Caddy passes the client's own address in X-Forwarded-For.
-    const ip = params.request.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown";
-    if (!(await maySend(params.identifier, ip))) {
+    if (!(await maySend(params.identifier, clientKey(params.request.headers)))) {
       console.warn("Sign-in email not sent: rate limit reached");
       return;
     }

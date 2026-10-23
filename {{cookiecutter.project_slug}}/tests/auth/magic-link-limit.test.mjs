@@ -50,7 +50,11 @@ after(async () => {
 
 // New each call, so a re-run inside the window starts from nothing.
 const newEmail = () => `magic-link-limit-${crypto.randomUUID()}@example.invalid`;
-const newIp = () => `2001:db8::${crypto.randomBytes(2).toString("hex")}:${crypto.randomBytes(2).toString("hex")}`;
+const hex16 = () => crypto.randomBytes(2).toString("hex");
+// Its own /64 each, since a client counts by its /64.
+const newIp = () => `2001:db8:${hex16()}:${hex16()}::1`;
+// An IPv4 address in 198.18.0.0/15, the benchmarking range.
+const newIpv4 = () => `198.${18 + crypto.randomInt(2)}.${crypto.randomInt(256)}.${crypto.randomInt(1, 255)}`;
 
 /**
  * The email provider as lib/auth.ts configures it: Auth.js's Resend, with
@@ -151,4 +155,55 @@ test("Redis keeps no address in the clear", async () => {
   assert.ok(added.length > 0, "the request should be counted in Redis");
   const local = email.split("@")[0];
   assert.deepEqual(added.filter((k) => k.includes(local)), [], "no rate-limit key should hold the address");
+});
+
+/**
+ * Ask for a link to a new address from each of `ips` in turn, and return how
+ * many of them were sent.
+ */
+async function sendsFrom(provider, ips) {
+  const emails = ips.map(() => newEmail());
+  for (const [i, email] of emails.entries()) await requestLink(provider, email, ips[i]);
+  return emails.filter((email) => sentTo(email) > 0).length;
+}
+
+test(`one IPv6 /64 gets at most ${perIp} sign-in emails sent, from whichever of its addresses`, async () => {
+  // One subscriber holds a whole /64, so a fresh address per request must not
+  // buy a fresh limit. The prefix is written several ways, as the client's
+  // stack might write it: compressed, in full, with leading zeros, in capitals.
+  const [a, b] = [hex16(), hex16()];
+  const ips = Array.from({ length: perIp + 5 }, (_, i) => {
+    const host = (i + 1).toString(16);
+    return [
+      `2001:db8:${a}:${b}::${host}`,
+      `2001:0db8:${a}:${b}:0:0:0:${host}`,
+      ` 2001:DB8:${a.toUpperCase()}:${b}:${host}:: `,
+      `2001:db8:${a}:${b}:${host}:${host}:${host}:${host}`,
+    ][i % 4];
+  });
+  assert.equal(await sendsFrom(limitedResend(), ips), perIp);
+});
+
+test("a client in another IPv6 /64 is not held back by one over its limit", async () => {
+  const provider = limitedResend();
+  const [a, b] = [hex16(), hex16()];
+  const full = Array.from({ length: perIp + 1 }, (_, i) => `2001:db8:${a}:${b}::${(i + 1).toString(16)}`);
+  assert.equal(await sendsFrom(provider, full), perIp);
+  // The next /64 along, and one sharing only the first 48 bits.
+  const next = `2001:db8:${a}:${((parseInt(b, 16) + 1) & 0xffff).toString(16)}::1`;
+  assert.equal(await sendsFrom(provider, [next, `2001:db8:${a}:${hex16()}::1`]), 2);
+});
+
+test("an IPv4-mapped IPv6 address counts as the IPv4 address it carries", async () => {
+  const provider = limitedResend();
+  const ip = newIpv4();
+  // Half from the IPv4 address, half from its mapped form: one client.
+  const ips = Array.from({ length: perIp + 2 }, (_, i) => (i % 2 ? `::ffff:${ip}` : ip));
+  assert.equal(await sendsFrom(provider, ips), perIp);
+  // Every mapped address shares the /64 ::ffff:0:0 sits in, so counting them
+  // by it would put the whole IPv4 internet in one bucket. Another IPv4
+  // client, mapped or not, is unaffected.
+  let other = newIpv4();
+  while (other === ip) other = newIpv4();
+  assert.equal(await sendsFrom(provider, [`::ffff:${other}`]), 1);
 });

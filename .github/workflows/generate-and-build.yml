@@ -421,6 +421,15 @@ jobs:
         working-directory: .generated/matrix-app
         run: npm run test:deploy
 
+      # Issue #106. Every per-client rate limit (the contact form's, and the
+      # sign-in email limit's with magic link included) counts a client by
+      # lib/rate-limit.ts's clientKey(): an IPv6 client by its /64, as Caddy's
+      # own limits do. That file ships in every combination, so its test runs
+      # in each. Static: no server, no Redis.
+      - name: A client's rate-limit bucket is its address, or its IPv6 /64
+        working-directory: .generated/matrix-app
+        run: npm run test:rate-limit
+
       # The "stripe" npm dependency ships regardless of include_stripe (see
       # hooks/post_gen_project.py::handle_stripe — package.json isn't in the
       # marker-substitution file-extension list), and this test only touches
