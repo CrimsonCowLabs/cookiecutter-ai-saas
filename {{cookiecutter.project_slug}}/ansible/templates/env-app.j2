@@ -56,6 +56,13 @@ POSTHOG_HOST={{ posthog_host | default('https://us.i.posthog.com') }}
 POSTHOG_ASSETS_HOST={{ posthog_assets_host | default('https://us-assets.i.posthog.com') }}
 # cc:end analytics
 
+# ─── Content-Security-Policy ─────────────────────────
+# false enforces the policy (lib/csp.ts). true only reports what it would
+# block, to try a new third-party origin in production before enforcing it:
+# deploy with -e csp_report_only=true, then again without. See
+# docs/content-security-policy.md.
+CSP_REPORT_ONLY={{ csp_report_only | default('false') }}
+
 # ─── Feature Flags ───────────────────────────────────
 # lib/feature-flags.ts: a flag left out here takes the default written there.
 FEATURE_EMAIL_NOTIFICATIONS=false

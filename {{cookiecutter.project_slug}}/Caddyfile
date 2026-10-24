@@ -102,9 +102,10 @@
 	# submission (a 5000-character message plus the other fields, see
 	# lib/validations.ts) is around 20 KB even in four-byte UTF-8; the age
 	# check posts a date and two short fields; one-click unsubscribe posts a
-	# single fixed field. A route absent from this build (no contact form, say)
-	# simply never matches.
-	@small_form path /api/contact /api/age-check /api/unsubscribe
+	# single fixed field; a browser's Content-Security-Policy violation report
+	# is a few hundred bytes (the route refuses more than 64 KB itself). A
+	# route absent from this build (no contact form, say) simply never matches.
+	@small_form path /api/contact /api/age-check /api/unsubscribe /api/csp-report
 	request_body @small_form {
 		max_size 64KB
 	}

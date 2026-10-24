@@ -15,6 +15,17 @@ const config = [
     ],
   },
   ...next,
+  {
+    // lib/zod.ts sets zod up to run under the Content-Security-Policy before
+    // any schema is built; a schema built from "zod" directly may not be.
+    ignores: ["lib/zod.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        { paths: [{ name: "zod", message: 'Import { z } from "@/lib/zod" instead (see that file).' }] },
+      ],
+    },
+  },
 ];
 
 export default config;

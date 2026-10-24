@@ -42,7 +42,7 @@ cookiecutter gh:CrimsonCowLabs/cookiecutter-ai-saas \
 
 ## What You Get
 
-Every generated project is a complete distributed system — **248 files** with
+Every generated project is a complete distributed system — **254 files** with
 the default answers. The exact count depends on what you choose:
 `include_stripe=no`, `include_marketing_extras=no` and the narrower
 `auth_providers` choices each remove files that `hooks/post_gen_project.py`
@@ -152,6 +152,18 @@ and prove what they claim against a running app rather than asserting it:
   and dashboard pages in a headless Chrome and fails, naming the host, if any
   of them contacts another server. A Google Fonts `<link>` is called out by
   name.
+- **A Content-Security-Policy that stops injected scripts.** Every page is
+  sent with a policy that lets a script run only with a nonce made for that
+  one response (no `unsafe-inline`, and `unsafe-eval` only in `next dev`),
+  allows nothing from another origin except the sign-in and Stripe pages a
+  form may send the visitor to, and forbids framing. It's the backstop behind
+  AI-generated report text and anything else user-supplied that reaches a
+  page. The check walks landing, sign-in, the dashboard, a job report,
+  checkout and analytics consent in a headless Chrome and fails on any
+  violation, and proves a script injected without the nonce doesn't run.
+  Violations are logged by a report endpoint, and `CSP_REPORT_ONLY=true`
+  switches to report-only while you roll out a new origin
+  (`docs/content-security-policy.md` explains how).
 - **Analytics only with consent (optional).** With `analytics=posthog`, an
   app-owned banner offers "Accept" and "Reject" with equal weight, works by
   keyboard and never traps focus. One consent module decides what may run;
@@ -239,6 +251,7 @@ None of it is legal advice, and the pages and guide say so.
 │       ├── auth/[...nextauth]/    # NextAuth endpoints
 │       ├── jobs/[id]/progress/    # SSE real-time progress
 │       ├── webhook/stripe/        # Stripe webhooks
+│       ├── csp-report/            # Logs Content-Security-Policy violations
 │       └── contact/               # Contact form API
 │
 ├── components/
@@ -266,6 +279,8 @@ None of it is legal advice, and the pages and guide say so.
 │   ├── validations.ts             # Zod schemas
 │   ├── plans.ts                   # Plan tier config
 │   ├── seo.tsx                    # SEO + JSON-LD helpers
+│   ├── csp.ts                     # The per-request Content-Security-Policy
+│   ├── zod.ts                     # zod, set up to run under that policy
 │   └── api.ts                     # Client fetch wrapper
 │
 ├── workers/
@@ -294,7 +309,7 @@ None of it is legal advice, and the pages and guide say so.
 ├── caddy/
 │   └── Dockerfile                 # Caddy + the rate-limit module (deploy target `caddy`)
 ├── config.ts                      # Central app config (plans, resend, colors, auth, legal)
-├── middleware.ts                   # Edge-safe route protection
+├── middleware.ts                   # Edge-safe route protection + per-request CSP nonce
 ├── postcss.config.js              # Tailwind 4 PostCSS plugin (theme lives in app/globals.css)
 ├── drizzle.config.ts              # Migration generator config
 ├── package.json                   # Node dependencies
@@ -309,7 +324,9 @@ None of it is legal advice, and the pages and guide say so.
 ├── tests/compliance/              # What check_compliance.sh asserts, in a headless Chrome
 ├── tests/jobs/                    # Job submission holds to the plan's limits (real Postgres)
 ├── tests/rate-limit/              # A client's rate-limit bucket: its address, or its IPv6 /64
+├── tests/csp/                     # The Content-Security-Policy, as a string
 ├── docs/compliance.md             # Operator guide to the legal risks the app handles
+├── docs/content-security-policy.md # The policy, its reports, and allowing a new origin
 ├── cli/
 │   ├── src/                       # opsctl — status, logs, shell, over your own SSH
 │   └── tsconfig.json              # Built by `npm run cli:build` / the `prepare` script
@@ -614,6 +631,8 @@ CI generates, typechecks, lints and builds eight named flag combinations (the `f
 Each combination also runs the generated project's `npm run test:deploy`, which fails if a production container's env file (`ansible/templates/env-<service>.j2`) sets a variable that service's code does not read, or misses one it reads that the deploy renders for another service — so the worker, which runs model tool calls on user-supplied URLs, never holds the Stripe, NextAuth, OAuth or database secrets. It also fails if `ansible/deploy.yml` writes the image tarball it ships anywhere but a private `0700` directory on each machine, removed in an `always:` so a failed transfer cleans up too.
 
 Each combination also runs `npm run test:rate-limit`, which fails if `clientKey()` in `lib/rate-limit.ts`, the bucket every per-client rate limit in the app counts a request in, stops counting an IPv6 client by its /64 as Caddy's limits do, or counts an IPv4-mapped address (`::ffff:1.2.3.4`) as anything but the IPv4 address it carries.
+
+Each combination also runs `npm run test:csp`, which fails if the Content-Security-Policy `lib/csp.ts` builds lets a script run without the response's nonce, allows `'unsafe-inline'` or `'unsafe-eval'` (the latter outside `next dev`), drops `frame-ancestors 'none'`, or lets a form send the visitor anywhere but `'self'` and the sign-in providers and Stripe pages that combination was generated with.
 
 `python scripts/check_ci_negations.py` fails if a workflow step has a bare negated command (`! cmd`) before its last line: Actions runs steps with `bash -e`, which ignores a failing negated command, so write `if cmd; then echo "..." >&2; exit 1; fi` instead.
 

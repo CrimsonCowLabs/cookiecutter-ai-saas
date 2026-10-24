@@ -114,6 +114,10 @@ It checks that:
 - the home page, the sign-in and sign-up pages, the other public pages, the
   blog (when the project has one), every legal page and the dashboard make
   no request to another server;
+- every page is sent with an enforcing Content-Security-Policy and a fresh
+  nonce, the normal flows run without one violation, and a script injected
+  without the nonce doesn't run (see
+  [docs/content-security-policy.md](content-security-policy.md));
 - the copyright page shows every detail of the configured DMCA agent, and
   the Terms of Service link to it (see [Copyright](#copyright-dmca));
 - the home page, the sign-in page (also with an error), the sign-up page
@@ -854,7 +858,9 @@ turnover, whichever is higher (GDPR Article 83(5)). As of October 2026.
   never with a `<link>` to Google Fonts or an `@import` from a font CDN.
 - Self-host any other library, stylesheet or image rather than linking a CDN.
 - Load anything that has to come from another server (analytics, chat
-  widgets, embedded videos, maps) only after the visitor consents to it{% if cookiecutter.analytics == "posthog" %}:
+  widgets, embedded videos, maps) only after the visitor consents to it, and
+  allow its origin in the Content-Security-Policy, which blocks it otherwise
+  (see [docs/content-security-policy.md](content-security-policy.md#allowing-a-new-third-party-origin)){% if cookiecutter.analytics == "posthog" %}:
   ask `lib/consent.ts` first, as `lib/analytics.ts` does (see
   [Adding another purpose](#adding-another-purpose)){% endif %}.
 - When you add a public page, add it to the list in
