@@ -11,6 +11,14 @@ browser still refuses to run the script.
 The policy is built in `lib/csp.ts` and attached in `middleware.ts`, fresh for
 every request.
 
+> **Every route renders dynamically.** `app/layout.tsx` calls
+> `await connection()`, so no page is prerendered at build time: no static
+> generation, no ISR, and no serving pages from a static cache or CDN. The
+> policy's nonce is new for each response, and Next.js can only put it on a
+> page's scripts while rendering that response, so a page rendered ahead of
+> time would carry no nonce and none of its scripts would run. See
+> [Why nonces](#why-nonces).
+
 ## The policy
 
 | Directive | Value | Why |
@@ -42,8 +50,9 @@ prerendered at build time: `app/layout.tsx` calls `connection()`, which makes
 every page dynamic. Pages can't be served from a static cache or a CDN as a
 result. That's the cost of a nonce-based policy.
 
-To add a script of your own, read the nonce in a server component and pass it
-on:
+Middleware also hands the nonce on by itself, as the `x-nonce` request
+header. To add a script of your own, read it there in a server component and
+pass it on:
 
 ```tsx
 import { headers } from "next/headers";

@@ -24,19 +24,19 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 const ACCEPTED_TYPES = ["application/csp-report", "application/reports+json", "application/json"];
 
-// The fields worth logging, by their Reporting API name, with the names the
-// older format uses for the same thing.
-const FIELDS: Record<string, string[]> = {
-  documentURL: ["documentURL", "document-uri"],
-  blockedURL: ["blockedURL", "blocked-uri"],
-  effectiveDirective: ["effectiveDirective", "effective-directive", "violated-directive"],
-  disposition: ["disposition"],
-  sourceFile: ["sourceFile", "source-file"],
-  lineNumber: ["lineNumber", "line-number"],
-  columnNumber: ["columnNumber", "column-number"],
-  sample: ["sample", "script-sample"],
+// The fields worth logging, by their Reporting API name: the names the older
+// format uses for the same thing, and whether it's a URL (logged without its
+// query string).
+const FIELDS: Record<string, { names: string[]; url?: boolean }> = {
+  documentURL: { names: ["documentURL", "document-uri"], url: true },
+  blockedURL: { names: ["blockedURL", "blocked-uri"], url: true },
+  effectiveDirective: { names: ["effectiveDirective", "effective-directive", "violated-directive"] },
+  disposition: { names: ["disposition"] },
+  sourceFile: { names: ["sourceFile", "source-file"], url: true },
+  lineNumber: { names: ["lineNumber", "line-number"] },
+  columnNumber: { names: ["columnNumber", "column-number"] },
+  sample: { names: ["sample", "script-sample"] },
 };
-const URL_FIELDS = new Set(["documentURL", "blockedURL", "sourceFile"]);
 
 /** `value` without query or fragment if it's a URL, as is if it's a keyword ("inline", "eval"). */
 function withoutQuery(value: string): string {
@@ -50,11 +50,11 @@ function withoutQuery(value: string): string {
 
 function summarize(report: Record<string, unknown>): Record<string, string | number> {
   const summary: Record<string, string | number> = {};
-  for (const [field, names] of Object.entries(FIELDS)) {
+  for (const [field, { names, url }] of Object.entries(FIELDS)) {
     const value = names.map((n) => report[n]).find((v) => typeof v === "string" || typeof v === "number");
     if (value === undefined || value === "") continue;
     summary[field] =
-      typeof value === "number" ? value : (URL_FIELDS.has(field) ? withoutQuery(value) : value).slice(0, 200);
+      typeof value === "number" ? value : (url ? withoutQuery(value) : value).slice(0, 200);
   }
   return summary;
 }

@@ -22,7 +22,7 @@
 export const CSP_REPORT_PATH = "/api/csp-report";
 
 /** The settings the policy depends on (see cspEnv). */
-export interface CspEnv {
+interface CspEnv {
   NODE_ENV?: string;
   /** "true" sends the policy report-only, for rolling out a change. */
   CSP_REPORT_ONLY?: string;
@@ -62,7 +62,7 @@ export function cspEnv(): CspEnv {
 }
 
 /** A fresh, unguessable nonce: 128 random bits, base64. */
-export function generateNonce(): string {
+function generateNonce(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return btoa(String.fromCharCode(...bytes));
 }
@@ -87,7 +87,7 @@ function originOf(url: string | undefined): string | null {
  * real provider in production, the stand-in when the compliance suite points
  * the app at one.
  */
-export function formActionOrigins(env: CspEnv): string[] {
+function formActionOrigins(env: CspEnv): string[] {
   const origins: string[] = [];
   // cc:begin google
   origins.push(originOf(env.AUTH_GOOGLE_ISSUER) ?? "https://accounts.google.com");
@@ -112,7 +112,7 @@ export function formActionOrigins(env: CspEnv): string[] {
  * rebuilds server error stacks in the browser with eval) and production
  * never gets.
  */
-export function contentSecurityPolicy({
+function contentSecurityPolicy({
   nonce,
   dev = false,
   formActions = [],
@@ -156,14 +156,14 @@ export function contentSecurityPolicy({
     .join("; ");
 }
 
-/** Whether `CSP_REPORT_ONLY` asks for report-only mode. Enforcing otherwise. */
-export function isReportOnly(env: CspEnv): boolean {
-  return env.CSP_REPORT_ONLY?.trim().toLowerCase() === "true";
-}
-
-/** The header the policy goes out in: enforcing, or report-only. */
-export function cspHeaderName(env: CspEnv): string {
-  return isReportOnly(env) ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy";
+/**
+ * The header the policy goes out in: report-only when `CSP_REPORT_ONLY` is
+ * "true", enforcing otherwise.
+ */
+function cspHeaderName(env: CspEnv): string {
+  return env.CSP_REPORT_ONLY?.trim().toLowerCase() === "true"
+    ? "Content-Security-Policy-Report-Only"
+    : "Content-Security-Policy";
 }
 
 /** Everything middleware needs for one request: the nonce, and the header's name and value. */

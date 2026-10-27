@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { register as registerEsm } from "tsx/esm/api";
 import { register as registerCjs } from "tsx/cjs/api";
+import { parsePolicy } from "./parse-policy.mjs";
 
 registerEsm();
 registerCjs();
@@ -26,19 +27,8 @@ const GOOGLE = authConfig.includes("providers/google");
 const MICROSOFT = authConfig.includes("providers/microsoft-entra-id");
 const STRIPE = fs.existsSync("lib/stripe.ts");
 
-/** The policy as { directive: [values] }. */
-function parse(policy) {
-  return Object.fromEntries(
-    policy
-      .split(";")
-      .map((d) => d.trim().split(/\s+/))
-      .filter(([name]) => name)
-      .map(([name, ...values]) => [name, values])
-  );
-}
-
 const production = (env = {}, nonce = "abc123") =>
-  parse(csp.cspForRequest({ NODE_ENV: "production", ...env }, nonce).value);
+  parsePolicy(csp.cspForRequest({ NODE_ENV: "production", ...env }, nonce).value);
 
 test("scripts run only with the response's nonce, with no inline or eval escape hatch", () => {
   const policy = production();
@@ -51,7 +41,7 @@ test("scripts run only with the response's nonce, with no inline or eval escape 
 });
 
 test("'unsafe-eval' is added under next dev only", () => {
-  assert.deepEqual(parse(csp.cspForRequest({ NODE_ENV: "development" }, "n").value)["script-src"], [
+  assert.deepEqual(parsePolicy(csp.cspForRequest({ NODE_ENV: "development" }, "n").value)["script-src"], [
     "'self'",
     "'nonce-n'",
     "'strict-dynamic'",
@@ -72,7 +62,7 @@ test("everything else is this origin, nothing embeds the app, and there are no p
 });
 
 test("violations are reported to the app's own endpoint, by report-uri alone", () => {
-  const policy = parse(csp.cspForRequest({}, "n").value);
+  const policy = parsePolicy(csp.cspForRequest({}, "n").value);
   assert.deepEqual(policy["report-uri"], ["/api/csp-report"]);
   // Given report-to as well, Chrome would ignore report-uri, and report only
   // from HTTPS pages, a minute late (see lib/csp.ts).

@@ -33,6 +33,7 @@ import fs from "node:fs";
 import {
   config,
   launchBrowser,
+  withPage,
   exists,
   pagesUnder,
   asSignedInUser,
@@ -42,6 +43,7 @@ import {
   // cc:end analytics
 } from "./support.mjs";
 import { connectDb } from "../auth/support.mjs";
+import { parsePolicy } from "../csp/parse-policy.mjs";
 import { startFakeOidc, FAKE_OIDC_PORT } from "./fake-oidc.mjs";
 // cc:begin stripe
 import { startFakeStripe, FAKE_STRIPE_PORT } from "./fake-stripe.mjs";
@@ -98,17 +100,6 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // How long a click that should leave the page gets to do it.
 const NAVIGATION_TIMEOUT_MS = 15_000;
 
-/** The policy in `header` as { directive: [values] }. */
-function parse(header) {
-  return Object.fromEntries(
-    header
-      .split(";")
-      .map((d) => d.trim().split(/\s+/))
-      .filter(([name]) => name)
-      .map(([name, ...values]) => [name, values])
-  );
-}
-
 /** The nonce script-src names in `header`, or null. */
 const nonceIn = (header) => header?.match(/'nonce-([^']+)'/)?.[1] ?? null;
 
@@ -124,7 +115,7 @@ function assertEnforcing(res, what) {
     null,
     `${what} should enforce its policy, not only report (is CSP_REPORT_ONLY set?)`
   );
-  const policy = parse(header);
+  const policy = parsePolicy(header);
   const scripts = policy["script-src"] ?? policy["default-src"];
   assert.ok(scripts, `${what}: the policy should restrict scripts`);
   assert.ok(!scripts.includes("'unsafe-inline'"), `${what}: script-src allows 'unsafe-inline'`);
@@ -142,25 +133,15 @@ const get = (path, cookie) =>
   fetch(new URL(path, BASE), { redirect: "manual", headers: cookie ? { cookie: [cookie].flat().join("; ") } : {} });
 
 /**
- * Load `path` in a fresh page and hand it to `fn` with `violations`: every
+ * Load `path` through support.mjs's withPage() (its options are this
+ * function's) and hand it to `fn` with `violations`: every
  * Content-Security-Policy violation the browser saw, on that page or any it
  * moved on to, as the page's own securitypolicyviolation events and as the
  * errors the browser logs (which are there even with JavaScript off).
- *
- * Requests to another origin are aborted, as in support.mjs's withPage(),
- * except to the hosts in `allow` (the stand-ins a flow ends on). `intercept`
- * may answer a request itself; it returns true when it did.
  */
-async function watch(path, { cookie, allow = [], javaScript = true, prepare, intercept } = {}, fn) {
-  const context = await browser.createBrowserContext();
-  const page = await context.newPage();
+function watch(path, { prepare, ...options } = {}, fn) {
   const violations = [];
-  try {
-    for (const c of [cookie ?? []].flat()) {
-      const [name, ...rest] = c.split("=");
-      await context.setCookie({ name, value: rest.join("="), domain: BASE.hostname, path: "/" });
-    }
-    await page.setJavaScriptEnabled(javaScript);
+  const listen = async (page) => {
     await page.exposeFunction("__cspViolation", (v) => violations.push(v));
     await page.evaluateOnNewDocument(() => {
       document.addEventListener(
@@ -179,23 +160,9 @@ async function watch(path, { cookie, allow = [], javaScript = true, prepare, int
     page.on("console", (msg) => {
       if (/content.security.policy/i.test(msg.text())) violations.push({ page: page.url(), console: msg.text() });
     });
-    await page.setRequestInterception(true);
-    page.on("request", async (req) => {
-      if (await intercept?.(req)) return;
-      const url = new URL(req.url());
-      const isNetwork = ["http:", "https:", "ws:", "wss:"].includes(url.protocol);
-      if (isNetwork && url.host !== BASE.host && !allow.includes(url.host)) {
-        req.abort("blockedbyclient");
-        return;
-      }
-      req.continue();
-    });
     await prepare?.(page);
-    const res = await page.goto(new URL(path, BASE).href, { waitUntil: "networkidle0" });
-    return await fn({ page, res, violations });
-  } finally {
-    await context.close();
-  }
+  };
+  return withPage(browser, path, { ...options, prepare: listen }, ({ page, res }) => fn({ page, res, violations }));
 }
 
 /**

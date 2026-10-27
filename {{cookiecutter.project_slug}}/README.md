@@ -322,9 +322,14 @@ already does and what is still up to you. It is not legal advice.
 Every page is also sent with a Content-Security-Policy (`lib/csp.ts`) that
 lets a script run only with a nonce made for that response, so markup that
 slips into a page, from an AI-generated report or anything else
-user-supplied, can't run code. Violations are logged by `/api/csp-report`,
-and `CSP_REPORT_ONLY=true` switches the policy to report-only while you roll
-out a new third-party origin.
+user-supplied, can't run code. **Every route therefore renders per request:**
+`app/layout.tsx` calls `await connection()`, so no page is prerendered at
+build time, and there is no static generation or ISR. A nonce has to be new
+for each response, and Next.js can only put it on a page's scripts while
+rendering that response; a page rendered ahead of time would carry no nonce,
+and none of its scripts would run. Violations are logged by
+`/api/csp-report`, and `CSP_REPORT_ONLY=true` switches the policy to
+report-only while you roll out a new third-party origin.
 [docs/content-security-policy.md](docs/content-security-policy.md) explains
 the policy and how to allow an origin.
 

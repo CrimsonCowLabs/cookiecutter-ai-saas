@@ -15,13 +15,15 @@ export default auth((req) => {
   // Every response gets this request's Content-Security-Policy (lib/csp.ts),
   // with a nonce made for it alone. The request carries the policy on to
   // the page being rendered too: Next.js reads the nonce out of it and puts
-  // it on each script it writes, which is the only way a script runs.
+  // it on each script it writes, which is the only way a script runs. A
+  // script of your own reads it from `x-nonce` (see
+  // docs/content-security-policy.md).
   const csp = cspForRequest(cspEnv());
   const withCsp = (res: NextResponse) => {
     res.headers.set(csp.name, csp.value);
     return res;
   };
-  const next = () => {
+  const continueWithCsp = () => {
     const headers = new Headers(req.headers);
     headers.set("x-nonce", csp.nonce);
     headers.set(csp.name, csp.value);
@@ -69,7 +71,7 @@ export default auth((req) => {
     );
 
   if (isPublic) {
-    return next();
+    return continueWithCsp();
   }
 
   // Protect dashboard routes
@@ -77,7 +79,7 @@ export default auth((req) => {
     return withCsp(NextResponse.redirect(new URL("/sign-in", req.url)));
   }
 
-  return next();
+  return continueWithCsp();
 });
 
 // Every page, so every page carries the policy. Static files under
