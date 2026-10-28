@@ -430,6 +430,17 @@ jobs:
         working-directory: .generated/matrix-app
         run: npm run test:rate-limit
 
+      # Issue #108. The Content-Security-Policy lib/csp.ts builds for every
+      # response: scripts only by nonce, no 'unsafe-inline' and no
+      # 'unsafe-eval' outside `next dev`, no framing, and forms allowed to send
+      # the visitor only to the sign-in providers and Stripe pages this
+      # combination was generated with (its cc: markers decide which), the
+      # real ones or the stand-ins the compliance suite configures. Static:
+      # no server. What a browser makes of it is the compliance job's.
+      - name: The Content-Security-Policy allows scripts by nonce only
+        working-directory: .generated/matrix-app
+        run: npm run test:csp
+
       # The "stripe" npm dependency ships regardless of include_stripe (see
       # hooks/post_gen_project.py::handle_stripe — package.json isn't in the
       # marker-substitution file-extension list), and this test only touches
@@ -695,21 +706,61 @@ jobs:
   # accepts recordings: recording starts only after its own, unticked
   # consent, typed input and data-mask text never reach PostHog, sign-in,
   # sign-up and settings are never recorded, and withdrawing stops it.
+  # Issue #108 (Content-Security-Policy) adds
+  # tests/compliance/content-security-policy.test.mjs: every page, redirect
+  # and 404 is sent with an enforcing policy and a fresh nonce on all of its
+  # scripts; landing, the age screen, each sign-in (by button, and by a form
+  # the browser posts itself), the dashboard, a job report, checkout (with
+  # and without JavaScript) and accepting analytics trip no violation; an
+  # inline script and event handler injected without the nonce don't run and
+  # are reported to /api/csp-report; and that endpoint logs both report
+  # formats without query strings and refuses junk. The session-replay rerun
+  # repeats it, so the recorder is loaded under the policy too. The policy's
+  # form-action list, and which sign-in buttons, checkout and magic-link pages
+  # exist to walk, follow include_stripe, auth_providers and
+  # include_magic_link, so two more entries run the whole suite on the
+  # answers the default ones leave out: no Stripe, Google only and no magic
+  # link together, and Microsoft only with analytics.
   #
   # Unlike check_auth.sh, the runner ships inside the generated project
   # (scripts/check_compliance.sh, with tests/compliance/*.test.mjs) so that an
   # operator can rerun it after changing their app; this job just runs it
-  # against a freshly generated one, with the default answers apart from
-  # analytics. It drives the runner's preinstalled Google Chrome through
-  # puppeteer-core.
+  # against a freshly generated one per entry below. The reruns with
+  # config.ts changed only use the two with every other answer at its
+  # default (`defaults: true`). It drives the runner's preinstalled Google
+  # Chrome through puppeteer-core.
   compliance:
-    name: "The legal pages, age gate, renewal terms and acknowledgment, analytics consent, no-third-party-requests rule and WCAG 2.2 AA baseline hold against a running app (analytics=${{ matrix.analytics }})"
+    name: "The legal pages, age gate, renewal terms and acknowledgment, analytics consent, no-third-party-requests rule, Content-Security-Policy and WCAG 2.2 AA baseline hold against a running app (${{ matrix.name }})"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        analytics: [none, posthog]
+        include:
+          - name: "defaults / no-analytics"
+            defaults: true
+            include_stripe: "yes"
+            auth_providers: google_microsoft
+            include_magic_link: "yes"
+            analytics: none
+          - name: "defaults / posthog"
+            defaults: true
+            include_stripe: "yes"
+            auth_providers: google_microsoft
+            include_magic_link: "yes"
+            analytics: posthog
+          - name: "no-stripe / google-only / no-link / no-analytics"
+            defaults: false
+            include_stripe: "no"
+            auth_providers: google_only
+            include_magic_link: "no"
+            analytics: none
+          - name: "stripe / microsoft-only / link / posthog"
+            defaults: false
+            include_stripe: "yes"
+            auth_providers: microsoft_only
+            include_magic_link: "yes"
+            analytics: posthog
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -725,6 +776,9 @@ jobs:
       - name: Generate project
         run: |
           cookiecutter . --no-input -o .generated-compliance project_name="Compliance App" \
+            include_stripe=${{ matrix.include_stripe }} \
+            auth_providers=${{ matrix.auth_providers }} \
+            include_magic_link=${{ matrix.include_magic_link }} \
             analytics=${{ matrix.analytics }}
 
       - name: The compliance suite passes against a running app
@@ -734,7 +788,7 @@ jobs:
 
       # The age gate does not depend on analytics, so once is enough.
       - name: Raising the minimum age moves the age screen's line
-        if: matrix.analytics == 'none'
+        if: matrix.defaults && matrix.analytics == 'none'
         env:
           CHROME_PATH: /usr/bin/google-chrome
         working-directory: .generated-compliance/compliance-app
@@ -749,7 +803,7 @@ jobs:
       # banner, with its extra choice, must still pass the analytics and
       # accessibility checks.
       - name: Turning session replay on records only with consent, masked
-        if: matrix.analytics == 'posthog'
+        if: matrix.defaults && matrix.analytics == 'posthog'
         env:
           CHROME_PATH: /usr/bin/google-chrome
         working-directory: .generated-compliance/compliance-app
@@ -757,7 +811,8 @@ jobs:
           sed -i 's/sessionReplay: false,/sessionReplay: true,/' config.ts
           grep -q 'sessionReplay: true,' config.ts
           scripts/check_compliance.sh tests/compliance/session-replay.test.mjs \
-            tests/compliance/analytics-consent.test.mjs tests/compliance/accessibility.test.mjs
+            tests/compliance/analytics-consent.test.mjs tests/compliance/accessibility.test.mjs \
+            tests/compliance/content-security-policy.test.mjs
 
   # Acceptance criteria for issue #27 (make the billing flow work end to
   # end): subscription lifecycle webhooks move users between plans correctly,

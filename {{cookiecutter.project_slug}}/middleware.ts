@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import { authConfig } from "@/lib/auth.config";
 import { NextResponse } from "next/server";
+import { cspEnv, cspForRequest, CSP_REPORT_PATH } from "@/lib/csp";
 
 /**
  * Edge-safe middleware using authConfig (no adapter/email provider).
@@ -10,6 +11,24 @@ const { auth } = NextAuth(authConfig);
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;
+
+  // Every response gets this request's Content-Security-Policy (lib/csp.ts),
+  // with a nonce made for it alone. The request carries the policy on to
+  // the page being rendered too: Next.js reads the nonce out of it and puts
+  // it on each script it writes, which is the only way a script runs. A
+  // script of your own reads it from `x-nonce` (see
+  // docs/content-security-policy.md).
+  const csp = cspForRequest(cspEnv());
+  const withCsp = (res: NextResponse) => {
+    res.headers.set(csp.name, csp.value);
+    return res;
+  };
+  const continueWithCsp = () => {
+    const headers = new Headers(req.headers);
+    headers.set("x-nonce", csp.nonce);
+    headers.set(csp.name, csp.value);
+    return withCsp(NextResponse.next({ request: { headers } }));
+  };
 
   // Public routes - no auth required.
   //
@@ -41,6 +60,8 @@ export default auth((req) => {
     // cc:end analytics
     "/api/auth",
     "/api/webhook",
+    // Where browsers report Content-Security-Policy violations.
+    CSP_REPORT_PATH,
   ];
 
   const isPublic =
@@ -50,17 +71,19 @@ export default auth((req) => {
     );
 
   if (isPublic) {
-    return NextResponse.next();
+    return continueWithCsp();
   }
 
   // Protect dashboard routes
   if (pathname.startsWith("/dashboard") && !req.auth) {
-    return NextResponse.redirect(new URL("/sign-in", req.url));
+    return withCsp(NextResponse.redirect(new URL("/sign-in", req.url)));
   }
 
-  return NextResponse.next();
+  return continueWithCsp();
 });
 
+// Every page, so every page carries the policy. Static files under
+// /_next/static and images are left out: a policy on them protects nothing.
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
 };

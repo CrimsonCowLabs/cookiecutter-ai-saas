@@ -25,6 +25,7 @@
     "test:billing": "node --test tests/billing/*.test.mjs",
     "test:deploy": "node --test tests/deploy/*.test.mjs",
     "test:rate-limit": "node --test tests/rate-limit/*.test.mjs",
+    "test:csp": "node --test tests/csp/*.test.mjs",
     "test:billing:integration": "node --test --test-concurrency=1 tests/billing/integration/*.test.mjs",
     "test:jobs": "node --test --test-concurrency=1 tests/jobs/*.test.mjs",
     "test:compliance": "node --test --test-concurrency=1 tests/compliance/*.test.mjs"

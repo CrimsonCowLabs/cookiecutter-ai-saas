@@ -283,9 +283,15 @@ export async function launchBrowser() {
  * does here ever leaks anything, and is recorded in the `offOrigin` list
  * passed to `fn` (see visit() below for its shape).
  *
+ * The rest is for tests that follow a flow off this origin or change what
+ * the page is sent: requests to the hosts in `allow` (a stand-in the flow
+ * ends on) go through; `javaScript: false` loads the page with JavaScript
+ * off; and `intercept(req)` may answer a request itself before any of this,
+ * returning true when it did.
+ *
  * Returns whatever `fn` returns.
  */
-export async function withPage(browser, path, { cookie, prepare } = {}, fn) {
+export async function withPage(browser, path, { cookie, prepare, allow = [], javaScript = true, intercept } = {}, fn) {
   const base = new URL(config.baseUrl);
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
@@ -295,12 +301,14 @@ export async function withPage(browser, path, { cookie, prepare } = {}, fn) {
       const [name, ...rest] = c.split("=");
       await context.setCookie({ name, value: rest.join("="), domain: base.hostname, path: "/" });
     }
+    if (!javaScript) await page.setJavaScriptEnabled(false);
 
     await page.setRequestInterception(true);
-    page.on("request", (req) => {
+    page.on("request", async (req) => {
+      if (intercept && (await intercept(req))) return;
       const url = new URL(req.url());
       const isNetwork = ["http:", "https:", "ws:", "wss:"].includes(url.protocol);
-      if (isNetwork && url.host !== base.host) {
+      if (isNetwork && url.host !== base.host && !allow.includes(url.host)) {
         offOrigin.push({ host: url.hostname, url: url.href, kind: req.resourceType() });
         req.abort("blockedbyclient");
         return;

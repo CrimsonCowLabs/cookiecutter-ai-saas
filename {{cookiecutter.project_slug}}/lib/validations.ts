@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { isHttpUrl } from "@/lib/url";
 
 export const emailSchema = z

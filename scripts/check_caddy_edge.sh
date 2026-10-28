@@ -223,6 +223,7 @@ CAPS=(
   "/api/contact:60000:70000"
   "/api/age-check:60000:70000"
   "/api/unsubscribe:60000:70000"
+  "/api/csp-report:60000:70000"
   "/ingest/e/:1000000:1100000"
   "/api/webhook/stripe:9000000:10100000"
   "/api/anything:9000000:10100000"
@@ -310,10 +311,10 @@ sys.exit(1 if problems else 0)
 PY
 }
 
-# Every scanner path plus the POST probe; six capped routes, each refused
+# Every scanner path plus the POST probe; every capped route, each refused
 # twice (Content-Length and chunked); and nothing rate-limited, because the
 # defaults leave this much traffic from one address alone.
-check_log "$(( ${#SCANNER_PATHS[@]} + 1 ))" 12 0
+check_log "$(( ${#SCANNER_PATHS[@]} + 1 ))" "$(( ${#CAPS[@]} * 2 ))" 0
 pass "the JSON access log marks every refusal with \"blocked\", and nothing else"
 
 # ── Rate limits ──────────────────────────────────────────────────────────────
